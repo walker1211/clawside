@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -26,6 +27,7 @@ type CreateJob struct {
 	BotName             string
 	ChatID              int64
 	Text                string
+	IdempotencyKey      string
 	MaxAttempts         int
 	ReplyToMessageID    *int64
 	DisableNotification bool
@@ -36,10 +38,12 @@ type Job struct {
 	BotName             string
 	ChatID              int64
 	Text                string
+	IdempotencyKey      string
 	Status              string
 	AttemptCount        int
 	MaxAttempts         int
 	NextRetryAt         time.Time
+	LeaseExpiresAt      time.Time
 	LastError           string
 	CreatedAt           time.Time
 	UpdatedAt           time.Time
@@ -93,6 +97,15 @@ CREATE INDEX IF NOT EXISTS idx_jobs_ready ON jobs (status, next_retry_at, id);
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("initialize sqlite schema: %w", err)
 	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN idempotency_key TEXT`); err != nil && !isDuplicateColumnError(err) {
+		return fmt.Errorf("add idempotency_key column: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE jobs ADD COLUMN lease_expires_at TEXT`); err != nil && !isDuplicateColumnError(err) {
+		return fmt.Errorf("add lease_expires_at column: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `CREATE UNIQUE INDEX IF NOT EXISTS idx_jobs_idempotency_key_non_empty ON jobs (idempotency_key) WHERE idempotency_key IS NOT NULL AND idempotency_key <> ''`); err != nil {
+		return fmt.Errorf("create idempotency index: %w", err)
+	}
 
 	return nil
 }
@@ -105,20 +118,23 @@ func (s *Store) Enqueue(ctx context.Context, job CreateJob) (Job, error) {
 			bot_name,
 			chat_id,
 			text,
+			idempotency_key,
 			status,
 			attempt_count,
 			max_attempts,
 			next_retry_at,
+			lease_expires_at,
 			last_error,
 			created_at,
 			updated_at,
 			sent_at,
 			reply_to_message_id,
 			disable_notification
-		) VALUES (?, ?, ?, ?, 0, ?, NULL, '', ?, ?, NULL, ?, ?)`,
+		) VALUES (?, ?, ?, ?, ?, 0, ?, NULL, NULL, '', ?, ?, NULL, ?, ?)`,
 		job.BotName,
 		job.ChatID,
 		job.Text,
+		nullableString(job.IdempotencyKey),
 		StatusPending,
 		job.MaxAttempts,
 		formatTimestamp(now),
@@ -147,18 +163,56 @@ func (s *Store) GetJob(ctx context.Context, id int64) (Job, error) {
 	return job, nil
 }
 
-func (s *Store) ClaimNextReady(ctx context.Context, now time.Time) (*Job, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin claim transaction: %w", err)
+func (s *Store) GetByIdempotencyKey(ctx context.Context, key string) (*Job, error) {
+	if key == "" {
+		return nil, nil
 	}
-	defer func() {
-		_ = tx.Rollback()
-	}()
+	row := s.db.QueryRowContext(ctx, selectJobSQL+` WHERE idempotency_key = ? LIMIT 1`, key)
+	job, err := scanJob(row)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &job, nil
+}
 
-	row := tx.QueryRowContext(
+func (s *Store) ClaimNextReady(ctx context.Context, now time.Time, leaseDuration time.Duration) (*Job, error) {
+	leaseExpiresAt := now.Add(leaseDuration)
+	row := s.db.QueryRowContext(
 		ctx,
-		selectJobSQL+` WHERE (status = ?) OR (status = ? AND next_retry_at IS NOT NULL AND next_retry_at <= ?) ORDER BY id LIMIT 1`,
+		`UPDATE jobs
+		 SET status = ?,
+		     updated_at = ?,
+		     lease_expires_at = ?
+		 WHERE id = (
+			 SELECT id
+			 FROM jobs
+			 WHERE (status = ?) OR (status = ? AND next_retry_at IS NOT NULL AND next_retry_at <= ?)
+			 ORDER BY id
+			 LIMIT 1
+		 )
+		 RETURNING
+			id,
+			bot_name,
+			chat_id,
+			text,
+			idempotency_key,
+			status,
+			attempt_count,
+			max_attempts,
+			next_retry_at,
+			lease_expires_at,
+			last_error,
+			created_at,
+			updated_at,
+			sent_at,
+			reply_to_message_id,
+			disable_notification`,
+		StatusSending,
+		formatTimestamp(now),
+		formatTimestamp(leaseExpiresAt),
 		StatusPending,
 		StatusRetry,
 		formatTimestamp(now),
@@ -171,23 +225,6 @@ func (s *Store) ClaimNextReady(ctx context.Context, now time.Time) (*Job, error)
 		}
 		return nil, err
 	}
-
-	if _, err := tx.ExecContext(
-		ctx,
-		`UPDATE jobs SET status = ?, updated_at = ? WHERE id = ?`,
-		StatusSending,
-		formatTimestamp(now),
-		job.ID,
-	); err != nil {
-		return nil, fmt.Errorf("mark job as sending: %w", err)
-	}
-
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit claim transaction: %w", err)
-	}
-
-	job.Status = StatusSending
-	job.UpdatedAt = now.UTC()
 	return &job, nil
 }
 
@@ -211,11 +248,21 @@ func (s *Store) MarkRetry(ctx context.Context, jobID int64, attemptCount int, ne
 func (s *Store) RecoverSendingJobs(ctx context.Context, now time.Time) error {
 	_, err := s.db.ExecContext(
 		ctx,
-		`UPDATE jobs SET status = ?, next_retry_at = NULL, last_error = ?, updated_at = ? WHERE status = ?`,
-		StatusFailed,
-		"interrupted while sending; delivery state unknown",
+		`UPDATE jobs
+		 SET status = ?,
+		     next_retry_at = ?,
+		     sent_at = NULL,
+		     last_error = ?,
+		     updated_at = ?,
+		     lease_expires_at = NULL
+		 WHERE status = ?
+		   AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`,
+		StatusRetry,
+		formatTimestamp(now),
+		"recovered expired sending lease; retrying delivery",
 		formatTimestamp(now),
 		StatusSending,
+		formatTimestamp(now),
 	)
 	if err != nil {
 		return fmt.Errorf("recover sending jobs: %w", err)
@@ -260,10 +307,12 @@ const selectJobSQL = `SELECT
     bot_name,
     chat_id,
     text,
+    idempotency_key,
     status,
     attempt_count,
     max_attempts,
     next_retry_at,
+    lease_expires_at,
     last_error,
     created_at,
     updated_at,
@@ -275,7 +324,9 @@ FROM jobs`
 func scanJob(scanner interface{ Scan(dest ...any) error }) (Job, error) {
 	var (
 		job                 Job
+		idempotencyKeyRaw   sql.NullString
 		nextRetryAtRaw      sql.NullString
+		leaseExpiresAtRaw   sql.NullString
 		createdAtRaw        string
 		updatedAtRaw        string
 		sentAtRaw           sql.NullString
@@ -288,10 +339,12 @@ func scanJob(scanner interface{ Scan(dest ...any) error }) (Job, error) {
 		&job.BotName,
 		&job.ChatID,
 		&job.Text,
+		&idempotencyKeyRaw,
 		&job.Status,
 		&job.AttemptCount,
 		&job.MaxAttempts,
 		&nextRetryAtRaw,
+		&leaseExpiresAtRaw,
 		&job.LastError,
 		&createdAtRaw,
 		&updatedAtRaw,
@@ -315,12 +368,24 @@ func scanJob(scanner interface{ Scan(dest ...any) error }) (Job, error) {
 	job.UpdatedAt = updatedAt
 	job.DisableNotification = disableNotification == 1
 
+	if idempotencyKeyRaw.Valid {
+		job.IdempotencyKey = idempotencyKeyRaw.String
+	}
+
 	if nextRetryAtRaw.Valid {
 		nextRetryAt, err := parseTimestamp(nextRetryAtRaw.String)
 		if err != nil {
 			return Job{}, fmt.Errorf("parse next_retry_at: %w", err)
 		}
 		job.NextRetryAt = nextRetryAt
+	}
+
+	if leaseExpiresAtRaw.Valid {
+		leaseExpiresAt, err := parseTimestamp(leaseExpiresAtRaw.String)
+		if err != nil {
+			return Job{}, fmt.Errorf("parse lease_expires_at: %w", err)
+		}
+		job.LeaseExpiresAt = leaseExpiresAt
 	}
 
 	if sentAtRaw.Valid {
@@ -358,9 +423,23 @@ func nullableInt64(value *int64) any {
 	return *value
 }
 
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
 func boolToInt(value bool) int {
 	if value {
 		return 1
 	}
 	return 0
+}
+
+func isDuplicateColumnError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "duplicate column name")
 }

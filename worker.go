@@ -21,6 +21,8 @@ type Worker struct {
 	sendTimeout time.Duration
 }
 
+const leaseBuffer = 2 * time.Second
+
 func NewWorker(store *Store, telegram *TelegramClient, bots map[string]BotRuntimeConfig, sendTimeout time.Duration) *Worker {
 	return &Worker{
 		store:       store,
@@ -56,7 +58,7 @@ func (w *Worker) Run(ctx context.Context, interval time.Duration) {
 }
 
 func (w *Worker) ProcessNextAt(ctx context.Context, now time.Time) (bool, error) {
-	job, err := w.store.ClaimNextReady(ctx, now)
+	job, err := w.store.ClaimNextReady(ctx, now, w.claimLeaseDuration())
 	if err != nil {
 		return false, err
 	}
@@ -118,6 +120,14 @@ func copyRuntimeBots(bots map[string]BotRuntimeConfig) map[string]BotRuntimeConf
 		copied[name] = bot
 	}
 	return copied
+}
+
+func (w *Worker) claimLeaseDuration() time.Duration {
+	d := w.sendTimeout + leaseBuffer
+	if d <= 0 {
+		return leaseBuffer
+	}
+	return d
 }
 
 func retryDelay(attemptCount int, retryAfter time.Duration) time.Duration {

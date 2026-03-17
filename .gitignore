@@ -5,6 +5,7 @@
 # Secrets
 .env
 config.toml
+configs/config.toml
 
 # Local runtime data
 sender.db

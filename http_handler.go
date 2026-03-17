@@ -1,10 +1,14 @@
 package main
 
 import (
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 type HTTPHandler struct {
@@ -12,6 +16,7 @@ type HTTPHandler struct {
 	bots               map[string]handlerBotConfig
 	globalAllowlist    map[int64]struct{}
 	defaultMaxAttempts int
+	senderAuthKey      string
 }
 
 type handlerBotConfig struct {
@@ -24,21 +29,39 @@ type sendRequest struct {
 	Bot                 string `json:"bot"`
 	ChatID              int64  `json:"chat_id"`
 	Text                string `json:"text"`
+	IdempotencyKey      string `json:"idempotency_key,omitempty"`
 	MaxAttempts         int    `json:"max_attempts,omitempty"`
 	ReplyToMessageID    *int64 `json:"reply_to_message_id,omitempty"`
 	DisableNotification bool   `json:"disable_notification,omitempty"`
 }
 
 type sendResponse struct {
-	JobID  int64  `json:"job_id"`
+	JobID          int64  `json:"job_id"`
+	Status         string `json:"status"`
+	IdempotencyKey string `json:"idempotency_key,omitempty"`
+}
+
+type healthResponse struct {
 	Status string `json:"status"`
+}
+
+type jobResponse struct {
+	JobID        int64      `json:"job_id"`
+	Status       string     `json:"status"`
+	AttemptCount int        `json:"attempt_count"`
+	LastError    string     `json:"last_error"`
+	CreatedAt    string     `json:"created_at"`
+	UpdatedAt    string     `json:"updated_at"`
+	SentAt       *string    `json:"sent_at"`
 }
 
 type errorResponse struct {
 	Error string `json:"error"`
 }
 
-func NewHTTPHandler(store *Store, telegramCfg TelegramRuntimeConfig, defaultMaxAttempts int) http.Handler {
+const telegramMaxTextLength = 4096
+
+func NewHTTPHandler(store *Store, telegramCfg TelegramRuntimeConfig, defaultMaxAttempts int, senderAuthKey string) http.Handler {
 	bots := make(map[string]handlerBotConfig, len(telegramCfg.Bots))
 	for name, botCfg := range telegramCfg.Bots {
 		bots[name] = handlerBotConfig{
@@ -53,16 +76,90 @@ func NewHTTPHandler(store *Store, telegramCfg TelegramRuntimeConfig, defaultMaxA
 		bots:               bots,
 		globalAllowlist:    toAllowlistSet(telegramCfg.GlobalAllowUserIDs),
 		defaultMaxAttempts: defaultMaxAttempts,
+		senderAuthKey:      strings.TrimSpace(senderAuthKey),
 	}
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/send" {
+	if r.URL.Path == "/healthz" {
+		h.handleHealthz(w, r)
+		return
+	}
+	if strings.HasPrefix(r.URL.Path, "/jobs/") {
+		h.handleGetJob(w, r)
+		return
+	}
+	if r.URL.Path == "/send" {
+		h.handleSend(w, r)
+		return
+	}
+
+	writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
+}
+
+func (h *HTTPHandler) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
+}
+
+func (h *HTTPHandler) handleGetJob(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+
+	idRaw := strings.TrimPrefix(r.URL.Path, "/jobs/")
+	if idRaw == "" || strings.Contains(idRaw, "/") {
 		writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
 		return
 	}
+	jobID, err := strconv.ParseInt(idRaw, 10, 64)
+	if err != nil || jobID <= 0 {
+		writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
+		return
+	}
+
+	job, err := h.store.GetJob(r.Context(), jobID)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			writeJSON(w, http.StatusNotFound, errorResponse{Error: "not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to get job"})
+		return
+	}
+
+	var sentAt *string
+	if job.SentAt != nil {
+		formatted := formatTimestamp(*job.SentAt)
+		sentAt = &formatted
+	}
+
+	writeJSON(w, http.StatusOK, jobResponse{
+		JobID:        job.ID,
+		Status:       job.Status,
+		AttemptCount: job.AttemptCount,
+		LastError:    job.LastError,
+		CreatedAt:    formatTimestamp(job.CreatedAt),
+		UpdatedAt:    formatTimestamp(job.UpdatedAt),
+		SentAt:       sentAt,
+	})
+}
+
+func (h *HTTPHandler) handleSend(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	if !h.authorized(r.Header.Get("Authorization")) {
+		if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+			writeJSON(w, http.StatusUnauthorized, errorResponse{Error: "missing authorization"})
+			return
+		}
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "invalid authorization"})
 		return
 	}
 
@@ -81,6 +178,7 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	request.Bot = normalizeBotName(request.Bot)
+	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
 	if request.Bot == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "bot is required"})
 		return
@@ -106,6 +204,10 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "text is required"})
 		return
 	}
+	if utf8.RuneCountInString(request.Text) > telegramMaxTextLength {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "text exceeds telegram limit"})
+		return
+	}
 	if request.MaxAttempts == 0 {
 		request.MaxAttempts = h.defaultMaxAttempts
 	}
@@ -118,16 +220,24 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		BotName:             request.Bot,
 		ChatID:              request.ChatID,
 		Text:                request.Text,
+		IdempotencyKey:      request.IdempotencyKey,
 		MaxAttempts:         request.MaxAttempts,
 		ReplyToMessageID:    request.ReplyToMessageID,
 		DisableNotification: request.DisableNotification,
 	})
 	if err != nil {
+		if request.IdempotencyKey != "" {
+			existing, lookupErr := h.store.GetByIdempotencyKey(r.Context(), request.IdempotencyKey)
+			if lookupErr == nil && existing != nil {
+				writeJSON(w, http.StatusAccepted, sendResponse{JobID: existing.ID, Status: existing.Status, IdempotencyKey: request.IdempotencyKey})
+				return
+			}
+		}
 		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to enqueue job"})
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, sendResponse{JobID: job.ID, Status: job.Status})
+	writeJSON(w, http.StatusAccepted, sendResponse{JobID: job.ID, Status: job.Status, IdempotencyKey: request.IdempotencyKey})
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, body any) {
@@ -157,5 +267,18 @@ func allowlisted(chatID int64, globalAllowlist map[int64]struct{}, botAllowlist 
 		return true
 	}
 	return false
+}
+
+func (h *HTTPHandler) authorized(authHeader string) bool {
+	authHeader = strings.TrimSpace(authHeader)
+	if authHeader == "" || h.senderAuthKey == "" {
+		return false
+	}
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authHeader, bearerPrefix) {
+		return false
+	}
+	provided := strings.TrimSpace(strings.TrimPrefix(authHeader, bearerPrefix))
+	return provided != "" && provided == h.senderAuthKey
 }
 

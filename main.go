@@ -6,12 +6,17 @@ import (
 	"log"
 	"net/http"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 )
 
+func defaultConfigPath() string {
+	return filepath.Join("configs", "config.toml")
+}
+
 func main() {
-	cfg, err := LoadConfigFromTOML("config.toml")
+	cfg, err := LoadConfigFromTOML(defaultConfigPath())
 	if err != nil {
 		log.Fatalf("load config: %v", err)
 	}
@@ -48,7 +53,7 @@ func main() {
 
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           NewHTTPHandler(store, cfg.Telegram, cfg.DefaultMaxAttempts),
+		Handler:           NewHTTPHandler(store, cfg.Telegram, cfg.DefaultMaxAttempts, cfg.SenderAuthKey),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

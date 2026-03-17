@@ -2,10 +2,10 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-CONFIG_PATH="$ROOT_DIR/config.toml"
+CONFIG_PATH="$ROOT_DIR/configs/config.toml"
 
 if [[ ! -f "$CONFIG_PATH" ]]; then
-  printf 'missing config.toml, run ./scripts/config_builder.sh first\n' >&2
+  printf 'missing %s, run ./scripts/config_builder.sh first\n' "$CONFIG_PATH" >&2
   exit 1
 fi
 

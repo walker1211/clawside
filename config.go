@@ -18,6 +18,7 @@ type Config struct {
 	DefaultMaxAttempts int
 	WorkerPollInterval time.Duration
 	SendTimeout        time.Duration
+	SenderAuthKey      string
 	Telegram           TelegramRuntimeConfig
 }
 
@@ -38,8 +39,9 @@ type senderTOMLConfig struct {
 	DatabasePath       string              `toml:"database_path"`
 	DefaultMaxAttempts *int                `toml:"default_max_attempts"`
 	WorkerPollInterval string              `toml:"worker_poll_interval"`
-	SendTimeout        string              `toml:"send_timeout"`
-	Telegram           telegramTOMLConfig  `toml:"telegram"`
+	SendTimeout        string             `toml:"send_timeout"`
+	SenderAuthKey      string             `toml:"sender_auth_key"`
+	Telegram           telegramTOMLConfig `toml:"telegram"`
 }
 
 type telegramTOMLConfig struct {
@@ -146,6 +148,11 @@ func LoadConfigFromTOML(path string) (Config, error) {
 
 	if strings.TrimSpace(parsed.DatabasePath) != "" {
 		cfg.DatabasePath = strings.TrimSpace(parsed.DatabasePath)
+	}
+
+	cfg.SenderAuthKey = strings.TrimSpace(parsed.SenderAuthKey)
+	if cfg.SenderAuthKey == "" {
+		return Config{}, fmt.Errorf("sender_auth_key is required")
 	}
 
 	cfg.Telegram.GlobalAllowUserIDs, err = parseAllowUserIDs(parsed.Telegram.GlobalAllowUserIDs, "telegram.global_allow_user_ids")

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -216,11 +218,68 @@ func TestWorkerFailsAfterMaxAttempts(t *testing.T) {
 	}
 }
 
-func TestStoreRecoverSendingJobsMarksThemFailed(t *testing.T) {
+func TestStoreEnqueuePersistsAndFindsByIdempotencyKey(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
 	job, err := store.Enqueue(ctx, CreateJob{
+		BotName:        "guardian",
+		ChatID:         7098285098,
+		Text:           "hello",
+		MaxAttempts:    3,
+		IdempotencyKey: "idem-1",
+	})
+	if err != nil {
+		t.Fatalf("enqueue job: %v", err)
+	}
+	if job.IdempotencyKey != "idem-1" {
+		t.Fatalf("expected idempotency key idem-1, got %q", job.IdempotencyKey)
+	}
+
+	found, err := store.GetByIdempotencyKey(ctx, "idem-1")
+	if err != nil {
+		t.Fatalf("get by idempotency key: %v", err)
+	}
+	if found == nil {
+		t.Fatalf("expected job to be found")
+	}
+	if found.ID != job.ID {
+		t.Fatalf("expected job id %d, got %d", job.ID, found.ID)
+	}
+}
+
+func TestStoreEnqueueRejectsDuplicateIdempotencyKey(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	_, err := store.Enqueue(ctx, CreateJob{
+		BotName:        "guardian",
+		ChatID:         1,
+		Text:           "hello",
+		MaxAttempts:    3,
+		IdempotencyKey: "idem-dup",
+	})
+	if err != nil {
+		t.Fatalf("enqueue first job: %v", err)
+	}
+
+	_, err = store.Enqueue(ctx, CreateJob{
+		BotName:        "guardian",
+		ChatID:         2,
+		Text:           "hello again",
+		MaxAttempts:    3,
+		IdempotencyKey: "idem-dup",
+	})
+	if err == nil {
+		t.Fatalf("expected duplicate idempotency key insert to fail")
+	}
+}
+
+func TestStoreClaimNextReadySetsLeaseExpiry(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	_, err := store.Enqueue(ctx, CreateJob{
 		BotName:     "guardian",
 		ChatID:      7098285098,
 		Text:        "hello",
@@ -231,34 +290,264 @@ func TestStoreRecoverSendingJobsMarksThemFailed(t *testing.T) {
 	}
 
 	claimedAt := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
-	claimed, err := store.ClaimNextReady(ctx, claimedAt)
+	leaseDuration := 20 * time.Second
+	claimed, err := store.ClaimNextReady(ctx, claimedAt, leaseDuration)
 	if err != nil {
-		t.Fatalf("claim job: %v", err)
+		t.Fatalf("claim next ready: %v", err)
 	}
 	if claimed == nil {
 		t.Fatalf("expected claimed job")
 	}
+	if claimed.Status != StatusSending {
+		t.Fatalf("expected sending status, got %q", claimed.Status)
+	}
+	if !claimed.LeaseExpiresAt.Equal(claimedAt.Add(leaseDuration)) {
+		t.Fatalf("expected lease expires at %s, got %s", claimedAt.Add(leaseDuration), claimed.LeaseExpiresAt)
+	}
+}
 
-	recoveredAt := claimedAt.Add(5 * time.Second)
+func TestStoreRecoverSendingJobsOnlyRecoversExpiredLeases(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	expiredJob, err := store.Enqueue(ctx, CreateJob{BotName: "guardian", ChatID: 1, Text: "expired", MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("enqueue expired job: %v", err)
+	}
+	notExpiredJob, err := store.Enqueue(ctx, CreateJob{BotName: "guardian", ChatID: 2, Text: "not expired", MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("enqueue not-expired job: %v", err)
+	}
+
+	claimedAt := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
+	leaseDuration := 20 * time.Second
+	if _, err := store.ClaimNextReady(ctx, claimedAt, leaseDuration); err != nil {
+		t.Fatalf("claim first: %v", err)
+	}
+	if _, err := store.ClaimNextReady(ctx, claimedAt, leaseDuration); err != nil {
+		t.Fatalf("claim second: %v", err)
+	}
+
+	if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET lease_expires_at = ? WHERE id = ?`, formatTimestamp(claimedAt.Add(2*time.Minute)), notExpiredJob.ID); err != nil {
+		t.Fatalf("extend lease for not-expired job: %v", err)
+	}
+
+	recoveredAt := claimedAt.Add(25 * time.Second)
 	if err := store.RecoverSendingJobs(ctx, recoveredAt); err != nil {
 		t.Fatalf("recover sending jobs: %v", err)
 	}
 
-	job, err = store.GetJob(ctx, job.ID)
+	expiredJob, err = store.GetJob(ctx, expiredJob.ID)
 	if err != nil {
-		t.Fatalf("get job: %v", err)
+		t.Fatalf("get expired job: %v", err)
 	}
-	if job.Status != StatusFailed {
-		t.Fatalf("expected failed status, got %q", job.Status)
+	if expiredJob.Status != StatusRetry {
+		t.Fatalf("expected expired job to become retry, got %q", expiredJob.Status)
 	}
-	if !job.NextRetryAt.IsZero() {
-		t.Fatalf("expected zero next retry at, got %s", job.NextRetryAt)
+	if !expiredJob.NextRetryAt.Equal(recoveredAt) {
+		t.Fatalf("expected next_retry_at %s, got %s", recoveredAt, expiredJob.NextRetryAt)
 	}
-	if job.LastError == "" {
-		t.Fatalf("expected recovery error message")
+	if expiredJob.SentAt != nil {
+		t.Fatalf("expected sent_at to be cleared on recovered job")
 	}
-	if !job.UpdatedAt.Equal(recoveredAt) {
-		t.Fatalf("expected updated_at %s, got %s", recoveredAt, job.UpdatedAt)
+	if expiredJob.LastError == "" {
+		t.Fatalf("expected recovery error message on recovered job")
+	}
+	if !expiredJob.UpdatedAt.Equal(recoveredAt) {
+		t.Fatalf("expected updated_at %s, got %s", recoveredAt, expiredJob.UpdatedAt)
+	}
+	if !expiredJob.LeaseExpiresAt.IsZero() {
+		t.Fatalf("expected lease to be cleared for recovered job, got %s", expiredJob.LeaseExpiresAt)
+	}
+
+	notExpiredJob, err = store.GetJob(ctx, notExpiredJob.ID)
+	if err != nil {
+		t.Fatalf("get not-expired job: %v", err)
+	}
+	if notExpiredJob.Status != StatusSending {
+		t.Fatalf("expected not-expired job to remain sending, got %q", notExpiredJob.Status)
+	}
+}
+
+func TestStoreRecoverSendingJobsRecoversLegacySendingWithoutLease(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	legacyJob, err := store.Enqueue(ctx, CreateJob{BotName: "guardian", ChatID: 3, Text: "legacy sending", MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("enqueue legacy job: %v", err)
+	}
+
+	claimedAt := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
+	if _, err := store.ClaimNextReady(ctx, claimedAt, 20*time.Second); err != nil {
+		t.Fatalf("claim legacy job: %v", err)
+	}
+
+	if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET lease_expires_at = NULL WHERE id = ?`, legacyJob.ID); err != nil {
+		t.Fatalf("simulate legacy sending row without lease: %v", err)
+	}
+
+	recoveredAt := claimedAt.Add(25 * time.Second)
+	if err := store.RecoverSendingJobs(ctx, recoveredAt); err != nil {
+		t.Fatalf("recover sending jobs: %v", err)
+	}
+
+	legacyJob, err = store.GetJob(ctx, legacyJob.ID)
+	if err != nil {
+		t.Fatalf("get legacy job: %v", err)
+	}
+	if legacyJob.Status != StatusRetry {
+		t.Fatalf("expected legacy sending job to become retry, got %q", legacyJob.Status)
+	}
+	if !legacyJob.NextRetryAt.Equal(recoveredAt) {
+		t.Fatalf("expected next_retry_at %s, got %s", recoveredAt, legacyJob.NextRetryAt)
+	}
+	if !legacyJob.LeaseExpiresAt.IsZero() {
+		t.Fatalf("expected recovered legacy lease to be cleared, got %s", legacyJob.LeaseExpiresAt)
+	}
+}
+
+func TestStoreClaimNextReadyAvoidsDoubleClaimRace(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "sender.db")
+
+	storeA, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("open first store: %v", err)
+	}
+	defer func() { _ = storeA.Close() }()
+	if err := storeA.Init(ctx); err != nil {
+		t.Fatalf("init first store: %v", err)
+	}
+
+	storeB, err := OpenStore(dbPath)
+	if err != nil {
+		t.Fatalf("open second store: %v", err)
+	}
+	defer func() { _ = storeB.Close() }()
+	if err := storeB.Init(ctx); err != nil {
+		t.Fatalf("init second store: %v", err)
+	}
+
+	job, err := storeA.Enqueue(ctx, CreateJob{BotName: "guardian", ChatID: 1, Text: "race", MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("enqueue race job: %v", err)
+	}
+
+	claimedAt := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	type claimResult struct {
+		job *Job
+		err error
+	}
+	results := make(chan claimResult, 2)
+
+	go func() {
+		defer wg.Done()
+		<-start
+		claimed, claimErr := storeA.ClaimNextReady(ctx, claimedAt, 20*time.Second)
+		results <- claimResult{job: claimed, err: claimErr}
+	}()
+
+	go func() {
+		defer wg.Done()
+		<-start
+		claimed, claimErr := storeB.ClaimNextReady(ctx, claimedAt, 20*time.Second)
+		results <- claimResult{job: claimed, err: claimErr}
+	}()
+
+	close(start)
+	wg.Wait()
+	close(results)
+
+	claimedCount := 0
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("claim failed: %v", result.err)
+		}
+		if result.job != nil {
+			claimedCount++
+			if result.job.ID != job.ID {
+				t.Fatalf("expected claim on job %d, got %d", job.ID, result.job.ID)
+			}
+		}
+	}
+
+	if claimedCount != 1 {
+		t.Fatalf("expected exactly one successful claim, got %d", claimedCount)
+	}
+
+	stored, err := storeA.GetJob(ctx, job.ID)
+	if err != nil {
+		t.Fatalf("get race job: %v", err)
+	}
+	if stored.Status != StatusSending {
+		t.Fatalf("expected race job to be sending after one claim, got %q", stored.Status)
+	}
+}
+
+func TestWorkerProcessesRecoveredExpiredSendingJob(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+
+	expiredJob, err := store.Enqueue(ctx, CreateJob{BotName: "guardian", ChatID: 1, Text: "expired", MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("enqueue expired job: %v", err)
+	}
+	liveJob, err := store.Enqueue(ctx, CreateJob{BotName: "guardian", ChatID: 2, Text: "live", MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("enqueue live job: %v", err)
+	}
+
+	claimedAt := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
+	if _, err := store.ClaimNextReady(ctx, claimedAt, 20*time.Second); err != nil {
+		t.Fatalf("claim first: %v", err)
+	}
+	if _, err := store.ClaimNextReady(ctx, claimedAt, 20*time.Second); err != nil {
+		t.Fatalf("claim second: %v", err)
+	}
+
+	if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET lease_expires_at = ? WHERE id = ?`, formatTimestamp(claimedAt.Add(2*time.Minute)), liveJob.ID); err != nil {
+		t.Fatalf("extend live lease: %v", err)
+	}
+
+	recoveredAt := claimedAt.Add(30 * time.Second)
+	if err := store.RecoverSendingJobs(ctx, recoveredAt); err != nil {
+		t.Fatalf("recover sending jobs: %v", err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{"ok":true,"result":{"message_id":99}}`)
+	}))
+	defer server.Close()
+
+	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second)
+	processed, err := worker.ProcessNextAt(ctx, recoveredAt)
+	if err != nil {
+		t.Fatalf("process recovered job: %v", err)
+	}
+	if !processed {
+		t.Fatalf("expected recovered job to be processed")
+	}
+
+	expiredJob, err = store.GetJob(ctx, expiredJob.ID)
+	if err != nil {
+		t.Fatalf("get expired job: %v", err)
+	}
+	if expiredJob.Status != StatusSent {
+		t.Fatalf("expected recovered expired job to be sent, got %q", expiredJob.Status)
+	}
+
+	liveJob, err = store.GetJob(ctx, liveJob.ID)
+	if err != nil {
+		t.Fatalf("get live job: %v", err)
+	}
+	if liveJob.Status != StatusSending {
+		t.Fatalf("expected live sending job to remain sending, got %q", liveJob.Status)
 	}
 }
 

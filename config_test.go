@@ -55,6 +55,7 @@ database_path = "./sender.db"
 default_max_attempts = 3
 worker_poll_interval = "1s"
 send_timeout = "15s"
+sender_auth_key = "sender-secret"
 
 [telegram]
 global_allow_user_ids = ["7098285098"]
@@ -79,6 +80,9 @@ allow_user_ids = ["123"]
 	}
 	if cfg.DefaultMaxAttempts != 3 {
 		t.Fatalf("expected default max attempts 3, got %d", cfg.DefaultMaxAttempts)
+	}
+	if cfg.SenderAuthKey != "sender-secret" {
+		t.Fatalf("expected sender auth key sender-secret, got %q", cfg.SenderAuthKey)
 	}
 
 	telegramField, ok := fieldByName(reflect.ValueOf(cfg), "Telegram")
@@ -118,11 +122,33 @@ allow_user_ids = ["123"]
 	}
 }
 
+func TestLoadConfigFromTOMLRejectsMissingSenderAuthKey(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+	content := strings.TrimSpace(`
+address = "127.0.0.1:8787"
+`) + "\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	_, err := LoadConfigFromTOML(configPath)
+	if err == nil {
+		t.Fatalf("expected sender_auth_key validation error")
+	}
+
+	errText := strings.ToLower(err.Error())
+	if !strings.Contains(errText, "sender_auth_key") {
+		t.Fatalf("expected sender_auth_key error, got: %v", err)
+	}
+}
+
 func TestLoadConfigFromTOMLRejectsInvalidUserID(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.toml")
 	content := strings.TrimSpace(`
 address = "127.0.0.1:8787"
+sender_auth_key = "sender-secret"
 
 [telegram]
 global_allow_user_ids = ["not-a-number"]
@@ -147,6 +173,7 @@ func TestLoadConfigFromTOMLBuildsBotMap(t *testing.T) {
 	configPath := filepath.Join(tmpDir, "config.toml")
 	content := strings.TrimSpace(`
 address = "127.0.0.1:8787"
+sender_auth_key = "sender-secret"
 
 [telegram.bots.guardian]
 enabled = true
@@ -198,6 +225,36 @@ allow_user_ids = ["123"]
 	}
 	if !allowListContainsNumericUserID(allowListField, 123) {
 		t.Fatalf("expected guardian.AllowUserIDs to contain parsed numeric user id 123")
+	}
+}
+
+func TestDefaultConfigPathUsesConfigsDirectory(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("main.go"))
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "defaultConfigPath()") {
+		t.Fatalf("expected runtime to define/use defaultConfigPath helper")
+	}
+	if !strings.Contains(text, "filepath.Join(\"configs\", \"config.toml\")") {
+		t.Fatalf("expected defaultConfigPath helper to use configs/config.toml")
+	}
+}
+
+func TestStartScriptUsesConfigsConfigPath(t *testing.T) {
+	content, err := os.ReadFile(filepath.Join("scripts", "start.sh"))
+	if err != nil {
+		t.Fatalf("read scripts/start.sh: %v", err)
+	}
+	text := string(content)
+
+	if !strings.Contains(text, "CONFIG_PATH=\"$ROOT_DIR/configs/config.toml\"") {
+		t.Fatalf("expected start script to check configs/config.toml")
+	}
+	if strings.Contains(text, "CONFIG_PATH=\"$ROOT_DIR/config.toml\"") {
+		t.Fatalf("expected start script not to check root config.toml")
 	}
 }
 
