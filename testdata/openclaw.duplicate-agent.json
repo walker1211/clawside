@@ -1,0 +1,35 @@
+{
+  "bindings": [
+    {
+      "type": "route",
+      "agentId": "engineer",
+      "match": {
+        "channel": "telegram",
+        "accountId": "coder"
+      }
+    },
+    {
+      "type": "route",
+      "agentId": "engineer",
+      "match": {
+        "channel": "telegram",
+        "accountId": "search"
+      }
+    }
+  ],
+  "channels": {
+    "telegram": {
+      "groupAllowFrom": [
+        "7098285098"
+      ],
+      "accounts": {
+        "coder": {
+          "botToken": "TOKEN_CODER"
+        },
+        "search": {
+          "botToken": "TOKEN_SEARCH"
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "bindings": [
+    {
+      "type": "route",
+      "agentId": "researcher",
+      "match": {
+        "channel": "telegram",
+        "accountId": "search"
+      }
+    }
+  ],
+  "channels": {
+    "telegram": {
+      "groupAllowFrom": [
+        "7098285098"
+      ],
+      "accounts": {
+        "search": {}
+      }
+    }
+  }
+}

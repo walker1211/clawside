@@ -1,0 +1,35 @@
+{
+  "bindings": [
+    {
+      "type": "route",
+      "agentId": "planner",
+      "match": {
+        "channel": "telegram",
+        "accountId": "planner"
+      }
+    },
+    {
+      "type": "route",
+      "agentId": "engineer",
+      "match": {
+        "channel": "telegram",
+        "accountId": "coder"
+      }
+    }
+  ],
+  "channels": {
+    "telegram": {
+      "groupAllowFrom": [
+        "7098285098"
+      ],
+      "accounts": {
+        "planner": {
+          "botToken": "TOKEN_PLANNER"
+        },
+        "coder": {
+          "botToken": "TOKEN_CODER"
+        }
+      }
+    }
+  }
+}
