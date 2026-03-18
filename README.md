@@ -134,12 +134,29 @@ chat_id ∈ global_allow_user_ids OR chat_id ∈ bot.allow_user_ids
 - `text` 超过 Telegram 单条文本限制（4096 字符）会在入队前直接拒绝
 - `max_attempts` 必须在 `1..5` 范围内
 
+## OpenClaw A2A delivery skill
+
+当前仓库还包含一个 **OpenClaw A2A delivery skill**，用于在官方 announce / nested 回传链路不稳定时，给主 agent 提供一条显式、可观测的消息投递桥。
+
+边界：
+
+- 只支持 **主 agent 显式调用**
+- 通过现有 sender backend 完成投递
+- 不直接调用 Telegram API
+- 不尝试修复官方 announce 链路，只做 sender bridge
+
+相关 skill 文件：
+
+- `.claude/skills/openclaw-a2a-delivery/SKILL.md`
+
 ## 相关文件
 
 - `cmd/config-builder/main.go`：Go builder CLI 入口
 - `internal/configbuilder/`：Go builder 核心逻辑
+- `internal/a2adelivery/`：A2A delivery bridge、轮询与编排逻辑
 - `scripts/config_builder.sh`：稳定 shell 入口，调用 Go builder
 - `scripts/start.sh`：检查 `configs/config.toml` 后启动 sender
+- `.claude/skills/openclaw-a2a-delivery/SKILL.md`：A2A delivery skill 定义
 - `config.go`：加载派生配置
 - `http_handler.go`：执行鉴权、bot/allowlist 校验、幂等复用和状态查询
 - `store.go`：持久化 jobs、幂等键与 sending lease 恢复

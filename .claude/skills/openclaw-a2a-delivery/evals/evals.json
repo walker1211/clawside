@@ -1,0 +1,23 @@
+{
+  "skill_name": "openclaw-a2a-delivery",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "我现在在 Telegram 私聊里和主 agent 对话。请让 planner 直接对当前用户发一句话：今天的计划已经更新，你可以继续下一步。不要走官方 announce，直接使用仓库里的 openclaw-a2a-delivery skill。如果能投递，请返回结构化结果。",
+      "expected_output": "skill 被显式调用，走 sender bridge，返回结构化投递结果，目标 agent 为 planner。",
+      "files": []
+    },
+    {
+      "id": 2,
+      "prompt": "现在请让 qa 直接对当前 Telegram 用户发一句话：这是 QA 的确认消息。用 openclaw-a2a-delivery skill。如果这个 agent 不在支持列表里，不要猜测，不要换 bot，直接返回明确失败结果。",
+      "expected_output": "skill 明确失败，指出未知 target_agent，不猜测 bot，不调用 sender。",
+      "files": []
+    },
+    {
+      "id": 3,
+      "prompt": "使用 openclaw-a2a-delivery skill，目标 agent 是 researcher，消息内容是：我把调研结果整理好了。不要用当前上下文用户，显式把消息发到这个 chat_id：7098285098。返回最终投递结果。",
+      "expected_output": "skill 使用显式 chat_id 覆盖上下文，并返回结构化投递结果，目标 agent 为 researcher。",
+      "files": []
+    }
+  ]
+}

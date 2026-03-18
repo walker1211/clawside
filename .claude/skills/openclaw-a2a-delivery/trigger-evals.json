@@ -1,0 +1,82 @@
+[
+  {
+    "query": "我现在在 Telegram 私聊里，planner 那边有句话要直接发给我本人，不要走官方 announce，直接用 sender bridge 这条路把消息送出来。",
+    "should_trigger": true
+  },
+  {
+    "query": "让 engineer 直接对当前用户说：修复已经完成。不要让主 agent 转述，走你那个 A2A delivery bridge。",
+    "should_trigger": true
+  },
+  {
+    "query": "伙伴直说还是不稳，你直接用 sender backend 那套，把 researcher 的消息显式投到当前 Telegram 用户。",
+    "should_trigger": true
+  },
+  {
+    "query": "不要用官方 announce，我要一个可观测的 agent-to-user delivery，目标 agent 是 guardian，发给当前 Telegram 用户。",
+    "should_trigger": true
+  },
+  {
+    "query": "请把 closer 的一句话直接送到当前聊天对象，不要只在会话里生成内容，我要真正落到 Telegram 用户侧。",
+    "should_trigger": true
+  },
+  {
+    "query": "我知道官方 A2A 回传有问题，这次你别转述，直接帮我走显式 sender bridge，把 planner 的一句话发给用户。",
+    "should_trigger": true
+  },
+  {
+    "query": "用 openclaw-a2a-delivery 这套路径，把 engineer 的消息发到 chat_id 7098285098，并把 job 状态查到明确结果再告诉我。",
+    "should_trigger": true
+  },
+  {
+    "query": "当前主 agent 正在和 Telegram 用户聊天，我要 target agent 直接开口，而不是主 agent 复述。请走 sender bridge。",
+    "should_trigger": true
+  },
+  {
+    "query": "我想让 researcher 直接对当前 Telegram 用户说一句话，但官方 announce 总是抽风，你帮我走 sender 的 /send 和 /jobs 这条路。",
+    "should_trigger": true
+  },
+  {
+    "query": "qa 这个 agent 也想直接给当前用户发消息，你用 A2A delivery bridge 处理一下，如果不支持就别猜。",
+    "should_trigger": true
+  },
+  {
+    "query": "帮我生成 configs/config.toml，然后启动 sender 服务。",
+    "should_trigger": false
+  },
+  {
+    "query": "我想排查 OpenClaw 官方 announce 为什么会返回 ANNOUNCE_SKIP，先帮我读一下 docs/telegram-agent-routing-research.md。",
+    "should_trigger": false
+  },
+  {
+    "query": "把 guardian bot 的 allowlist 配一下，然后我自己再测 /send。",
+    "should_trigger": false
+  },
+  {
+    "query": "给我解释一下 openclaw 的 sessions_send 和 sessions_spawn 区别。",
+    "should_trigger": false
+  },
+  {
+    "query": "帮我直接通过 sender 的 HTTP API 发一条普通消息到 7098285098，不需要什么 partner 直说。",
+    "should_trigger": false
+  },
+  {
+    "query": "现在 README 里关于 config builder 的路径还是旧的，帮我改成 configs/config.toml。",
+    "should_trigger": false
+  },
+  {
+    "query": "我想把这个项目做成 OpenClaw skill，先帮我写 design doc，不要开始实现。",
+    "should_trigger": false
+  },
+  {
+    "query": "让主 agent 总结一下 researcher 的观点，直接回复给我就行，不需要对方自己发。",
+    "should_trigger": false
+  },
+  {
+    "query": "当前 sender 返回 telegram api error 404，先帮我排查是 bot 配置问题还是 Telegram 侧问题。",
+    "should_trigger": false
+  },
+  {
+    "query": "给我看一下 .claude/commands/opsx/ 这些文件是干嘛的。",
+    "should_trigger": false
+  }
+]
