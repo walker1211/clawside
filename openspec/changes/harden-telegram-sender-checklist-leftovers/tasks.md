@@ -1,7 +1,8 @@
 ## 1. Configuration and API contract
 
 - [ ] 1.1 Extend runtime config to load a dedicated sender authentication key from `config.toml`
-- [ ] 1.2 Update config builder and related tests/docs so generated config includes the sender authentication key contract
+- [ ] 1.2 Update config builder and related tests/docs so generated config includes the sender authentication key
+  contract
 - [ ] 1.3 Extend `POST /send` request/response contract to include idempotency key support
 
 ## 2. HTTP handler hardening

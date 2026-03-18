@@ -1,6 +1,8 @@
 ## Why
 
-当前 Telegram sender 已经具备最小可运行链路，但按 `docs/telegram-sender-post-implementation.md` 的 checklist 看，仍缺少几项直接影响可信运行的收尾能力：本地 `/send` 鉴权、幂等、`sending` 恢复增强、最小状态查询 API，以及文本长度边界。现在补齐这些能力，可以把服务从“能跑”提升到“可控、可查、可恢复地跑”，也为后续 skill 化提供稳定边界。
+当前 Telegram sender 已经具备最小可运行链路，但按 `docs/telegram-sender-post-implementation.md` 的 checklist
+看，仍缺少几项直接影响可信运行的收尾能力：本地 `/send` 鉴权、幂等、`sending` 恢复增强、最小状态查询
+API，以及文本长度边界。现在补齐这些能力，可以把服务从“能跑”提升到“可控、可查、可恢复地跑”，也为后续 skill 化提供稳定边界。
 
 ## What Changes
 
@@ -14,9 +16,11 @@
 ## Capabilities
 
 ### New Capabilities
+
 - `telegram-sender-hardening`: 覆盖 sender 本地接口鉴权、入队幂等、发送恢复、最小状态查询 API 与纯文本输入边界约束。
 
 ### Modified Capabilities
+
 - 无
 
 ## Impact

@@ -35,18 +35,18 @@ type BotRuntimeConfig struct {
 }
 
 type senderTOMLConfig struct {
-	Address            string              `toml:"address"`
-	DatabasePath       string              `toml:"database_path"`
-	DefaultMaxAttempts *int                `toml:"default_max_attempts"`
-	WorkerPollInterval string              `toml:"worker_poll_interval"`
+	Address            string             `toml:"address"`
+	DatabasePath       string             `toml:"database_path"`
+	DefaultMaxAttempts *int               `toml:"default_max_attempts"`
+	WorkerPollInterval string             `toml:"worker_poll_interval"`
 	SendTimeout        string             `toml:"send_timeout"`
 	SenderAuthKey      string             `toml:"sender_auth_key"`
 	Telegram           telegramTOMLConfig `toml:"telegram"`
 }
 
 type telegramTOMLConfig struct {
-	GlobalAllowUserIDs []string                      `toml:"global_allow_user_ids"`
-	Bots               map[string]botTOMLConfig      `toml:"bots"`
+	GlobalAllowUserIDs []string                 `toml:"global_allow_user_ids"`
+	Bots               map[string]botTOMLConfig `toml:"bots"`
 }
 
 type botTOMLConfig struct {

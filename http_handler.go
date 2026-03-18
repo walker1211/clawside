@@ -46,13 +46,13 @@ type healthResponse struct {
 }
 
 type jobResponse struct {
-	JobID        int64      `json:"job_id"`
-	Status       string     `json:"status"`
-	AttemptCount int        `json:"attempt_count"`
-	LastError    string     `json:"last_error"`
-	CreatedAt    string     `json:"created_at"`
-	UpdatedAt    string     `json:"updated_at"`
-	SentAt       *string    `json:"sent_at"`
+	JobID        int64   `json:"job_id"`
+	Status       string  `json:"status"`
+	AttemptCount int     `json:"attempt_count"`
+	LastError    string  `json:"last_error"`
+	CreatedAt    string  `json:"created_at"`
+	UpdatedAt    string  `json:"updated_at"`
+	SentAt       *string `json:"sent_at"`
 }
 
 type errorResponse struct {
@@ -281,4 +281,3 @@ func (h *HTTPHandler) authorized(authHeader string) bool {
 	provided := strings.TrimSpace(strings.TrimPrefix(authHeader, bearerPrefix))
 	return provided != "" && provided == h.senderAuthKey
 }
-

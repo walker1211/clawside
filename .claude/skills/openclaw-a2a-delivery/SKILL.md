@@ -5,7 +5,8 @@ description: Use this skill whenever the user wants a named OpenClaw agent, part
 
 ## Purpose
 
-Provide a stable, explicit delivery path when the main agent needs a target agent identity to speak directly to the current user.
+Provide a stable, explicit delivery path when the main agent needs a target agent identity to speak directly to the
+current user.
 
 This skill is a **sender bridge**. It does not implement Telegram delivery itself.
 
@@ -19,32 +20,34 @@ This skill is a **sender bridge**. It does not implement Telegram delivery itsel
 
 - **Existing sender service is the only delivery backend in this skill**.
 - This skill calls sender endpoints:
-  - `POST /send`
-  - `GET /jobs/{job_id}`
+    - `POST /send`
+    - `GET /jobs/{job_id}`
 - This skill **must not call Telegram API directly**.
 
 ## Input contract
 
 Required:
+
 - `target_agent` (string)
 - `text` (string)
 
 Optional:
+
 - `chat_id` (int64, explicit override)
 - `idempotency_key` (string)
 
 ### Input validation
 
 - `target_agent`
-  - must be non-empty
-  - must exist in the static mapping
+    - must be non-empty
+    - must exist in the static mapping
 - `text`
-  - must be non-empty after trimming
-  - must be <= 4096 chars
+    - must be non-empty after trimming
+    - must be <= 4096 chars
 - `chat_id`
-  - if provided, must be int64 > 0
+    - if provided, must be int64 > 0
 - `idempotency_key`
-  - if provided, must be non-empty after trimming
+    - if provided, must be non-empty after trimming
 
 ## Target user resolution
 
@@ -94,11 +97,13 @@ Return fixed fields:
 - timeout: `15s`
 
 Stop polling when:
+
 - sender job is `sent`
 - sender job is `failed`
 - timeout reached
 
 On timeout return:
+
 - `status = retrying`
 - preserve `job_id`
 - include timeout detail in `last_error`

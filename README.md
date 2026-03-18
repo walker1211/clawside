@@ -2,7 +2,8 @@
 
 一个最小可用的本地 Telegram sender service。
 
-它提供 `POST /send` HTTP 接口，把消息写入 SQLite 队列，再由后台 worker 调用 Telegram Bot API 发送。调用方只需要投递任务，不直接接触 bot token。
+它提供 `POST /send` HTTP 接口，把消息写入 SQLite 队列，再由后台 worker 调用 Telegram Bot API 发送。调用方只需要投递任务，不直接接触
+bot token。
 
 ## 快速开始
 
@@ -70,7 +71,11 @@ curl -X POST http://127.0.0.1:8787/send \
 成功时返回：
 
 ```json
-{"job_id":1,"status":"pending","idempotency_key":"idem-001"}
+{
+  "job_id": 1,
+  "status": "pending",
+  "idempotency_key": "idem-001"
+}
 ```
 
 说明：
@@ -90,7 +95,9 @@ curl http://127.0.0.1:8787/healthz
 返回示例：
 
 ```json
-{"status":"ok"}
+{
+  "status": "ok"
+}
 ```
 
 查询任务状态：
@@ -136,7 +143,8 @@ chat_id ∈ global_allow_user_ids OR chat_id ∈ bot.allow_user_ids
 
 ## OpenClaw A2A delivery skill
 
-当前仓库还包含一个 **OpenClaw A2A delivery skill**，用于在官方 announce / nested 回传链路不稳定时，给主 agent 提供一条显式、可观测的消息投递桥。
+当前仓库还包含一个 **OpenClaw A2A delivery skill**，用于在官方 announce / nested 回传链路不稳定时，给主 agent
+提供一条显式、可观测的消息投递桥。
 
 边界：
 
