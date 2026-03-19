@@ -10,6 +10,8 @@ import (
 	"time"
 
 	toml "github.com/pelletier/go-toml/v2"
+
+	"openclaw/internal/deliveryrules"
 )
 
 type Config struct {
@@ -162,7 +164,7 @@ func LoadConfigFromTOML(path string) (Config, error) {
 
 	normalizedBotNames := map[string]struct{}{}
 	for botName, bot := range parsed.Telegram.Bots {
-		normalizedName := normalizeBotName(botName)
+		normalizedName := deliveryrules.NormalizeBotName(botName)
 		if normalizedName == "" {
 			return Config{}, fmt.Errorf("invalid bot name %q: normalized name is empty", botName)
 		}
@@ -205,7 +207,7 @@ func LoadBotTokensFromEnv() map[string]string {
 			continue
 		}
 
-		botName := normalizeBotName(strings.TrimPrefix(key, "BOT_TOKEN_"))
+		botName := deliveryrules.NormalizeBotName(strings.TrimPrefix(key, "BOT_TOKEN_"))
 		if botName == "" {
 			continue
 		}
@@ -223,10 +225,6 @@ func EnsureDatabaseDirectory(path string) error {
 		return fmt.Errorf("create database directory: %w", err)
 	}
 	return nil
-}
-
-func normalizeBotName(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func envOrDefault(name string, fallback string) string {

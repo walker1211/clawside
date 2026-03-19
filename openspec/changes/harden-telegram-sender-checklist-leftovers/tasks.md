@@ -30,4 +30,4 @@
 
 - [ ] 5.1 Update README for sender key, idempotency key, status APIs, and text length boundary
 - [ ] 5.2 Run focused Go tests for handler, store, worker, and config changes
-- [ ] 5.3 Run full verification (`go test ./...`, `go build ./...`, Python config builder tests)
+- [ ] 5.3 Run full verification (`go test ./...`, `go build ./...`, Go-native config builder verification)
