@@ -31,9 +31,6 @@ func RunA2ADeliveryBridge(ctx context.Context, client *SenderClient, input Skill
 
 	var explicitChatID *int64
 	if input.ChatID != nil {
-		if *input.ChatID <= 0 {
-			return DeliveryResult{}, fmt.Errorf("explicit chat_id must be positive")
-		}
 		explicitChatID = input.ChatID
 	}
 

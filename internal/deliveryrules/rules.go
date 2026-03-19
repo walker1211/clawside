@@ -20,6 +20,7 @@ func NormalizeBotName(value string) string {
 }
 
 func MapSenderJobStatusToDeliveryStatus(status string) (string, error) {
+	status = strings.ToLower(strings.TrimSpace(status))
 	switch status {
 	case SenderJobStatusSent:
 		return "sent", nil

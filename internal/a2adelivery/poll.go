@@ -15,9 +15,9 @@ const (
 )
 
 func MapSenderJobStatus(senderState string) (string, error) {
-	mappedStatus, err := deliveryrules.MapSenderJobStatusToDeliveryStatus(strings.ToLower(strings.TrimSpace(senderState)))
+	mappedStatus, err := deliveryrules.MapSenderJobStatusToDeliveryStatus(senderState)
 	if err != nil {
-		return "", fmt.Errorf("unknown job status: %s", senderState)
+		return "", fmt.Errorf("unknown job status: %s", strings.TrimSpace(senderState))
 	}
 	return mappedStatus, nil
 }

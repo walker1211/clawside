@@ -11,6 +11,8 @@ type TargetUserContext struct {
 	InboundSenderChatID     *int64
 }
 
+const targetUserContextError = "runtime context must be TargetUserContext, *TargetUserContext, or same-shape struct with DeliveryContextTo, DirectSessionPeerChatID, and InboundSenderChatID fields of type *int64"
+
 func AdaptTargetUserContext(runtimeContext any) (TargetUserContext, error) {
 	if runtimeContext == nil {
 		return TargetUserContext{}, nil
@@ -34,7 +36,7 @@ func AdaptTargetUserContext(runtimeContext any) (TargetUserContext, error) {
 		value = value.Elem()
 	}
 	if value.Kind() != reflect.Struct {
-		return TargetUserContext{}, fmt.Errorf("runtime context must be TargetUserContext, *TargetUserContext, or same-shape struct with DeliveryContextTo, DirectSessionPeerChatID, and InboundSenderChatID fields of type *int64")
+		return TargetUserContext{}, fmt.Errorf(targetUserContextError)
 	}
 
 	deliveryContextTo, err := targetUserContextField(value, "DeliveryContextTo")
@@ -60,7 +62,7 @@ func AdaptTargetUserContext(runtimeContext any) (TargetUserContext, error) {
 func targetUserContextField(structValue reflect.Value, fieldName string) (*int64, error) {
 	field := structValue.FieldByName(fieldName)
 	if !field.IsValid() {
-		return nil, fmt.Errorf("runtime context must be TargetUserContext, *TargetUserContext, or same-shape struct with DeliveryContextTo, DirectSessionPeerChatID, and InboundSenderChatID fields of type *int64")
+		return nil, fmt.Errorf(targetUserContextError)
 	}
 	if field.Kind() != reflect.Pointer || field.Type().Elem().Kind() != reflect.Int64 {
 		return nil, fmt.Errorf("runtime context field %s must be *int64 for TargetUserContext compatibility", fieldName)
