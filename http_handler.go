@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"openclaw/internal/deliveryrules"
 )
 
 type HTTPHandler struct {
@@ -58,8 +60,6 @@ type jobResponse struct {
 type errorResponse struct {
 	Error string `json:"error"`
 }
-
-const telegramMaxTextLength = 4096
 
 func NewHTTPHandler(store *Store, telegramCfg TelegramRuntimeConfig, defaultMaxAttempts int, senderAuthKey string) http.Handler {
 	bots := make(map[string]handlerBotConfig, len(telegramCfg.Bots))
@@ -177,7 +177,7 @@ func (h *HTTPHandler) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request.Bot = normalizeBotName(request.Bot)
+	request.Bot = deliveryrules.NormalizeBotName(request.Bot)
 	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
 	if request.Bot == "" {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "bot is required"})
@@ -204,7 +204,7 @@ func (h *HTTPHandler) handleSend(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "text is required"})
 		return
 	}
-	if utf8.RuneCountInString(request.Text) > telegramMaxTextLength {
+	if utf8.RuneCountInString(request.Text) > deliveryrules.TelegramMaxTextLength {
 		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "text exceeds telegram limit"})
 		return
 	}

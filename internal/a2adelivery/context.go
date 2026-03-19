@@ -5,18 +5,85 @@ import (
 	"reflect"
 )
 
-func ResolveTargetUser(explicitChatID *int64, runtimeContext any) (int64, error) {
+type TargetUserContext struct {
+	DeliveryContextTo       *int64
+	DirectSessionPeerChatID *int64
+	InboundSenderChatID     *int64
+}
+
+func AdaptTargetUserContext(runtimeContext any) (TargetUserContext, error) {
+	if runtimeContext == nil {
+		return TargetUserContext{}, nil
+	}
+
+	switch typed := runtimeContext.(type) {
+	case TargetUserContext:
+		return typed, nil
+	case *TargetUserContext:
+		if typed == nil {
+			return TargetUserContext{}, nil
+		}
+		return *typed, nil
+	}
+
+	value := reflect.ValueOf(runtimeContext)
+	if value.Kind() == reflect.Pointer {
+		if value.IsNil() {
+			return TargetUserContext{}, nil
+		}
+		value = value.Elem()
+	}
+	if value.Kind() != reflect.Struct {
+		return TargetUserContext{}, fmt.Errorf("runtime context must be TargetUserContext, *TargetUserContext, or same-shape struct with DeliveryContextTo, DirectSessionPeerChatID, and InboundSenderChatID fields of type *int64")
+	}
+
+	deliveryContextTo, err := targetUserContextField(value, "DeliveryContextTo")
+	if err != nil {
+		return TargetUserContext{}, err
+	}
+	directSessionPeerChatID, err := targetUserContextField(value, "DirectSessionPeerChatID")
+	if err != nil {
+		return TargetUserContext{}, err
+	}
+	inboundSenderChatID, err := targetUserContextField(value, "InboundSenderChatID")
+	if err != nil {
+		return TargetUserContext{}, err
+	}
+
+	return TargetUserContext{
+		DeliveryContextTo:       deliveryContextTo,
+		DirectSessionPeerChatID: directSessionPeerChatID,
+		InboundSenderChatID:     inboundSenderChatID,
+	}, nil
+}
+
+func targetUserContextField(structValue reflect.Value, fieldName string) (*int64, error) {
+	field := structValue.FieldByName(fieldName)
+	if !field.IsValid() {
+		return nil, fmt.Errorf("runtime context must be TargetUserContext, *TargetUserContext, or same-shape struct with DeliveryContextTo, DirectSessionPeerChatID, and InboundSenderChatID fields of type *int64")
+	}
+	if field.Kind() != reflect.Pointer || field.Type().Elem().Kind() != reflect.Int64 {
+		return nil, fmt.Errorf("runtime context field %s must be *int64 for TargetUserContext compatibility", fieldName)
+	}
+	if field.IsNil() {
+		return nil, nil
+	}
+	value := field.Elem().Int()
+	result := int64(value)
+	return &result, nil
+}
+
+func ResolveTargetUser(explicitChatID *int64, ctx TargetUserContext) (int64, error) {
 	if explicitChatID != nil {
 		if *explicitChatID <= 0 {
-			return 0, fmt.Errorf("explicit chat_id must be non-zero")
+			return 0, fmt.Errorf("explicit chat_id must be positive")
 		}
 		return *explicitChatID, nil
 	}
 
-	deliveryContextTo, directSessionPeerChatID, inboundSenderChatID, err := extractContextChatIDs(runtimeContext)
-	if err != nil {
-		return 0, err
-	}
+	deliveryContextTo := ctx.DeliveryContextTo
+	directSessionPeerChatID := ctx.DirectSessionPeerChatID
+	inboundSenderChatID := ctx.InboundSenderChatID
 
 	if deliveryContextTo != nil {
 		if directSessionPeerChatID != nil && *directSessionPeerChatID != *deliveryContextTo {
@@ -49,57 +116,4 @@ func ResolveTargetUser(explicitChatID *int64, runtimeContext any) (int64, error)
 	}
 
 	return 0, fmt.Errorf("unable to resolve target user chat_id")
-}
-
-func extractContextChatIDs(runtimeContext any) (deliveryContextTo *int64, directSessionPeerChatID *int64, inboundSenderChatID *int64, err error) {
-	if runtimeContext == nil {
-		return nil, nil, nil, nil
-	}
-
-	value := reflect.ValueOf(runtimeContext)
-	if value.Kind() == reflect.Pointer {
-		if value.IsNil() {
-			return nil, nil, nil, nil
-		}
-		value = value.Elem()
-	}
-
-	if value.Kind() != reflect.Struct {
-		return nil, nil, nil, fmt.Errorf("runtime context must be a struct or pointer to struct")
-	}
-
-	deliveryContextTo, err = int64PtrFromField(value, "DeliveryContextTo")
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	directSessionPeerChatID, err = int64PtrFromField(value, "DirectSessionPeerChatID")
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	inboundSenderChatID, err = int64PtrFromField(value, "InboundSenderChatID")
-	if err != nil {
-		return nil, nil, nil, err
-	}
-
-	return deliveryContextTo, directSessionPeerChatID, inboundSenderChatID, nil
-}
-
-func int64PtrFromField(structValue reflect.Value, fieldName string) (*int64, error) {
-	field := structValue.FieldByName(fieldName)
-	if !field.IsValid() {
-		return nil, nil
-	}
-	if field.Kind() != reflect.Pointer {
-		return nil, fmt.Errorf("runtime context field %s must be *int64", fieldName)
-	}
-	if field.IsNil() {
-		return nil, nil
-	}
-	elem := field.Elem()
-	if elem.Kind() != reflect.Int64 {
-		return nil, fmt.Errorf("runtime context field %s must be *int64", fieldName)
-	}
-	value := elem.Int()
-	result := int64(value)
-	return &result, nil
 }

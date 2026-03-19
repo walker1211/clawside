@@ -3,6 +3,7 @@ package a2adelivery
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -12,11 +13,11 @@ func TestSenderBridgePostsSendRequest(t *testing.T) {
 	t.Parallel()
 
 	const (
-		expectedBot                  = "planner"
-		expectedChatID         int64 = 7098285098
-		expectedText                 = "hello from planner"
-		expectedIdempotencyKey       = "a2a-delivery-req-001"
-		expectedAuthKey              = "local-sender-key"
+		expectedBot             = "planner"
+		expectedChatID    int64 = 7098285098
+		expectedText            = "hello from planner"
+		expectedIdempotencyKey  = "a2a-delivery-req-001"
+		expectedAuthKey         = "local-sender-key"
 	)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -70,5 +71,19 @@ func TestSenderBridgePostsSendRequest(t *testing.T) {
 	}
 	if status != "pending" {
 		t.Fatalf("expected status pending, got %q", status)
+	}
+}
+
+func TestSenderAPIErrorHelpersUnwrapWrappedErrors(t *testing.T) {
+	t.Parallel()
+
+	wrappedAPIErr := fmt.Errorf("wrapped: %w", &senderAPIError{StatusCode: http.StatusBadGateway, Message: "temporary upstream issue"})
+	if !IsRetryablePollError(wrappedAPIErr) {
+		t.Fatalf("expected wrapped sender api error to be classified as retryable")
+	}
+
+	wrappedNotFoundErr := fmt.Errorf("wrapped: %w", &senderAPIError{StatusCode: http.StatusNotFound, Message: "not found"})
+	if !IsPostAcceptNotFound(wrappedNotFoundErr) {
+		t.Fatalf("expected wrapped sender api error to be classified as post-accept not found")
 	}
 }

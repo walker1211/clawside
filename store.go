@@ -8,15 +8,17 @@ import (
 	"strings"
 	"time"
 
+	"openclaw/internal/deliveryrules"
+
 	_ "modernc.org/sqlite"
 )
 
 const (
-	StatusPending = "pending"
-	StatusSending = "sending"
-	StatusSent    = "sent"
-	StatusRetry   = "retry"
-	StatusFailed  = "failed"
+	StatusPending = deliveryrules.SenderJobStatusPending
+	StatusSending = deliveryrules.SenderJobStatusSending
+	StatusSent    = deliveryrules.SenderJobStatusSent
+	StatusRetry   = deliveryrules.SenderJobStatusRetry
+	StatusFailed  = deliveryrules.SenderJobStatusFailed
 )
 
 type Store struct {

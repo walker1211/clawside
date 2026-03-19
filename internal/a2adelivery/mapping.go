@@ -2,7 +2,8 @@ package a2adelivery
 
 import (
 	"fmt"
-	"strings"
+
+	"openclaw/internal/deliveryrules"
 )
 
 var firstVersionTargetAgentToBot = map[string]string{
@@ -15,7 +16,7 @@ var firstVersionTargetAgentToBot = map[string]string{
 }
 
 func ResolveBotForTargetAgent(targetAgent string) (string, error) {
-	normalized := strings.ToLower(strings.TrimSpace(targetAgent))
+	normalized := deliveryrules.NormalizeBotName(targetAgent)
 	bot, ok := firstVersionTargetAgentToBot[normalized]
 	if !ok {
 		return "", fmt.Errorf("unknown target_agent %q", targetAgent)

@@ -7,6 +7,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"openclaw/internal/deliveryrules"
 )
 
 const (
@@ -112,7 +114,7 @@ func collectRoutes(source SourceConfig) (map[string]string, error) {
 			continue
 		}
 
-		botName := normalizeBotName(binding.AgentID)
+		botName := deliveryrules.NormalizeBotName(binding.AgentID)
 		accountID := strings.TrimSpace(binding.Match.AccountID)
 		if botName == "" {
 			return nil, fmt.Errorf("telegram route binding missing agentId")
@@ -136,10 +138,6 @@ func collectRoutes(source SourceConfig) (map[string]string, error) {
 	}
 
 	return routes, nil
-}
-
-func normalizeBotName(value string) string {
-	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func normalizeUserIDs(raw []any, fieldName string) ([]string, error) {

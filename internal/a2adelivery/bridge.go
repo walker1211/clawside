@@ -8,6 +8,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"openclaw/internal/deliveryrules"
 )
 
 func RunA2ADeliveryBridge(ctx context.Context, client *SenderClient, input SkillInput, runtimeContext any) (DeliveryResult, error) {
@@ -19,8 +21,8 @@ func RunA2ADeliveryBridge(ctx context.Context, client *SenderClient, input Skill
 	if strings.TrimSpace(input.Text) == "" {
 		return DeliveryResult{}, fmt.Errorf("text is required")
 	}
-	if utf8.RuneCountInString(input.Text) > 4096 {
-		return DeliveryResult{}, fmt.Errorf("text must be <= 4096 characters")
+	if utf8.RuneCountInString(input.Text) > deliveryrules.TelegramMaxTextLength {
+		return DeliveryResult{}, fmt.Errorf("text must be <= %d characters", deliveryrules.TelegramMaxTextLength)
 	}
 
 	if client == nil {
@@ -30,12 +32,24 @@ func RunA2ADeliveryBridge(ctx context.Context, client *SenderClient, input Skill
 	var explicitChatID *int64
 	if input.ChatID != nil {
 		if *input.ChatID <= 0 {
-			return DeliveryResult{}, fmt.Errorf("explicit chat_id must be non-zero")
+			return DeliveryResult{}, fmt.Errorf("explicit chat_id must be positive")
 		}
 		explicitChatID = input.ChatID
 	}
 
-	chatID, err := ResolveTargetUser(explicitChatID, runtimeContext)
+	var (
+		chatID int64
+		err    error
+	)
+	if explicitChatID != nil {
+		chatID, err = ResolveTargetUser(explicitChatID, TargetUserContext{})
+	} else {
+		typedContext, adaptErr := AdaptTargetUserContext(runtimeContext)
+		if adaptErr != nil {
+			return DeliveryResult{}, adaptErr
+		}
+		chatID, err = ResolveTargetUser(nil, typedContext)
+	}
 	if err != nil {
 		return DeliveryResult{}, err
 	}
@@ -55,9 +69,34 @@ func RunA2ADeliveryBridge(ctx context.Context, client *SenderClient, input Skill
 		idempotencyKey = deriveDefaultIdempotencyKey(targetAgent, chatID)
 	}
 
-	jobID, _, err := client.Send(ctx, bot, chatID, input.Text, idempotencyKey)
+	jobID, sendStatus, err := client.Send(ctx, bot, chatID, input.Text, idempotencyKey)
 	if err != nil {
 		return DeliveryResult{}, err
+	}
+
+	mappedStatus, mapErr := MapSenderJobStatus(sendStatus)
+	if mapErr != nil {
+		return DeliveryResult{
+			Status:       "failed",
+			JobID:        jobID,
+			TargetAgent:  targetAgent,
+			Bot:          bot,
+			ChatID:       chatID,
+			AttemptCount: 0,
+			LastError:    mapErr.Error(),
+		}, nil
+	}
+
+	if mappedStatus == "sent" || mappedStatus == "failed" {
+		return DeliveryResult{
+			Status:       mappedStatus,
+			JobID:        jobID,
+			TargetAgent:  targetAgent,
+			Bot:          bot,
+			ChatID:       chatID,
+			AttemptCount: 0,
+			LastError:    "",
+		}, nil
 	}
 
 	pollResult, err := PollJob(ctx, client, jobID, DefaultPollInterval, DefaultPollTimeout)

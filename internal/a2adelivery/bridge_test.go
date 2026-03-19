@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func TestA2ADeliveryBridgeReturnsSent(t *testing.T) {
+func TestA2ADeliveryBridgeReturnsSentWithoutPollingWhenSendIsTerminalSent(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -21,7 +21,6 @@ func TestA2ADeliveryBridgeReturnsSent(t *testing.T) {
 	)
 
 	var sendCalled bool
-	var pollCalled bool
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -51,14 +50,10 @@ func TestA2ADeliveryBridgeReturnsSent(t *testing.T) {
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"pending"}`, jobID)
+			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"sent"}`, jobID)
 			return
-		case r.Method == http.MethodGet && r.URL.Path == fmt.Sprintf("/jobs/%d", jobID):
-			pollCalled = true
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(fmt.Sprintf(`{"job_id":%d,"status":"sent","attempt_count":1,"last_error":"","created_at":"2026-03-18T00:00:00Z","updated_at":"2026-03-18T00:00:01Z","sent_at":"2026-03-18T00:00:01Z"}`, jobID)))
-			return
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/jobs/"):
+			t.Fatalf("unexpected poll request for terminal /send status: %s", r.URL.Path)
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -67,7 +62,7 @@ func TestA2ADeliveryBridgeReturnsSent(t *testing.T) {
 
 	client := NewSenderClient(server.URL, "", server.Client())
 	input := SkillInput{TargetAgent: targetAgent, Text: text}
-	runtimeContext := testRuntimeContext{DeliveryContextTo: int64Ptr(chatID)}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(chatID)}
 
 	result, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
 	if err != nil {
@@ -75,9 +70,6 @@ func TestA2ADeliveryBridgeReturnsSent(t *testing.T) {
 	}
 	if !sendCalled {
 		t.Fatalf("expected bridge to call sender /send")
-	}
-	if !pollCalled {
-		t.Fatalf("expected bridge to poll sender /jobs/{job_id}")
 	}
 	if result.Status != "sent" {
 		t.Fatalf("expected status sent, got %q", result.Status)
@@ -94,12 +86,15 @@ func TestA2ADeliveryBridgeReturnsSent(t *testing.T) {
 	if result.ChatID != chatID {
 		t.Fatalf("expected chat_id %d, got %d", chatID, result.ChatID)
 	}
+	if result.AttemptCount != 0 {
+		t.Fatalf("expected attempt_count 0 for terminal /send status, got %d", result.AttemptCount)
+	}
 	if result.LastError != "" {
-		t.Fatalf("expected empty last_error for sent result, got %q", result.LastError)
+		t.Fatalf("expected empty last_error for terminal sent result, got %q", result.LastError)
 	}
 }
 
-func TestA2ADeliveryBridgeReturnsFailed(t *testing.T) {
+func TestA2ADeliveryBridgeReturnsFailedWithoutPollingWhenSendIsTerminalFailed(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -114,13 +109,10 @@ func TestA2ADeliveryBridgeReturnsFailed(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/send":
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusAccepted)
-			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"pending"}`, jobID)
+			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"failed"}`, jobID)
 			return
-		case r.Method == http.MethodGet && r.URL.Path == fmt.Sprintf("/jobs/%d", jobID):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"failed","attempt_count":3,"last_error":"telegram: forbidden","created_at":"2026-03-18T00:00:00Z","updated_at":"2026-03-18T00:00:02Z","sent_at":null}`, jobID)
-			return
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/jobs/"):
+			t.Fatalf("unexpected poll request for terminal /send status: %s", r.URL.Path)
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
@@ -129,7 +121,7 @@ func TestA2ADeliveryBridgeReturnsFailed(t *testing.T) {
 
 	client := NewSenderClient(server.URL, "", server.Client())
 	input := SkillInput{TargetAgent: targetAgent, Text: text}
-	runtimeContext := testRuntimeContext{DeliveryContextTo: int64Ptr(chatID)}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(chatID)}
 
 	result, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
 	if err != nil {
@@ -141,12 +133,15 @@ func TestA2ADeliveryBridgeReturnsFailed(t *testing.T) {
 	if result.JobID != jobID {
 		t.Fatalf("expected job_id %d, got %d", jobID, result.JobID)
 	}
-	if strings.TrimSpace(result.LastError) == "" {
-		t.Fatalf("expected failed result to include last_error")
+	if result.AttemptCount != 0 {
+		t.Fatalf("expected attempt_count 0 for terminal /send status, got %d", result.AttemptCount)
+	}
+	if result.LastError != "" {
+		t.Fatalf("expected empty last_error for terminal failed result, got %q", result.LastError)
 	}
 }
 
-func TestA2ADeliveryBridgeReturnsRetryingOnTimeout(t *testing.T) {
+func TestA2ADeliveryBridgePollsWhenSendStatusIsPending(t *testing.T) {
 	t.Parallel()
 
 	const (
@@ -156,6 +151,8 @@ func TestA2ADeliveryBridgeReturnsRetryingOnTimeout(t *testing.T) {
 		jobID       = int64(91003)
 	)
 
+	var pollCalled bool
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/send":
@@ -164,9 +161,10 @@ func TestA2ADeliveryBridgeReturnsRetryingOnTimeout(t *testing.T) {
 			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"pending"}`, jobID)
 			return
 		case r.Method == http.MethodGet && r.URL.Path == fmt.Sprintf("/jobs/%d", jobID):
+			pollCalled = true
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)
-			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"sending","attempt_count":1,"last_error":"","created_at":"2026-03-18T00:00:00Z","updated_at":"2026-03-18T00:00:02Z","sent_at":null}`, jobID)
+			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"sent","attempt_count":2,"last_error":"","created_at":"2026-03-18T00:00:00Z","updated_at":"2026-03-18T00:00:02Z","sent_at":"2026-03-18T00:00:02Z"}`, jobID)
 			return
 		default:
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -176,17 +174,70 @@ func TestA2ADeliveryBridgeReturnsRetryingOnTimeout(t *testing.T) {
 
 	client := NewSenderClient(server.URL, "", server.Client())
 	input := SkillInput{TargetAgent: targetAgent, Text: text}
-	runtimeContext := testRuntimeContext{DeliveryContextTo: int64Ptr(chatID)}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(chatID)}
 
 	result, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
 	if err != nil {
 		t.Fatalf("expected timeout to return structured retrying result, got error: %v", err)
 	}
-	if result.Status != "retrying" {
-		t.Fatalf("expected status retrying on timeout, got %q", result.Status)
+	if !pollCalled {
+		t.Fatalf("expected pending /send status to trigger polling")
+	}
+	if result.Status != "sent" {
+		t.Fatalf("expected status sent after polling, got %q", result.Status)
 	}
 	if result.JobID != jobID {
-		t.Fatalf("expected timeout result to preserve job_id %d, got %d", jobID, result.JobID)
+		t.Fatalf("expected result to preserve job_id %d, got %d", jobID, result.JobID)
+	}
+	if result.AttemptCount != 2 {
+		t.Fatalf("expected attempt_count from poll result, got %d", result.AttemptCount)
+	}
+}
+
+func TestA2ADeliveryBridgeReturnsStructuredFailureWithoutPollingOnUnknownSendStatus(t *testing.T) {
+	t.Parallel()
+
+	const (
+		targetAgent = "planner"
+		text        = "planner update"
+		chatID      = int64(700004)
+		jobID       = int64(91004)
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"mystery"}`, jobID)
+			return
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/jobs/"):
+			t.Fatalf("unexpected poll request for unknown /send status: %s", r.URL.Path)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSenderClient(server.URL, "", server.Client())
+	input := SkillInput{TargetAgent: targetAgent, Text: text}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(chatID)}
+
+	result, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
+	if err != nil {
+		t.Fatalf("expected unknown /send status to return structured failed result, got error: %v", err)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("expected status failed for unknown /send status, got %q", result.Status)
+	}
+	if result.JobID != jobID {
+		t.Fatalf("expected unknown status result to preserve job_id %d, got %d", jobID, result.JobID)
+	}
+	if result.AttemptCount != 0 {
+		t.Fatalf("expected attempt_count 0 for unknown /send status, got %d", result.AttemptCount)
+	}
+	if !strings.Contains(result.LastError, "unknown") {
+		t.Fatalf("expected unknown status mapping error in last_error, got %q", result.LastError)
 	}
 }
 
@@ -205,7 +256,7 @@ func TestA2ADeliveryBridgeFailsOnExplicitZeroChatID(t *testing.T) {
 		Text:        "hello",
 		ChatID:      &explicitZeroChatID,
 	}
-	runtimeContext := testRuntimeContext{DeliveryContextTo: int64Ptr(700100)}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(700100)}
 
 	_, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
 	if err == nil {
@@ -229,7 +280,7 @@ func TestA2ADeliveryBridgeFailsWhenTextTooLong(t *testing.T) {
 		TargetAgent: "planner",
 		Text:        strings.Repeat("a", 4097),
 	}
-	runtimeContext := testRuntimeContext{DeliveryContextTo: int64Ptr(700101)}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(700101)}
 
 	_, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
 	if err == nil {
@@ -255,7 +306,7 @@ func TestA2ADeliveryBridgeFailsOnExplicitBlankIdempotencyKey(t *testing.T) {
 		Text:           "hello",
 		IdempotencyKey: &explicitBlankIdempotencyKey,
 	}
-	runtimeContext := testRuntimeContext{DeliveryContextTo: int64Ptr(700102)}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(700102)}
 
 	_, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
 	if err == nil {
@@ -305,7 +356,7 @@ func TestA2ADeliveryBridgeDoesNotTrimTextBeforeSending(t *testing.T) {
 
 	client := NewSenderClient(server.URL, "", server.Client())
 	input := SkillInput{TargetAgent: targetAgent, Text: text}
-	runtimeContext := testRuntimeContext{DeliveryContextTo: int64Ptr(chatID)}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(chatID)}
 
 	_, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
 	if err != nil {
@@ -352,10 +403,105 @@ func TestA2ADeliveryBridgeAccepts4096RuneText(t *testing.T) {
 
 	client := NewSenderClient(server.URL, "", server.Client())
 	input := SkillInput{TargetAgent: targetAgent, Text: text}
-	runtimeContext := testRuntimeContext{DeliveryContextTo: int64Ptr(chatID)}
+	runtimeContext := &TargetUserContext{DeliveryContextTo: int64Ptr(chatID)}
 
 	_, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
 	if err != nil {
 		t.Fatalf("expected 4096-rune text to pass validation, got error: %v", err)
+	}
+}
+
+func TestA2ADeliveryBridgeRejectsUnsupportedRuntimeContextWithoutExplicitChatID(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	client := NewSenderClient(server.URL, "", server.Client())
+	input := SkillInput{TargetAgent: "planner", Text: "hello"}
+
+	_, err := RunA2ADeliveryBridge(context.Background(), client, input, 42)
+	if err == nil {
+		t.Fatalf("expected unsupported runtimeContext without explicit chat_id to fail")
+	}
+	if !strings.Contains(err.Error(), "TargetUserContext") {
+		t.Fatalf("expected type adaptation error, got %v", err)
+	}
+}
+
+func TestA2ADeliveryBridgeFailsWhenRuntimeContextIsNilAndNoExplicitChatID(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer server.Close()
+
+	client := NewSenderClient(server.URL, "", server.Client())
+	input := SkillInput{TargetAgent: "planner", Text: "hello"}
+
+	_, err := RunA2ADeliveryBridge(context.Background(), client, input, nil)
+	if err == nil {
+		t.Fatalf("expected nil runtimeContext without explicit chat_id to fail")
+	}
+	if !strings.Contains(err.Error(), "unable to resolve target user chat_id") {
+		t.Fatalf("expected unresolved target user chat_id error, got %v", err)
+	}
+}
+
+func TestA2ADeliveryBridgeAllowsExplicitChatIDWithUnsupportedRuntimeContext(t *testing.T) {
+	t.Parallel()
+
+	const (
+		targetAgent = "planner"
+		text        = "hello"
+		chatID      = int64(700112)
+		jobID       = int64(91012)
+	)
+
+	var sendCalled bool
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			sendCalled = true
+			var payload struct {
+				ChatID int64 `json:"chat_id"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode /send payload: %v", err)
+			}
+			if payload.ChatID != chatID {
+				t.Fatalf("expected explicit chat_id %d, got %d", chatID, payload.ChatID)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"sent"}`, jobID)
+			return
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/jobs/"):
+			t.Fatalf("unexpected poll request for terminal /send status: %s", r.URL.Path)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSenderClient(server.URL, "", server.Client())
+	input := SkillInput{TargetAgent: targetAgent, Text: text, ChatID: int64Ptr(chatID)}
+
+	result, err := RunA2ADeliveryBridge(context.Background(), client, input, map[string]any{"bad": "shape"})
+	if err != nil {
+		t.Fatalf("expected explicit chat_id to bypass runtimeContext adaptation errors, got %v", err)
+	}
+	if !sendCalled {
+		t.Fatalf("expected bridge to call sender /send")
+	}
+	if result.ChatID != chatID {
+		t.Fatalf("expected result chat_id %d, got %d", chatID, result.ChatID)
+	}
+	if result.JobID != jobID {
+		t.Fatalf("expected result job_id %d, got %d", jobID, result.JobID)
 	}
 }

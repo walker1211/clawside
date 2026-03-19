@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"openclaw/internal/deliveryrules"
 )
 
 const (
@@ -13,16 +15,11 @@ const (
 )
 
 func MapSenderJobStatus(senderState string) (string, error) {
-	switch strings.ToLower(strings.TrimSpace(senderState)) {
-	case "sent":
-		return "sent", nil
-	case "failed":
-		return "failed", nil
-	case "retry", "pending", "sending":
-		return "retrying", nil
-	default:
+	mappedStatus, err := deliveryrules.MapSenderJobStatusToDeliveryStatus(strings.ToLower(strings.TrimSpace(senderState)))
+	if err != nil {
 		return "", fmt.Errorf("unknown job status: %s", senderState)
 	}
+	return mappedStatus, nil
 }
 
 func PollJob(ctx context.Context, client *SenderClient, jobID int64, interval time.Duration, timeout time.Duration) (DeliveryResult, error) {

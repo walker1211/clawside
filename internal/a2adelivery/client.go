@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -179,11 +180,7 @@ func AsSenderAPIError(err error, target **senderAPIError) bool {
 	if err == nil {
 		return false
 	}
-	apiErr, ok := err.(*senderAPIError)
-	if ok {
-		*target = apiErr
-	}
-	return ok
+	return errors.As(err, target)
 }
 
 func isNetworkError(err error) bool {
@@ -198,10 +195,8 @@ func isNetworkError(err error) bool {
 }
 
 func AsNetError(err error, target *net.Error) bool {
-	ne, ok := err.(net.Error)
-	if ok {
-		*target = ne
-		return true
+	if err == nil {
+		return false
 	}
-	return false
+	return errors.As(err, target)
 }
