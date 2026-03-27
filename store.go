@@ -21,6 +21,12 @@ const (
 	StatusFailed  = deliveryrules.SenderJobStatusFailed
 )
 
+var (
+	ErrJobNotFound       = errors.New("job not found")
+	ErrInvalidTransition = errors.New("invalid job state transition")
+	ErrStateConflict     = errors.New("job state conflict")
+)
+
 type Store struct {
 	db *sql.DB
 }
@@ -54,6 +60,20 @@ type Job struct {
 	DisableNotification bool
 }
 
+type JobListFilter struct {
+	Status string
+	Limit  int
+}
+
+type JobStats struct {
+	PendingCount            int
+	RetryCount              int
+	SendingCount            int
+	FailedCount             int
+	SentCount               int
+	OldestPendingAgeSeconds *int64
+}
+
 func OpenStore(path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -73,6 +93,16 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+func (s *Store) Ping(ctx context.Context) error {
+	if s == nil || s.db == nil {
+		return fmt.Errorf("store database is not initialized")
+	}
+	if err := s.db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping sqlite database: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Init(ctx context.Context) error {
@@ -145,6 +175,15 @@ func (s *Store) Enqueue(ctx context.Context, job CreateJob) (Job, error) {
 		boolToInt(job.DisableNotification),
 	)
 	if err != nil {
+		if job.IdempotencyKey != "" && isIdempotencyConstraintError(err) {
+			existing, lookupErr := s.GetByIdempotencyKey(ctx, job.IdempotencyKey)
+			if lookupErr != nil {
+				return Job{}, fmt.Errorf("lookup existing job after idempotency conflict: %w", lookupErr)
+			}
+			if existing != nil {
+				return *existing, nil
+			}
+		}
 		return Job{}, fmt.Errorf("insert job: %w", err)
 	}
 
@@ -231,23 +270,30 @@ func (s *Store) ClaimNextReady(ctx context.Context, now time.Time, leaseDuration
 }
 
 func (s *Store) MarkRetry(ctx context.Context, jobID int64, attemptCount int, nextRetryAt time.Time, lastError string, now time.Time) error {
-	_, err := s.db.ExecContext(
+	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE jobs SET status = ?, attempt_count = ?, next_retry_at = ?, last_error = ?, updated_at = ?, sent_at = NULL WHERE id = ?`,
+		`UPDATE jobs
+		 SET status = ?, attempt_count = ?, next_retry_at = ?, last_error = ?, updated_at = ?, sent_at = NULL, lease_expires_at = NULL
+		 WHERE id = ? AND status = ?`,
 		StatusRetry,
 		attemptCount,
 		formatTimestamp(nextRetryAt),
 		lastError,
 		formatTimestamp(now),
 		jobID,
+		StatusSending,
 	)
 	if err != nil {
+		return fmt.Errorf("mark job as retry: %w", err)
+	}
+	if err := ensureTransitionSucceeded(ctx, s.db, result, jobID, StatusSending); err != nil {
 		return fmt.Errorf("mark job as retry: %w", err)
 	}
 	return nil
 }
 
-func (s *Store) RecoverSendingJobs(ctx context.Context, now time.Time) error {
+func (s *Store) RecoverExpiredSendingJobs(ctx context.Context, now time.Time, legacyGracePeriod time.Duration) error {
+	legacyCutoff := now.Add(-legacyGracePeriod)
 	_, err := s.db.ExecContext(
 		ctx,
 		`UPDATE jobs
@@ -258,50 +304,159 @@ func (s *Store) RecoverSendingJobs(ctx context.Context, now time.Time) error {
 		     updated_at = ?,
 		     lease_expires_at = NULL
 		 WHERE status = ?
-		   AND (lease_expires_at IS NULL OR lease_expires_at <= ?)`,
+		   AND (
+				(lease_expires_at IS NOT NULL AND lease_expires_at <= ?)
+				OR (lease_expires_at IS NULL AND updated_at <= ?)
+		   )`,
 		StatusRetry,
 		formatTimestamp(now),
 		"recovered expired sending lease; retrying delivery",
 		formatTimestamp(now),
 		StatusSending,
 		formatTimestamp(now),
+		formatTimestamp(legacyCutoff),
 	)
 	if err != nil {
-		return fmt.Errorf("recover sending jobs: %w", err)
+		return fmt.Errorf("recover expired sending jobs: %w", err)
 	}
 	return nil
 }
 
 func (s *Store) MarkSent(ctx context.Context, jobID int64, attemptCount int, sentAt time.Time) error {
-	_, err := s.db.ExecContext(
+	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE jobs SET status = ?, attempt_count = ?, next_retry_at = NULL, last_error = '', updated_at = ?, sent_at = ? WHERE id = ?`,
+		`UPDATE jobs
+		 SET status = ?, attempt_count = ?, next_retry_at = NULL, last_error = '', updated_at = ?, sent_at = ?, lease_expires_at = NULL
+		 WHERE id = ? AND status = ?`,
 		StatusSent,
 		attemptCount,
 		formatTimestamp(sentAt),
 		formatTimestamp(sentAt),
 		jobID,
+		StatusSending,
 	)
 	if err != nil {
+		return fmt.Errorf("mark job as sent: %w", err)
+	}
+	if err := ensureTransitionSucceeded(ctx, s.db, result, jobID, StatusSending); err != nil {
 		return fmt.Errorf("mark job as sent: %w", err)
 	}
 	return nil
 }
 
 func (s *Store) MarkFailed(ctx context.Context, jobID int64, attemptCount int, lastError string, now time.Time) error {
-	_, err := s.db.ExecContext(
+	result, err := s.db.ExecContext(
 		ctx,
-		`UPDATE jobs SET status = ?, attempt_count = ?, next_retry_at = NULL, last_error = ?, updated_at = ? WHERE id = ?`,
+		`UPDATE jobs
+		 SET status = ?, attempt_count = ?, next_retry_at = NULL, last_error = ?, updated_at = ?, lease_expires_at = NULL
+		 WHERE id = ? AND status = ?`,
 		StatusFailed,
 		attemptCount,
 		lastError,
 		formatTimestamp(now),
 		jobID,
+		StatusSending,
 	)
 	if err != nil {
 		return fmt.Errorf("mark job as failed: %w", err)
 	}
+	if err := ensureTransitionSucceeded(ctx, s.db, result, jobID, StatusSending); err != nil {
+		return fmt.Errorf("mark job as failed: %w", err)
+	}
 	return nil
+}
+
+func (s *Store) ListJobs(ctx context.Context, filter JobListFilter, now time.Time) ([]Job, error) {
+	if s == nil || s.db == nil {
+		return nil, fmt.Errorf("store database is not initialized")
+	}
+
+	var orderBy string
+	if filter.Status == StatusPending {
+		orderBy = "created_at ASC, id ASC"
+	} else {
+		orderBy = "updated_at DESC, id DESC"
+	}
+
+	rows, err := s.db.QueryContext(
+		ctx,
+		selectJobSQL+` WHERE status = ? ORDER BY `+orderBy+` LIMIT ?`,
+		filter.Status,
+		filter.Limit,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("list jobs: %w", err)
+	}
+	defer rows.Close()
+
+	jobs := make([]Job, 0, filter.Limit)
+	for rows.Next() {
+		job, err := scanJob(rows)
+		if err != nil {
+			return nil, err
+		}
+		jobs = append(jobs, job)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate jobs: %w", err)
+	}
+	return jobs, nil
+}
+
+func (s *Store) GetStats(ctx context.Context, now time.Time) (JobStats, error) {
+	if s == nil || s.db == nil {
+		return JobStats{}, fmt.Errorf("store database is not initialized")
+	}
+
+	stats := JobStats{}
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN status = ? THEN 1 ELSE 0 END), 0),
+			MIN(CASE WHEN status = ? THEN created_at ELSE NULL END)
+		 FROM jobs`,
+		StatusPending,
+		StatusRetry,
+		StatusSending,
+		StatusFailed,
+		StatusSent,
+		StatusPending,
+	).Scan(
+		&stats.PendingCount,
+		&stats.RetryCount,
+		&stats.SendingCount,
+		&stats.FailedCount,
+		&stats.SentCount,
+		new(sql.NullString),
+	); err != nil {
+		return JobStats{}, fmt.Errorf("query job stats: %w", err)
+	}
+
+	var oldestPendingRaw sql.NullString
+	if err := s.db.QueryRowContext(
+		ctx,
+		`SELECT MIN(created_at) FROM jobs WHERE status = ?`,
+		StatusPending,
+	).Scan(&oldestPendingRaw); err != nil {
+		return JobStats{}, fmt.Errorf("query oldest pending job: %w", err)
+	}
+	if oldestPendingRaw.Valid {
+		createdAt, err := parseTimestamp(oldestPendingRaw.String)
+		if err != nil {
+			return JobStats{}, fmt.Errorf("parse oldest pending created_at: %w", err)
+		}
+		age := int64(now.UTC().Sub(createdAt).Seconds())
+		if age < 0 {
+			age = 0
+		}
+		stats.OldestPendingAgeSeconds = &age
+	}
+
+	return stats, nil
 }
 
 const selectJobSQL = `SELECT
@@ -406,6 +561,37 @@ func scanJob(scanner interface{ Scan(dest ...any) error }) (Job, error) {
 	return job, nil
 }
 
+func ensureTransitionSucceeded(ctx context.Context, db *sql.DB, result sql.Result, jobID int64, expectedStatus string) error {
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read rows affected: %w", err)
+	}
+	if rowsAffected > 0 {
+		return nil
+	}
+	return classifyTransitionConflict(ctx, db, jobID, expectedStatus)
+}
+
+func classifyTransitionConflict(ctx context.Context, db *sql.DB, jobID int64, expectedStatus string) error {
+	var status string
+	err := db.QueryRowContext(ctx, `SELECT status FROM jobs WHERE id = ?`, jobID).Scan(&status)
+	if err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return ErrJobNotFound
+		}
+		return fmt.Errorf("query current job state: %w", err)
+	}
+	if status != expectedStatus {
+		switch status {
+		case StatusRetry, StatusSent, StatusFailed:
+			return ErrStateConflict
+		default:
+			return ErrInvalidTransition
+		}
+	}
+	return ErrStateConflict
+}
+
 func formatTimestamp(ts time.Time) string {
 	return ts.UTC().Format(time.RFC3339Nano)
 }
@@ -444,4 +630,13 @@ func isDuplicateColumnError(err error) bool {
 		return false
 	}
 	return strings.Contains(strings.ToLower(err.Error()), "duplicate column name")
+}
+
+func isIdempotencyConstraintError(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "unique constraint failed: jobs.idempotency_key") ||
+		strings.Contains(message, "constraint failed") && strings.Contains(message, "jobs.idempotency_key")
 }

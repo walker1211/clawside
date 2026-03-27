@@ -8,23 +8,13 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"unicode/utf8"
-
-	"openclaw/internal/deliveryrules"
 )
 
 type HTTPHandler struct {
-	store              *Store
-	bots               map[string]handlerBotConfig
-	globalAllowlist    map[int64]struct{}
-	defaultMaxAttempts int
-	senderAuthKey      string
-}
-
-type handlerBotConfig struct {
-	token     string
-	enabled   bool
-	allowlist map[int64]struct{}
+	store         *Store
+	queryService  *JobQueryService
+	sendService   *SendService
+	senderAuthKey string
 }
 
 type sendRequest struct {
@@ -57,32 +47,38 @@ type jobResponse struct {
 	SentAt       *string `json:"sent_at"`
 }
 
+type jobListResponse struct {
+	Jobs []JobListItem `json:"jobs"`
+}
+
 type errorResponse struct {
 	Error string `json:"error"`
 }
 
-func NewHTTPHandler(store *Store, telegramCfg TelegramRuntimeConfig, defaultMaxAttempts int, senderAuthKey string) http.Handler {
-	bots := make(map[string]handlerBotConfig, len(telegramCfg.Bots))
-	for name, botCfg := range telegramCfg.Bots {
-		bots[name] = handlerBotConfig{
-			token:     botCfg.Token,
-			enabled:   botCfg.Enabled,
-			allowlist: toAllowlistSet(botCfg.AllowUserIDs),
-		}
-	}
-
+func NewHTTPHandler(store *Store, telegramCfg TelegramRuntimeConfig, defaultMaxAttempts int, senderAuthKey string, queryService *JobQueryService) http.Handler {
 	return &HTTPHandler{
-		store:              store,
-		bots:               bots,
-		globalAllowlist:    toAllowlistSet(telegramCfg.GlobalAllowUserIDs),
-		defaultMaxAttempts: defaultMaxAttempts,
-		senderAuthKey:      strings.TrimSpace(senderAuthKey),
+		store:         store,
+		queryService:  queryService,
+		sendService:   NewSendService(store, telegramCfg, defaultMaxAttempts),
+		senderAuthKey: strings.TrimSpace(senderAuthKey),
 	}
 }
 
 func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/healthz" {
 		h.handleHealthz(w, r)
+		return
+	}
+	if r.URL.Path == "/readyz" {
+		h.handleReadyz(w, r)
+		return
+	}
+	if r.URL.Path == "/stats" {
+		h.handleStats(w, r)
+		return
+	}
+	if r.URL.Path == "/jobs" {
+		h.handleListJobs(w, r)
 		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/jobs/") {
@@ -103,6 +99,69 @@ func (h *HTTPHandler) handleHealthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
+}
+
+func (h *HTTPHandler) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	if h.queryService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "readiness service is not configured"})
+		return
+	}
+	if err := h.queryService.Readiness(r.Context()); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, healthResponse{Status: "ok"})
+}
+
+func (h *HTTPHandler) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	if h.queryService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "query service is not configured"})
+		return
+	}
+	stats, err := h.queryService.GetStats(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, stats)
+}
+
+func (h *HTTPHandler) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, errorResponse{Error: "method not allowed"})
+		return
+	}
+	if h.queryService == nil {
+		writeJSON(w, http.StatusServiceUnavailable, errorResponse{Error: "query service is not configured"})
+		return
+	}
+
+	limit, provided, err := parseJobListLimit(r.URL.Query().Get("limit"))
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+		return
+	}
+	if !provided {
+		limit = DefaultJobListLimit
+	}
+	jobs, err := h.queryService.ListJobs(r.Context(), r.URL.Query().Get("status"), limit)
+	if err != nil {
+		if err.Error() == "invalid status" || err.Error() == "status is required" || err.Error() == "invalid limit" {
+			writeJSON(w, http.StatusBadRequest, errorResponse{Error: err.Error()})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to list jobs"})
+		return
+	}
+	writeJSON(w, http.StatusOK, jobListResponse{Jobs: jobs})
 }
 
 func (h *HTTPHandler) handleGetJob(w http.ResponseWriter, r *http.Request) {
@@ -177,47 +236,8 @@ func (h *HTTPHandler) handleSend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	request.Bot = deliveryrules.NormalizeBotName(request.Bot)
-	request.IdempotencyKey = strings.TrimSpace(request.IdempotencyKey)
-	if request.Bot == "" {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "bot is required"})
-		return
-	}
-	bot, ok := h.bots[request.Bot]
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "unknown bot"})
-		return
-	}
-	if !bot.enabled {
-		writeJSON(w, http.StatusForbidden, errorResponse{Error: "bot is disabled"})
-		return
-	}
-	if request.ChatID == 0 {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "chat_id is required"})
-		return
-	}
-	if !allowlisted(request.ChatID, h.globalAllowlist, bot.allowlist) {
-		writeJSON(w, http.StatusForbidden, errorResponse{Error: "chat_id is not allowed"})
-		return
-	}
-	if strings.TrimSpace(request.Text) == "" {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "text is required"})
-		return
-	}
-	if utf8.RuneCountInString(request.Text) > deliveryrules.TelegramMaxTextLength {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "text exceeds telegram limit"})
-		return
-	}
-	if request.MaxAttempts == 0 {
-		request.MaxAttempts = h.defaultMaxAttempts
-	}
-	if request.MaxAttempts < minMaxAttempts || request.MaxAttempts > maxMaxAttempts {
-		writeJSON(w, http.StatusBadRequest, errorResponse{Error: "max_attempts must be between 1 and 5"})
-		return
-	}
-
-	job, err := h.store.Enqueue(r.Context(), CreateJob{
-		BotName:             request.Bot,
+	job, err := h.sendService.Submit(r.Context(), SendCommand{
+		Bot:                 request.Bot,
 		ChatID:              request.ChatID,
 		Text:                request.Text,
 		IdempotencyKey:      request.IdempotencyKey,
@@ -226,18 +246,16 @@ func (h *HTTPHandler) handleSend(w http.ResponseWriter, r *http.Request) {
 		DisableNotification: request.DisableNotification,
 	})
 	if err != nil {
-		if request.IdempotencyKey != "" {
-			existing, lookupErr := h.store.GetByIdempotencyKey(r.Context(), request.IdempotencyKey)
-			if lookupErr == nil && existing != nil {
-				writeJSON(w, http.StatusAccepted, sendResponse{JobID: existing.ID, Status: existing.Status, IdempotencyKey: request.IdempotencyKey})
-				return
-			}
-		}
-		writeJSON(w, http.StatusInternalServerError, errorResponse{Error: "failed to enqueue job"})
+		h.writeSendError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusAccepted, sendResponse{JobID: job.ID, Status: job.Status, IdempotencyKey: request.IdempotencyKey})
+	writeJSON(w, http.StatusAccepted, sendResponse{JobID: job.ID, Status: job.Status, IdempotencyKey: job.IdempotencyKey})
+}
+
+func (h *HTTPHandler) writeSendError(w http.ResponseWriter, err error) {
+	statusCode, response := sendErrorResponse(err)
+	writeJSON(w, statusCode, response)
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, body any) {

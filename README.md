@@ -82,11 +82,12 @@ curl -X POST http://127.0.0.1:8787/send \
 
 - `Authorization: Bearer <sender_auth_key>` 是必填的本地鉴权头
 - `idempotency_key` 用于防止同一业务请求重复入队
-- 重复使用同一个 `idempotency_key` 时，会返回已有 job，而不是重复创建新任务
+- phase-1 幂等语义下，重复使用同一个 `idempotency_key` 时会直接返回已有 job，而不是重复创建新任务
+- 如果同一个 `idempotency_key` 对应的请求 payload 不同，当前只记录 conflict signal 日志并继续返回已有 job，暂不对外返回冲突错误
 
 ### 4. 查询服务与任务状态
 
-健康检查：
+基础存活检查：
 
 ```bash
 curl http://127.0.0.1:8787/healthz
@@ -100,7 +101,62 @@ curl http://127.0.0.1:8787/healthz
 }
 ```
 
-查询任务状态：
+readiness 检查：
+
+```bash
+curl http://127.0.0.1:8787/readyz
+```
+
+当 store 可访问、worker 已启动且最近心跳未超出阈值时返回：
+
+```json
+{
+  "status": "ok"
+}
+```
+
+查询任务统计：
+
+```bash
+curl http://127.0.0.1:8787/stats
+```
+
+返回示例：
+
+```json
+{
+  "pending_count": 3,
+  "retry_count": 1,
+  "sending_count": 0,
+  "failed_count": 2,
+  "sent_count": 10,
+  "oldest_pending_age_seconds": 42
+}
+```
+
+按状态分页查询任务列表：
+
+```bash
+curl "http://127.0.0.1:8787/jobs?status=pending&limit=20"
+```
+
+返回示例：
+
+```json
+{
+  "jobs": [
+    {
+      "job_id": 1,
+      "status": "pending",
+      "attempt_count": 0,
+      "created_at": "2026-03-17T10:00:00Z",
+      "updated_at": "2026-03-17T10:00:00Z"
+    }
+  ]
+}
+```
+
+查询单个任务状态：
 
 ```bash
 curl http://127.0.0.1:8787/jobs/<job_id>

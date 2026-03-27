@@ -41,19 +41,21 @@ func main() {
 	if err := store.Init(context.Background()); err != nil {
 		log.Fatalf("initialize store: %v", err)
 	}
-	if err := store.RecoverSendingJobs(context.Background(), time.Now().UTC()); err != nil {
+	if err := store.RecoverExpiredSendingJobs(context.Background(), time.Now().UTC(), cfg.SendTimeout+cfg.WorkerPollInterval); err != nil {
 		log.Fatalf("recover sending jobs: %v", err)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	worker := NewWorker(store, NewTelegramClient("https://api.telegram.org", nil), cfg.Telegram.Bots, cfg.SendTimeout)
+	runtimeState := NewRuntimeState()
+	worker := NewWorker(store, NewTelegramClient("https://api.telegram.org", nil), cfg.Telegram.Bots, cfg.SendTimeout, runtimeState)
 	go worker.Run(ctx, cfg.WorkerPollInterval)
 
+	queryService := NewJobQueryService(store, cfg.Telegram, runtimeState, cfg.WorkerPollInterval, cfg.SendTimeout)
 	server := &http.Server{
 		Addr:              cfg.Address,
-		Handler:           NewHTTPHandler(store, cfg.Telegram, cfg.DefaultMaxAttempts, cfg.SenderAuthKey),
+		Handler:           NewHTTPHandler(store, cfg.Telegram, cfg.DefaultMaxAttempts, cfg.SenderAuthKey, queryService),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 

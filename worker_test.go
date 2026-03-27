@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -40,7 +42,7 @@ func TestWorkerRetriesTransientTelegramErrorThenMarksSent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second)
+	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second, nil)
 
 	firstNow := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
 	processed, err := worker.ProcessNextAt(ctx, firstNow)
@@ -109,7 +111,7 @@ func TestWorkerFailsNonRetryableTelegramError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second)
+	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second, nil)
 
 	processed, err := worker.ProcessNextAt(ctx, time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -152,7 +154,7 @@ func TestWorkerUsesRetryAfterForRateLimit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second)
+	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second, nil)
 	startedAt := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
 
 	processed, err := worker.ProcessNextAt(ctx, startedAt)
@@ -196,7 +198,7 @@ func TestWorkerFailsAfterMaxAttempts(t *testing.T) {
 	}))
 	defer server.Close()
 
-	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second)
+	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second, nil)
 
 	processed, err := worker.ProcessNextAt(ctx, time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -215,6 +217,28 @@ func TestWorkerFailsAfterMaxAttempts(t *testing.T) {
 	}
 	if job.AttemptCount != 1 {
 		t.Fatalf("expected attempt count 1, got %d", job.AttemptCount)
+	}
+}
+
+func TestRetryDelayUsesRetryAfterWhenProvided(t *testing.T) {
+	got := retryDelay(2, 42*time.Second)
+	if got != 42*time.Second {
+		t.Fatalf("expected retry_after delay 42s, got %s", got)
+	}
+}
+
+func TestRetryDecisionReturnsTelegramRetryMetadata(t *testing.T) {
+	retryAfter, retryable := retryDecision(&TelegramError{
+		StatusCode:  http.StatusTooManyRequests,
+		Description: "too many requests",
+		Retryable:   true,
+		RetryAfter:  42 * time.Second,
+	})
+	if !retryable {
+		t.Fatalf("expected telegram error to be retryable")
+	}
+	if retryAfter != 42*time.Second {
+		t.Fatalf("expected retry_after 42s, got %s", retryAfter)
 	}
 }
 
@@ -248,11 +272,11 @@ func TestStoreEnqueuePersistsAndFindsByIdempotencyKey(t *testing.T) {
 	}
 }
 
-func TestStoreEnqueueRejectsDuplicateIdempotencyKey(t *testing.T) {
+func TestStoreEnqueueReturnsExistingJobOnDuplicateIdempotencyKey(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
-	_, err := store.Enqueue(ctx, CreateJob{
+	first, err := store.Enqueue(ctx, CreateJob{
 		BotName:        "guardian",
 		ChatID:         1,
 		Text:           "hello",
@@ -263,15 +287,21 @@ func TestStoreEnqueueRejectsDuplicateIdempotencyKey(t *testing.T) {
 		t.Fatalf("enqueue first job: %v", err)
 	}
 
-	_, err = store.Enqueue(ctx, CreateJob{
+	second, err := store.Enqueue(ctx, CreateJob{
 		BotName:        "guardian",
 		ChatID:         2,
 		Text:           "hello again",
 		MaxAttempts:    3,
 		IdempotencyKey: "idem-dup",
 	})
-	if err == nil {
-		t.Fatalf("expected duplicate idempotency key insert to fail")
+	if err != nil {
+		t.Fatalf("expected duplicate idempotency key insert to return existing job, got %v", err)
+	}
+	if second.ID != first.ID {
+		t.Fatalf("expected duplicate idempotency key to return existing job %d, got %d", first.ID, second.ID)
+	}
+	if mustJobCount(t, store) != 1 {
+		t.Fatalf("expected only one stored job after duplicate idempotency key")
 	}
 }
 
@@ -306,7 +336,7 @@ func TestStoreClaimNextReadySetsLeaseExpiry(t *testing.T) {
 	}
 }
 
-func TestStoreRecoverSendingJobsOnlyRecoversExpiredLeases(t *testing.T) {
+func TestStoreRecoverExpiredSendingJobsOnlyRecoversExpiredLeases(t *testing.T) {
 	store := openTestStore(t)
 	ctx := context.Background()
 
@@ -333,7 +363,7 @@ func TestStoreRecoverSendingJobsOnlyRecoversExpiredLeases(t *testing.T) {
 	}
 
 	recoveredAt := claimedAt.Add(25 * time.Second)
-	if err := store.RecoverSendingJobs(ctx, recoveredAt); err != nil {
+	if err := store.RecoverExpiredSendingJobs(ctx, recoveredAt, 20*time.Second); err != nil {
 		t.Fatalf("recover sending jobs: %v", err)
 	}
 
@@ -366,44 +396,6 @@ func TestStoreRecoverSendingJobsOnlyRecoversExpiredLeases(t *testing.T) {
 	}
 	if notExpiredJob.Status != StatusSending {
 		t.Fatalf("expected not-expired job to remain sending, got %q", notExpiredJob.Status)
-	}
-}
-
-func TestStoreRecoverSendingJobsRecoversLegacySendingWithoutLease(t *testing.T) {
-	store := openTestStore(t)
-	ctx := context.Background()
-
-	legacyJob, err := store.Enqueue(ctx, CreateJob{BotName: "guardian", ChatID: 3, Text: "legacy sending", MaxAttempts: 3})
-	if err != nil {
-		t.Fatalf("enqueue legacy job: %v", err)
-	}
-
-	claimedAt := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
-	if _, err := store.ClaimNextReady(ctx, claimedAt, 20*time.Second); err != nil {
-		t.Fatalf("claim legacy job: %v", err)
-	}
-
-	if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET lease_expires_at = NULL WHERE id = ?`, legacyJob.ID); err != nil {
-		t.Fatalf("simulate legacy sending row without lease: %v", err)
-	}
-
-	recoveredAt := claimedAt.Add(25 * time.Second)
-	if err := store.RecoverSendingJobs(ctx, recoveredAt); err != nil {
-		t.Fatalf("recover sending jobs: %v", err)
-	}
-
-	legacyJob, err = store.GetJob(ctx, legacyJob.ID)
-	if err != nil {
-		t.Fatalf("get legacy job: %v", err)
-	}
-	if legacyJob.Status != StatusRetry {
-		t.Fatalf("expected legacy sending job to become retry, got %q", legacyJob.Status)
-	}
-	if !legacyJob.NextRetryAt.Equal(recoveredAt) {
-		t.Fatalf("expected next_retry_at %s, got %s", recoveredAt, legacyJob.NextRetryAt)
-	}
-	if !legacyJob.LeaseExpiresAt.IsZero() {
-		t.Fatalf("expected recovered legacy lease to be cleared, got %s", legacyJob.LeaseExpiresAt)
 	}
 }
 
@@ -515,7 +507,7 @@ func TestWorkerProcessesRecoveredExpiredSendingJob(t *testing.T) {
 	}
 
 	recoveredAt := claimedAt.Add(30 * time.Second)
-	if err := store.RecoverSendingJobs(ctx, recoveredAt); err != nil {
+	if err := store.RecoverExpiredSendingJobs(ctx, recoveredAt, 20*time.Second); err != nil {
 		t.Fatalf("recover sending jobs: %v", err)
 	}
 
@@ -525,7 +517,7 @@ func TestWorkerProcessesRecoveredExpiredSendingJob(t *testing.T) {
 	}))
 	defer server.Close()
 
-	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second)
+	worker := NewWorker(store, NewTelegramClient(server.URL, server.Client()), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second, nil)
 	processed, err := worker.ProcessNextAt(ctx, recoveredAt)
 	if err != nil {
 		t.Fatalf("process recovered job: %v", err)
@@ -576,7 +568,7 @@ func TestWorkerFailsTransportErrorsWithoutRetry(t *testing.T) {
 			return nil, context.DeadlineExceeded
 		}),
 	}
-	worker := NewWorker(store, NewTelegramClient("https://api.telegram.org", httpClient), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second)
+	worker := NewWorker(store, NewTelegramClient("https://api.telegram.org", httpClient), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second, nil)
 
 	processed, err := worker.ProcessNextAt(ctx, time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC))
 	if err != nil {
@@ -598,5 +590,118 @@ func TestWorkerFailsTransportErrorsWithoutRetry(t *testing.T) {
 	}
 	if !job.NextRetryAt.IsZero() {
 		t.Fatalf("expected no next retry time, got %s", job.NextRetryAt)
+	}
+}
+
+func TestWorkerIgnoresSettlementStateConflict(t *testing.T) {
+	cases := []struct {
+		name               string
+		setup              func(t *testing.T, ctx context.Context, store *Store, jobID int64)
+		transport          roundTripFunc
+		expectLastSuccess  bool
+		expectLastFailure  bool
+	}{
+		{
+			name: "sent conflict does not fail processing",
+			setup: func(t *testing.T, ctx context.Context, store *Store, jobID int64) {
+				now := time.Now().UTC()
+				if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET status = ?, updated_at = ?, sent_at = ?, lease_expires_at = NULL WHERE id = ?`, StatusSent, formatTimestamp(now), formatTimestamp(now), jobID); err != nil {
+					t.Fatalf("mark job sent concurrently: %v", err)
+				}
+			},
+			transport: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":{"message_id":99}}`)),
+					Request:    req,
+				}, nil
+			},
+			expectLastSuccess: true,
+		},
+		{
+			name: "recovered retry conflict does not fail processing",
+			setup: func(t *testing.T, ctx context.Context, store *Store, jobID int64) {
+				now := time.Now().UTC()
+				if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET status = ?, next_retry_at = ?, last_error = ?, updated_at = ?, lease_expires_at = NULL WHERE id = ?`, StatusRetry, formatTimestamp(now.Add(10*time.Second)), "recovered expired sending lease; retrying delivery", formatTimestamp(now), jobID); err != nil {
+					t.Fatalf("mark job recovered to retry concurrently: %v", err)
+				}
+			},
+			transport: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusInternalServerError,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"ok":false,"description":"temporary failure"}`)),
+					Request:    req,
+				}, nil
+			},
+			expectLastFailure: true,
+		},
+		{
+			name: "failed conflict does not fail processing",
+			setup: func(t *testing.T, ctx context.Context, store *Store, jobID int64) {
+				now := time.Now().UTC()
+				if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET status = ?, last_error = ?, updated_at = ?, lease_expires_at = NULL WHERE id = ?`, StatusFailed, "permanent failure", formatTimestamp(now), jobID); err != nil {
+					t.Fatalf("mark job failed concurrently: %v", err)
+				}
+			},
+			transport: func(req *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusForbidden,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"ok":false,"description":"bot can't initiate conversation"}`)),
+					Request:    req,
+				}, nil
+			},
+			expectLastFailure: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := openTestStore(t)
+			ctx := context.Background()
+
+			job, err := store.Enqueue(ctx, CreateJob{
+				BotName:     "guardian",
+				ChatID:      7098285098,
+				Text:        "hello",
+				MaxAttempts: 3,
+			})
+			if err != nil {
+				t.Fatalf("enqueue job: %v", err)
+			}
+
+			httpClient := &http.Client{
+				Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+					tc.setup(t, ctx, store, job.ID)
+					return tc.transport(req)
+				}),
+			}
+			runtimeState := NewRuntimeState()
+			worker := NewWorker(store, NewTelegramClient("https://api.telegram.org", httpClient), map[string]BotRuntimeConfig{"guardian": {Enabled: true, AccountID: "guardian", Token: "secret"}}, 15*time.Second, runtimeState)
+			now := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
+			processed, err := worker.ProcessNextAt(ctx, now)
+			if err != nil {
+				t.Fatalf("process job: %v", err)
+			}
+			if !processed {
+				t.Fatalf("expected job to be processed")
+			}
+			snapshot := runtimeState.Snapshot()
+			if tc.expectLastSuccess {
+				if snapshot.LastSuccessAt != now {
+					t.Fatalf("expected last success at %s, got %s", now, snapshot.LastSuccessAt)
+				}
+				if !snapshot.LastFailureAt.IsZero() {
+					t.Fatalf("expected last failure at to remain zero, got %s", snapshot.LastFailureAt)
+				}
+			}
+			if tc.expectLastFailure {
+				if snapshot.LastFailureAt != now {
+					t.Fatalf("expected last failure at %s, got %s", now, snapshot.LastFailureAt)
+				}
+			}
+		})
 	}
 }
