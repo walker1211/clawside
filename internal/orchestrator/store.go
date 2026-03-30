@@ -1,0 +1,1268 @@
+package orchestrator
+
+import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"fmt"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+type Store struct {
+	db *sql.DB
+}
+
+func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
+	store := &Store{db: db}
+	if err := store.init(ctx); err != nil {
+		return nil, err
+	}
+	return store, nil
+}
+
+func (s *Store) init(ctx context.Context) error {
+	statements := []string{
+		`PRAGMA foreign_keys = ON`,
+		`CREATE TABLE IF NOT EXISTS workflows (
+			id TEXT PRIMARY KEY,
+			kind TEXT NOT NULL,
+			initiator_actor_json TEXT NOT NULL,
+			status TEXT NOT NULL,
+			root_handoff_id TEXT NOT NULL,
+			current_handoff_id TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			completed_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS handoffs (
+			id TEXT PRIMARY KEY,
+			workflow_id TEXT NOT NULL,
+			workflow_kind TEXT NOT NULL,
+			parent_handoff_id TEXT,
+			depends_on_handoff_ids_json TEXT NOT NULL,
+			required_for_workflow_completion INTEGER NOT NULL,
+			state TEXT NOT NULL,
+			state_version INTEGER NOT NULL,
+			task_kind TEXT NOT NULL,
+			intent TEXT NOT NULL,
+			payload_ref TEXT NOT NULL DEFAULT '',
+			deadline_at TEXT,
+			producer_actor_json TEXT NOT NULL,
+			sender_actor_json TEXT NOT NULL,
+			receiver_actor_json TEXT NOT NULL,
+			reviewer_actor_json TEXT NOT NULL,
+			subject_actor_json TEXT NOT NULL,
+			artifact_policy_json TEXT NOT NULL,
+			needs_review INTEGER NOT NULL,
+			review_decision TEXT NOT NULL DEFAULT '',
+			has_received INTEGER NOT NULL,
+			has_started INTEGER NOT NULL,
+			has_submitted INTEGER NOT NULL,
+			has_reviewed INTEGER NOT NULL,
+			artifact_count INTEGER NOT NULL,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			completed_at TEXT
+		)`,
+		`CREATE TABLE IF NOT EXISTS accepted_events (
+			id TEXT PRIMARY KEY,
+			workflow_id TEXT NOT NULL,
+			handoff_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			producer_event_time TEXT NOT NULL,
+			ingested_at TEXT NOT NULL,
+			producer_actor_json TEXT NOT NULL,
+			subject_actor_json TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL DEFAULT '',
+			correlation_id TEXT NOT NULL DEFAULT '',
+			causation_id TEXT NOT NULL DEFAULT '',
+			accepted INTEGER NOT NULL,
+			rejection_reason TEXT NOT NULL DEFAULT '',
+			attempt_id TEXT NOT NULL DEFAULT '',
+			artifact_count INTEGER NOT NULL,
+			review_decision TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY (workflow_id) REFERENCES workflows(id),
+			FOREIGN KEY (handoff_id) REFERENCES handoffs(id)
+		)`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_accepted_events_handoff_idempotency
+		 ON accepted_events(handoff_id, idempotency_key)
+		 WHERE idempotency_key <> ''`,
+		`CREATE TABLE IF NOT EXISTS event_ingestion_audit (
+			id TEXT PRIMARY KEY,
+			workflow_id TEXT NOT NULL,
+			handoff_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			producer_event_time TEXT NOT NULL,
+			ingested_at TEXT NOT NULL,
+			producer_actor_json TEXT NOT NULL,
+			subject_actor_json TEXT NOT NULL,
+			payload_json TEXT NOT NULL,
+			idempotency_key TEXT NOT NULL DEFAULT '',
+			correlation_id TEXT NOT NULL DEFAULT '',
+			causation_id TEXT NOT NULL DEFAULT '',
+			accepted INTEGER NOT NULL,
+			rejection_reason TEXT NOT NULL DEFAULT '',
+			attempt_id TEXT NOT NULL DEFAULT '',
+			artifact_count INTEGER NOT NULL,
+			review_decision TEXT NOT NULL DEFAULT '',
+			FOREIGN KEY (workflow_id) REFERENCES workflows(id),
+			FOREIGN KEY (handoff_id) REFERENCES handoffs(id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS dispatch_attempts (
+			id TEXT PRIMARY KEY,
+			handoff_id TEXT NOT NULL,
+			adapter TEXT NOT NULL,
+			target TEXT NOT NULL,
+			requested_at TEXT NOT NULL,
+			result_status TEXT NOT NULL,
+			finished_at TEXT NOT NULL,
+			external_id TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS artifacts (
+			id TEXT PRIMARY KEY,
+			handoff_id TEXT NOT NULL,
+			type TEXT NOT NULL,
+			uri TEXT NOT NULL,
+			version TEXT NOT NULL DEFAULT '',
+			checksum TEXT NOT NULL DEFAULT '',
+			metadata_json TEXT NOT NULL,
+			created_by_json TEXT NOT NULL,
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS watches (
+			id TEXT PRIMARY KEY,
+			handoff_id TEXT NOT NULL,
+			watch_type TEXT NOT NULL,
+			event_type TEXT NOT NULL,
+			deadline_at TEXT NOT NULL,
+			status TEXT NOT NULL,
+			last_checked_at TEXT NOT NULL,
+			last_result TEXT NOT NULL DEFAULT '',
+			escalation_policy TEXT NOT NULL DEFAULT '',
+			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS divergences (
+			id TEXT PRIMARY KEY,
+			handoff_id TEXT NOT NULL DEFAULT '',
+			workflow_id TEXT NOT NULL DEFAULT '',
+			signal_type TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL DEFAULT '',
+			details_json TEXT NOT NULL DEFAULT '{}',
+			created_at TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE TABLE IF NOT EXISTS repairs (
+			id TEXT PRIMARY KEY,
+			action TEXT NOT NULL,
+			target_type TEXT NOT NULL,
+			target_id TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			requested_by_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			invalidates_id TEXT NOT NULL DEFAULT '',
+			replacement_id TEXT NOT NULL DEFAULT '',
+			reopened_state TEXT NOT NULL DEFAULT ''
+		)`,
+	}
+
+	for _, statement := range statements {
+		if _, err := s.db.ExecContext(ctx, statement); err != nil {
+			return fmt.Errorf("init sqlite schema: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) SaveWorkflow(ctx context.Context, workflow Workflow) error {
+	return saveWorkflowExec(ctx, s.db, workflow)
+}
+
+func (s *Store) SaveHandoff(ctx context.Context, handoff Handoff) error {
+	return saveHandoffExec(ctx, s.db, handoff)
+}
+
+func (s *Store) SaveWatch(ctx context.Context, watch Watch) error {
+	return saveWatchExec(ctx, s.db, watch)
+}
+
+func (s *Store) SaveRepair(ctx context.Context, repair RepairRecord) error {
+	return saveRepairExec(ctx, s.db, repair)
+}
+
+func (s *Store) SaveDispatchAttempt(ctx context.Context, attempt DispatchAttempt) error {
+	return saveDispatchAttemptExec(ctx, s.db, attempt)
+}
+
+func (s *Store) SaveDispatchAttemptStatus(ctx context.Context, attempt DispatchAttempt) error {
+	return saveDispatchAttemptStatusExec(ctx, s.db, attempt)
+}
+
+func (s *Store) SaveDivergence(ctx context.Context, hint ObserverHint) error {
+	return saveDivergenceExec(ctx, s.db, hint)
+}
+
+func (s *Store) ListDivergences(ctx context.Context, handoffID string) ([]ObserverHint, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, handoff_id, workflow_id, signal_type, details_json, created_at
+		FROM divergences WHERE handoff_id = ? ORDER BY created_at, id
+	`, handoffID)
+	if err != nil {
+		return nil, fmt.Errorf("list divergences for %s: %w", handoffID, err)
+	}
+	defer rows.Close()
+
+	var hints []ObserverHint
+	for rows.Next() {
+		var hint ObserverHint
+		var detailsJSON string
+		var createdAt string
+		if err := rows.Scan(&hint.ID, &hint.HandoffID, &hint.WorkflowID, &hint.SignalType, &detailsJSON, &createdAt); err != nil {
+			return nil, fmt.Errorf("scan divergence: %w", err)
+		}
+		parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse divergence created_at: %w", err)
+		}
+		hint.CreatedAt = parsedCreatedAt
+		if err := unmarshalJSON(detailsJSON, &hint.Details); err != nil {
+			return nil, err
+		}
+		hints = append(hints, hint)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate divergences for %s: %w", handoffID, err)
+	}
+	return hints, nil
+}
+
+func (s *Store) ListDispatchAttempts(ctx context.Context, handoffID string) ([]DispatchAttempt, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, handoff_id, adapter, target, requested_at, result_status, finished_at, external_id
+		FROM dispatch_attempts WHERE handoff_id = ? ORDER BY requested_at, id
+	`, handoffID)
+	if err != nil {
+		return nil, fmt.Errorf("list dispatch attempts for %s: %w", handoffID, err)
+	}
+	defer rows.Close()
+
+	var attempts []DispatchAttempt
+	for rows.Next() {
+		var attempt DispatchAttempt
+		var requestedAt, finishedAt string
+		if err := rows.Scan(
+			&attempt.ID,
+			&attempt.HandoffID,
+			&attempt.Adapter,
+			&attempt.Target,
+			&requestedAt,
+			&attempt.ResultStatus,
+			&finishedAt,
+			&attempt.ExternalID,
+		); err != nil {
+			return nil, fmt.Errorf("scan dispatch attempt: %w", err)
+		}
+		parsedRequestedAt, err := time.Parse(time.RFC3339Nano, requestedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse dispatch attempt requested_at: %w", err)
+		}
+		parsedFinishedAt, err := time.Parse(time.RFC3339Nano, finishedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse dispatch attempt finished_at: %w", err)
+		}
+		attempt.RequestedAt = parsedRequestedAt
+		attempt.FinishedAt = parsedFinishedAt
+		attempts = append(attempts, attempt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dispatch attempts for %s: %w", handoffID, err)
+	}
+	return attempts, nil
+}
+
+func (s *Store) ReplaceWatches(ctx context.Context, handoffID string, watches []Watch) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin replace watches tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := replaceWatchesExec(ctx, tx, handoffID, watches); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit replace watches tx: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) UpdateWatchCheck(ctx context.Context, watchID string, checkedAt time.Time, lastResult string) error {
+	_, err := s.db.ExecContext(ctx, `
+		UPDATE watches
+		SET last_checked_at = ?, last_result = ?
+		WHERE id = ?
+	`, formatTime(checkedAt), lastResult, watchID)
+	if err != nil {
+		return fmt.Errorf("update watch %s: %w", watchID, err)
+	}
+	return nil
+}
+
+func replaceWatchesExec(ctx context.Context, db execer, handoffID string, watches []Watch) error {
+	if _, err := db.ExecContext(ctx, `DELETE FROM watches WHERE handoff_id = ?`, handoffID); err != nil {
+		return fmt.Errorf("delete watches for %s: %w", handoffID, err)
+	}
+	for _, watch := range watches {
+		if err := saveWatchExec(ctx, db, watch); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) EffectiveEvents(ctx context.Context, handoffID string) ([]EventRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			id, workflow_id, handoff_id, type, producer_event_time, ingested_at,
+			producer_actor_json, subject_actor_json, payload_json,
+			idempotency_key, correlation_id, causation_id, accepted,
+			rejection_reason, attempt_id, artifact_count, review_decision
+		FROM accepted_events
+		WHERE handoff_id = ?
+		ORDER BY ingested_at, producer_event_time, id
+	`, handoffID)
+	if err != nil {
+		return nil, fmt.Errorf("query accepted events for %s: %w", handoffID, err)
+	}
+	defer rows.Close()
+
+	invalidated := map[string]struct{}{}
+	invalidatedRows, err := s.db.QueryContext(ctx, `SELECT invalidates_id FROM repairs WHERE action = 'invalidate_event' AND invalidates_id <> ''`)
+	if err != nil {
+		return nil, fmt.Errorf("query invalidated events: %w", err)
+	}
+	defer invalidatedRows.Close()
+	for invalidatedRows.Next() {
+		var eventID string
+		if err := invalidatedRows.Scan(&eventID); err != nil {
+			return nil, fmt.Errorf("scan invalidated event id: %w", err)
+		}
+		invalidated[eventID] = struct{}{}
+	}
+	if err := invalidatedRows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate invalidated event ids: %w", err)
+	}
+
+	var events []EventRecord
+	for rows.Next() {
+		event, err := scanEventRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := invalidated[event.ID]; ok {
+			continue
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate accepted events for %s: %w", handoffID, err)
+	}
+	return events, nil
+}
+
+func (s *Store) ListEvents(ctx context.Context, handoffID string) ([]EventRecord, error) {
+	return s.EffectiveEvents(ctx, handoffID)
+}
+
+func saveWorkflowExec(ctx context.Context, db execer, workflow Workflow) error {
+	initiatorJSON, err := marshalJSON(workflow.InitiatorActor)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO workflows (
+			id, kind, initiator_actor_json, status, root_handoff_id, current_handoff_id,
+			created_at, updated_at, completed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			kind = excluded.kind,
+			initiator_actor_json = excluded.initiator_actor_json,
+			status = excluded.status,
+			root_handoff_id = excluded.root_handoff_id,
+			current_handoff_id = excluded.current_handoff_id,
+			created_at = excluded.created_at,
+			updated_at = excluded.updated_at,
+			completed_at = excluded.completed_at
+	`,
+		workflow.ID,
+		workflow.Kind,
+		initiatorJSON,
+		workflow.Status,
+		workflow.RootHandoffID,
+		workflow.CurrentHandoffID,
+		formatTime(workflow.CreatedAt),
+		formatTime(workflow.UpdatedAt),
+		nullableTime(workflow.CompletedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("save workflow %s: %w", workflow.ID, err)
+	}
+	return nil
+}
+
+func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
+	dependsJSON, err := marshalJSON(handoff.DependsOnHandoffIDs)
+	if err != nil {
+		return err
+	}
+	producerJSON, err := marshalJSON(handoff.ProducerActor)
+	if err != nil {
+		return err
+	}
+	senderJSON, err := marshalJSON(handoff.SenderActor)
+	if err != nil {
+		return err
+	}
+	receiverJSON, err := marshalJSON(handoff.ReceiverActor)
+	if err != nil {
+		return err
+	}
+	reviewerJSON, err := marshalJSON(handoff.ReviewerActor)
+	if err != nil {
+		return err
+	}
+	subjectJSON, err := marshalJSON(handoff.SubjectActor)
+	if err != nil {
+		return err
+	}
+	policyJSON, err := marshalJSON(handoff.ArtifactPolicy)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO handoffs (
+			id, workflow_id, workflow_kind, parent_handoff_id, depends_on_handoff_ids_json,
+			required_for_workflow_completion, state, state_version, task_kind, intent,
+			payload_ref, deadline_at, producer_actor_json, sender_actor_json, receiver_actor_json,
+			reviewer_actor_json, subject_actor_json, artifact_policy_json, needs_review,
+			review_decision, has_received, has_started, has_submitted, has_reviewed,
+			artifact_count, created_at, updated_at, completed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			workflow_id = excluded.workflow_id,
+			workflow_kind = excluded.workflow_kind,
+			parent_handoff_id = excluded.parent_handoff_id,
+			depends_on_handoff_ids_json = excluded.depends_on_handoff_ids_json,
+			required_for_workflow_completion = excluded.required_for_workflow_completion,
+			state = excluded.state,
+			state_version = excluded.state_version,
+			task_kind = excluded.task_kind,
+			intent = excluded.intent,
+			payload_ref = excluded.payload_ref,
+			deadline_at = excluded.deadline_at,
+			producer_actor_json = excluded.producer_actor_json,
+			sender_actor_json = excluded.sender_actor_json,
+			receiver_actor_json = excluded.receiver_actor_json,
+			reviewer_actor_json = excluded.reviewer_actor_json,
+			subject_actor_json = excluded.subject_actor_json,
+			artifact_policy_json = excluded.artifact_policy_json,
+			needs_review = excluded.needs_review,
+			review_decision = excluded.review_decision,
+			has_received = excluded.has_received,
+			has_started = excluded.has_started,
+			has_submitted = excluded.has_submitted,
+			has_reviewed = excluded.has_reviewed,
+			artifact_count = excluded.artifact_count,
+			created_at = excluded.created_at,
+			updated_at = excluded.updated_at,
+			completed_at = excluded.completed_at
+	`,
+		handoff.ID,
+		handoff.WorkflowID,
+		handoff.WorkflowKind,
+		handoff.ParentHandoffID,
+		dependsJSON,
+		boolToInt(handoff.RequiredForWorkflowCompletion),
+		handoff.State,
+		handoff.StateVersion,
+		handoff.TaskKind,
+		handoff.Intent,
+		handoff.PayloadRef,
+		nullableTime(handoff.DeadlineAt),
+		producerJSON,
+		senderJSON,
+		receiverJSON,
+		reviewerJSON,
+		subjectJSON,
+		policyJSON,
+		boolToInt(handoff.NeedsReview),
+		handoff.ReviewDecision,
+		boolToInt(handoff.HasReceived),
+		boolToInt(handoff.HasStarted),
+		boolToInt(handoff.HasSubmitted),
+		boolToInt(handoff.HasReviewed),
+		handoff.ArtifactCount,
+		formatTime(handoff.CreatedAt),
+		formatTime(handoff.UpdatedAt),
+		nullableTime(handoff.CompletedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("save handoff %s: %w", handoff.ID, err)
+	}
+	return nil
+}
+
+func saveWatchExec(ctx context.Context, db execer, watch Watch) error {
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO watches (
+			id, handoff_id, watch_type, event_type, deadline_at, status,
+			last_checked_at, last_result, escalation_policy, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		watch.ID,
+		watch.HandoffID,
+		watch.WatchType,
+		watch.EventType,
+		formatTime(watch.DeadlineAt),
+		watch.Status,
+		formatTime(watch.LastCheckedAt),
+		watch.LastResult,
+		watch.EscalationPolicy,
+		formatTime(watch.CreatedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("save watch %s: %w", watch.ID, err)
+	}
+	return nil
+}
+
+func (s *Store) ListWatches(ctx context.Context, handoffID string) ([]Watch, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, handoff_id, watch_type, event_type, deadline_at, status,
+			last_checked_at, last_result, escalation_policy, created_at
+		FROM watches WHERE handoff_id = ? ORDER BY created_at, id
+	`, handoffID)
+	if err != nil {
+		return nil, fmt.Errorf("list watches for %s: %w", handoffID, err)
+	}
+	defer rows.Close()
+
+	var watches []Watch
+	for rows.Next() {
+		var watch Watch
+		var deadlineAt, lastCheckedAt, createdAt string
+		if err := rows.Scan(
+			&watch.ID,
+			&watch.HandoffID,
+			&watch.WatchType,
+			&watch.EventType,
+			&deadlineAt,
+			&watch.Status,
+			&lastCheckedAt,
+			&watch.LastResult,
+			&watch.EscalationPolicy,
+			&createdAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan watch: %w", err)
+		}
+		parsedDeadlineAt, err := time.Parse(time.RFC3339Nano, deadlineAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse watch deadline_at: %w", err)
+		}
+		parsedLastCheckedAt, err := time.Parse(time.RFC3339Nano, lastCheckedAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse watch last_checked_at: %w", err)
+		}
+		parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse watch created_at: %w", err)
+		}
+		watch.DeadlineAt = parsedDeadlineAt
+		watch.LastCheckedAt = parsedLastCheckedAt
+		watch.CreatedAt = parsedCreatedAt
+		watches = append(watches, watch)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate watches for %s: %w", handoffID, err)
+	}
+	return watches, nil
+}
+
+func saveRepairExec(ctx context.Context, db execer, repair RepairRecord) error {
+	requestedByJSON, err := marshalJSON(repair.RequestedBy)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO repairs (
+			id, action, target_type, target_id, reason, requested_by_json,
+			created_at, invalidates_id, replacement_id, reopened_state
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		repair.ID,
+		repair.Action,
+		repair.TargetType,
+		repair.TargetID,
+		repair.Reason,
+		requestedByJSON,
+		formatTime(repair.CreatedAt),
+		repair.InvalidatesID,
+		repair.ReplacementID,
+		repair.ReopenedState,
+	)
+	if err != nil {
+		return fmt.Errorf("save repair %s: %w", repair.ID, err)
+	}
+	return nil
+}
+
+func (s *Store) LoadHandoff(ctx context.Context, handoffID string) (Handoff, error) {
+	return loadHandoffTx(ctx, s.db, handoffID)
+}
+
+func (s *Store) LoadWorkflow(ctx context.Context, workflowID string) (Workflow, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT id, kind, initiator_actor_json, status, root_handoff_id, current_handoff_id, created_at, updated_at, completed_at
+		FROM workflows WHERE id = ?
+	`, workflowID)
+
+	var (
+		workflow             Workflow
+		initiatorJSON        string
+		createdAt, updatedAt string
+		completedAt          sql.NullString
+	)
+	if err := row.Scan(
+		&workflow.ID,
+		&workflow.Kind,
+		&initiatorJSON,
+		&workflow.Status,
+		&workflow.RootHandoffID,
+		&workflow.CurrentHandoffID,
+		&createdAt,
+		&updatedAt,
+		&completedAt,
+	); err != nil {
+		return Workflow{}, fmt.Errorf("load workflow %s: %w", workflowID, err)
+	}
+	if err := unmarshalJSON(initiatorJSON, &workflow.InitiatorActor); err != nil {
+		return Workflow{}, err
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return Workflow{}, fmt.Errorf("parse workflow created_at: %w", err)
+	}
+	parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return Workflow{}, fmt.Errorf("parse workflow updated_at: %w", err)
+	}
+	workflow.CreatedAt = parsedCreatedAt
+	workflow.UpdatedAt = parsedUpdatedAt
+	if completedAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, completedAt.String)
+		if err != nil {
+			return Workflow{}, fmt.Errorf("parse workflow completed_at: %w", err)
+		}
+		workflow.CompletedAt = &parsed
+	}
+	return workflow, nil
+}
+
+func (s *Store) ListHandoffs(ctx context.Context) ([]Handoff, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM handoffs ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list handoffs: %w", err)
+	}
+	defer rows.Close()
+
+	var handoffs []Handoff
+	for rows.Next() {
+		var handoffID string
+		if err := rows.Scan(&handoffID); err != nil {
+			return nil, fmt.Errorf("scan handoff id: %w", err)
+		}
+		handoff, err := loadHandoffTx(ctx, s.db, handoffID)
+		if err != nil {
+			return nil, err
+		}
+		handoffs = append(handoffs, handoff)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate handoffs: %w", err)
+	}
+	return handoffs, nil
+}
+
+func (s *Store) ListWorkflows(ctx context.Context) ([]Workflow, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM workflows ORDER BY created_at, id`)
+	if err != nil {
+		return nil, fmt.Errorf("list workflows: %w", err)
+	}
+	defer rows.Close()
+
+	var workflows []Workflow
+	for rows.Next() {
+		var workflowID string
+		if err := rows.Scan(&workflowID); err != nil {
+			return nil, fmt.Errorf("scan workflow id: %w", err)
+		}
+		workflow, err := s.LoadWorkflow(ctx, workflowID)
+		if err != nil {
+			return nil, err
+		}
+		workflows = append(workflows, workflow)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workflows: %w", err)
+	}
+	return workflows, nil
+}
+
+func (s *Store) ListWorkflowHandoffs(ctx context.Context, workflowID string) ([]Handoff, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT id FROM handoffs WHERE workflow_id = ? ORDER BY created_at, id`, workflowID)
+	if err != nil {
+		return nil, fmt.Errorf("list workflow handoffs for %s: %w", workflowID, err)
+	}
+	defer rows.Close()
+
+	var handoffs []Handoff
+	for rows.Next() {
+		var handoffID string
+		if err := rows.Scan(&handoffID); err != nil {
+			return nil, fmt.Errorf("scan workflow handoff id: %w", err)
+		}
+		handoff, err := loadHandoffTx(ctx, s.db, handoffID)
+		if err != nil {
+			return nil, err
+		}
+		handoffs = append(handoffs, handoff)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate workflow handoffs: %w", err)
+	}
+	return handoffs, nil
+}
+
+func (s *Store) UpdateWorkflow(ctx context.Context, workflow Workflow) error {
+	return s.SaveWorkflow(ctx, workflow)
+}
+
+func (s *Store) RecordAcceptedEvent(ctx context.Context, event EventRecord) (Handoff, error) {
+	if !event.Accepted {
+		return Handoff{}, fmt.Errorf("accepted event api requires event.Accepted=true")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Handoff{}, fmt.Errorf("begin accepted event tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	projected, err := recordAcceptedEventTx(ctx, tx, event)
+	if err != nil {
+		return Handoff{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Handoff{}, fmt.Errorf("commit accepted event tx: %w", err)
+	}
+	return projected, nil
+}
+
+func recordAcceptedEventTx(ctx context.Context, tx queryerExecer, event EventRecord) (Handoff, error) {
+	handoff, err := loadHandoffTx(ctx, tx, event.HandoffID)
+	if err != nil {
+		return Handoff{}, err
+	}
+	if err := validateEventWorkflowMatch(handoff, event); err != nil {
+		return Handoff{}, err
+	}
+	projected, decision := NewStateMachine(handoff).Apply(event)
+	if !decision.Accepted {
+		return Handoff{}, fmt.Errorf("accepted event %s rejected by state machine: %s", event.ID, decision.Reason)
+	}
+	projected.ID = handoff.ID
+	projected.WorkflowID = handoff.WorkflowID
+	projected.WorkflowKind = handoff.WorkflowKind
+	projected.ParentHandoffID = handoff.ParentHandoffID
+	projected.DependsOnHandoffIDs = append([]string(nil), handoff.DependsOnHandoffIDs...)
+	projected.RequiredForWorkflowCompletion = handoff.RequiredForWorkflowCompletion
+	projected.TaskKind = handoff.TaskKind
+	projected.Intent = handoff.Intent
+	projected.PayloadRef = handoff.PayloadRef
+	projected.DeadlineAt = handoff.DeadlineAt
+	projected.ProducerActor = handoff.ProducerActor
+	projected.SenderActor = handoff.SenderActor
+	projected.ReceiverActor = handoff.ReceiverActor
+	projected.ReviewerActor = handoff.ReviewerActor
+	projected.SubjectActor = handoff.SubjectActor
+	projected.ArtifactPolicy = handoff.ArtifactPolicy
+	projected.NeedsReview = handoff.NeedsReview
+	projected.CreatedAt = handoff.CreatedAt
+	projected.UpdatedAt = maxTime(handoff.UpdatedAt, event.IngestedAt)
+
+	if err := insertEventRow(ctx, tx, "accepted_events", event); err != nil {
+		return Handoff{}, err
+	}
+	if err := saveProjectedHandoffTx(ctx, tx, projected, handoff.StateVersion); err != nil {
+		return Handoff{}, err
+	}
+	return projected, nil
+}
+
+func (s *Store) RecordRejectedEvent(ctx context.Context, event EventRecord) error {
+	if event.Accepted {
+		return fmt.Errorf("rejected event api requires event.Accepted=false")
+	}
+
+	handoff, err := loadHandoffTx(ctx, s.db, event.HandoffID)
+	if err != nil {
+		return err
+	}
+	if err := validateEventWorkflowMatch(handoff, event); err != nil {
+		return err
+	}
+	return insertEventRow(ctx, s.db, "event_ingestion_audit", event)
+}
+
+type execer interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+type queryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type queryerExecer interface {
+	queryer
+	execer
+}
+
+func saveDispatchAttemptExec(ctx context.Context, db execer, attempt DispatchAttempt) error {
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO dispatch_attempts (
+			id, handoff_id, adapter, target, requested_at, result_status, finished_at, external_id
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`,
+		attempt.ID,
+		attempt.HandoffID,
+		attempt.Adapter,
+		attempt.Target,
+		formatTime(attempt.RequestedAt),
+		attempt.ResultStatus,
+		formatTime(attempt.FinishedAt),
+		attempt.ExternalID,
+	)
+	if err != nil {
+		return fmt.Errorf("save dispatch attempt %s: %w", attempt.ID, err)
+	}
+	return nil
+}
+
+func saveDispatchAttemptStatusExec(ctx context.Context, db execer, attempt DispatchAttempt) error {
+	_, err := db.ExecContext(ctx, `
+		UPDATE dispatch_attempts
+		SET result_status = ?, finished_at = ?, external_id = ?
+		WHERE id = ?
+	`,
+		attempt.ResultStatus,
+		formatTime(attempt.FinishedAt),
+		attempt.ExternalID,
+		attempt.ID,
+	)
+	if err != nil {
+		return fmt.Errorf("update dispatch attempt %s: %w", attempt.ID, err)
+	}
+	return nil
+}
+
+func saveDivergenceExec(ctx context.Context, db execer, hint ObserverHint) error {
+	detailsJSON, err := marshalJSON(hint.Details)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO divergences (
+			id, handoff_id, workflow_id, signal_type, reason, details_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?)
+	`,
+		hint.ID,
+		hint.HandoffID,
+		hint.WorkflowID,
+		hint.SignalType,
+		hint.SignalType,
+		detailsJSON,
+		formatTime(hint.CreatedAt),
+	)
+	if err != nil {
+		return fmt.Errorf("save divergence %s: %w", hint.ID, err)
+	}
+	return nil
+}
+
+func insertEventRow(ctx context.Context, db execer, table string, event EventRecord) error {
+	producerJSON, err := marshalJSON(event.ProducerActor)
+	if err != nil {
+		return err
+	}
+	subjectJSON, err := marshalJSON(event.SubjectActor)
+	if err != nil {
+		return err
+	}
+	payloadJSON, err := marshalJSON(event.Payload)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, fmt.Sprintf(`
+		INSERT INTO %s (
+			id, workflow_id, handoff_id, type, producer_event_time, ingested_at,
+			producer_actor_json, subject_actor_json, payload_json,
+			idempotency_key, correlation_id, causation_id, accepted,
+			rejection_reason, attempt_id, artifact_count, review_decision
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, table),
+		event.ID,
+		event.WorkflowID,
+		event.HandoffID,
+		event.Type,
+		formatTime(event.ProducerEventTime),
+		formatTime(event.IngestedAt),
+		producerJSON,
+		subjectJSON,
+		payloadJSON,
+		event.IdempotencyKey,
+		event.CorrelationID,
+		event.CausationID,
+		boolToInt(event.Accepted),
+		event.RejectionReason,
+		event.AttemptID,
+		event.ArtifactCount,
+		event.ReviewDecision,
+	)
+	if err != nil {
+		return fmt.Errorf("insert %s %s: %w", table, event.ID, err)
+	}
+	return nil
+}
+
+func scanEventRecord(scanner interface{ Scan(...any) error }) (EventRecord, error) {
+	var (
+		event        EventRecord
+		producerJSON string
+		subjectJSON  string
+		payloadJSON  string
+		accepted     int
+		producerAt   string
+		ingestedAt   string
+	)
+	if err := scanner.Scan(
+		&event.ID,
+		&event.WorkflowID,
+		&event.HandoffID,
+		&event.Type,
+		&producerAt,
+		&ingestedAt,
+		&producerJSON,
+		&subjectJSON,
+		&payloadJSON,
+		&event.IdempotencyKey,
+		&event.CorrelationID,
+		&event.CausationID,
+		&accepted,
+		&event.RejectionReason,
+		&event.AttemptID,
+		&event.ArtifactCount,
+		&event.ReviewDecision,
+	); err != nil {
+		return EventRecord{}, fmt.Errorf("scan event record: %w", err)
+	}
+	parsedProducerAt, err := time.Parse(time.RFC3339Nano, producerAt)
+	if err != nil {
+		return EventRecord{}, fmt.Errorf("parse producer_event_time: %w", err)
+	}
+	parsedIngestedAt, err := time.Parse(time.RFC3339Nano, ingestedAt)
+	if err != nil {
+		return EventRecord{}, fmt.Errorf("parse ingested_at: %w", err)
+	}
+	event.ProducerEventTime = parsedProducerAt
+	event.IngestedAt = parsedIngestedAt
+	event.Accepted = accepted == 1
+	if err := unmarshalJSON(producerJSON, &event.ProducerActor); err != nil {
+		return EventRecord{}, err
+	}
+	if err := unmarshalJSON(subjectJSON, &event.SubjectActor); err != nil {
+		return EventRecord{}, err
+	}
+	if err := unmarshalJSON(payloadJSON, &event.Payload); err != nil {
+		return EventRecord{}, err
+	}
+	return event, nil
+}
+
+func loadHandoffTx(ctx context.Context, db queryer, handoffID string) (Handoff, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT
+			id, workflow_id, workflow_kind, parent_handoff_id, depends_on_handoff_ids_json,
+			required_for_workflow_completion, state, state_version, task_kind, intent,
+			payload_ref, deadline_at, producer_actor_json, sender_actor_json, receiver_actor_json,
+			reviewer_actor_json, subject_actor_json, artifact_policy_json, needs_review,
+			review_decision, has_received, has_started, has_submitted, has_reviewed,
+			artifact_count, created_at, updated_at, completed_at
+		FROM handoffs WHERE id = ?
+	`, handoffID)
+
+	var (
+		handoff                                                                       Handoff
+		parentID, deadlineAt, completedAt                                             sql.NullString
+		createdAt, updatedAt                                                          string
+		producerJSON, senderJSON, receiverJSON, reviewerJSON, subjectJSON, policyJSON string
+		dependsJSON                                                                   string
+		required, needsReview, hasReceived, hasStarted, hasSubmitted, hasReviewed     int
+	)
+	if err := row.Scan(
+		&handoff.ID,
+		&handoff.WorkflowID,
+		&handoff.WorkflowKind,
+		&parentID,
+		&dependsJSON,
+		&required,
+		&handoff.State,
+		&handoff.StateVersion,
+		&handoff.TaskKind,
+		&handoff.Intent,
+		&handoff.PayloadRef,
+		&deadlineAt,
+		&producerJSON,
+		&senderJSON,
+		&receiverJSON,
+		&reviewerJSON,
+		&subjectJSON,
+		&policyJSON,
+		&needsReview,
+		&handoff.ReviewDecision,
+		&hasReceived,
+		&hasStarted,
+		&hasSubmitted,
+		&hasReviewed,
+		&handoff.ArtifactCount,
+		&createdAt,
+		&updatedAt,
+		&completedAt,
+	); err != nil {
+		return Handoff{}, fmt.Errorf("load handoff %s: %w", handoffID, err)
+	}
+	if parentID.Valid {
+		handoff.ParentHandoffID = &parentID.String
+	}
+	handoff.RequiredForWorkflowCompletion = required == 1
+	handoff.NeedsReview = needsReview == 1
+	handoff.HasReceived = hasReceived == 1
+	handoff.HasStarted = hasStarted == 1
+	handoff.HasSubmitted = hasSubmitted == 1
+	handoff.HasReviewed = hasReviewed == 1
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return Handoff{}, fmt.Errorf("parse handoff created_at: %w", err)
+	}
+	parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return Handoff{}, fmt.Errorf("parse handoff updated_at: %w", err)
+	}
+	handoff.CreatedAt = parsedCreatedAt
+	handoff.UpdatedAt = parsedUpdatedAt
+	if err := unmarshalJSON(dependsJSON, &handoff.DependsOnHandoffIDs); err != nil {
+		return Handoff{}, err
+	}
+	if err := unmarshalJSON(producerJSON, &handoff.ProducerActor); err != nil {
+		return Handoff{}, err
+	}
+	if err := unmarshalJSON(senderJSON, &handoff.SenderActor); err != nil {
+		return Handoff{}, err
+	}
+	if err := unmarshalJSON(receiverJSON, &handoff.ReceiverActor); err != nil {
+		return Handoff{}, err
+	}
+	if err := unmarshalJSON(reviewerJSON, &handoff.ReviewerActor); err != nil {
+		return Handoff{}, err
+	}
+	if err := unmarshalJSON(subjectJSON, &handoff.SubjectActor); err != nil {
+		return Handoff{}, err
+	}
+	if err := unmarshalJSON(policyJSON, &handoff.ArtifactPolicy); err != nil {
+		return Handoff{}, err
+	}
+	if deadlineAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, deadlineAt.String)
+		if err != nil {
+			return Handoff{}, fmt.Errorf("parse handoff deadline_at: %w", err)
+		}
+		handoff.DeadlineAt = &parsed
+	}
+	if completedAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, completedAt.String)
+		if err != nil {
+			return Handoff{}, fmt.Errorf("parse handoff completed_at: %w", err)
+		}
+		handoff.CompletedAt = &parsed
+	}
+	return handoff, nil
+}
+
+func saveProjectedHandoffTx(ctx context.Context, db execer, handoff Handoff, expectedStateVersion int64) error {
+	dependsJSON, err := marshalJSON(handoff.DependsOnHandoffIDs)
+	if err != nil {
+		return err
+	}
+	producerJSON, err := marshalJSON(handoff.ProducerActor)
+	if err != nil {
+		return err
+	}
+	senderJSON, err := marshalJSON(handoff.SenderActor)
+	if err != nil {
+		return err
+	}
+	receiverJSON, err := marshalJSON(handoff.ReceiverActor)
+	if err != nil {
+		return err
+	}
+	reviewerJSON, err := marshalJSON(handoff.ReviewerActor)
+	if err != nil {
+		return err
+	}
+	subjectJSON, err := marshalJSON(handoff.SubjectActor)
+	if err != nil {
+		return err
+	}
+	policyJSON, err := marshalJSON(handoff.ArtifactPolicy)
+	if err != nil {
+		return err
+	}
+	result, err := db.ExecContext(ctx, `
+		UPDATE handoffs SET
+			workflow_id = ?,
+			workflow_kind = ?,
+			parent_handoff_id = ?,
+			depends_on_handoff_ids_json = ?,
+			required_for_workflow_completion = ?,
+			state = ?,
+			state_version = ?,
+			task_kind = ?,
+			intent = ?,
+			payload_ref = ?,
+			deadline_at = ?,
+			producer_actor_json = ?,
+			sender_actor_json = ?,
+			receiver_actor_json = ?,
+			reviewer_actor_json = ?,
+			subject_actor_json = ?,
+			artifact_policy_json = ?,
+			needs_review = ?,
+			review_decision = ?,
+			has_received = ?,
+			has_started = ?,
+			has_submitted = ?,
+			has_reviewed = ?,
+			artifact_count = ?,
+			created_at = ?,
+			updated_at = ?,
+			completed_at = ?
+		WHERE id = ? AND state_version = ?
+	`,
+		handoff.WorkflowID,
+		handoff.WorkflowKind,
+		handoff.ParentHandoffID,
+		dependsJSON,
+		boolToInt(handoff.RequiredForWorkflowCompletion),
+		handoff.State,
+		handoff.StateVersion,
+		handoff.TaskKind,
+		handoff.Intent,
+		handoff.PayloadRef,
+		nullableTime(handoff.DeadlineAt),
+		producerJSON,
+		senderJSON,
+		receiverJSON,
+		reviewerJSON,
+		subjectJSON,
+		policyJSON,
+		boolToInt(handoff.NeedsReview),
+		handoff.ReviewDecision,
+		boolToInt(handoff.HasReceived),
+		boolToInt(handoff.HasStarted),
+		boolToInt(handoff.HasSubmitted),
+		boolToInt(handoff.HasReviewed),
+		handoff.ArtifactCount,
+		formatTime(handoff.CreatedAt),
+		formatTime(handoff.UpdatedAt),
+		nullableTime(handoff.CompletedAt),
+		handoff.ID,
+		expectedStateVersion,
+	)
+	if err != nil {
+		return fmt.Errorf("update handoff %s: %w", handoff.ID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected for handoff %s: %w", handoff.ID, err)
+	}
+	if rowsAffected != 1 {
+		return fmt.Errorf("update handoff %s: optimistic concurrency conflict", handoff.ID)
+	}
+	return nil
+}
+
+func marshalJSON(value any) (string, error) {
+	if value == nil {
+		return "{}", nil
+	}
+	bytes, err := json.Marshal(value)
+	if err != nil {
+		return "", fmt.Errorf("marshal json: %w", err)
+	}
+	return string(bytes), nil
+}
+
+func unmarshalJSON(raw string, target any) error {
+	if raw == "" {
+		return nil
+	}
+	if err := json.Unmarshal([]byte(raw), target); err != nil {
+		return fmt.Errorf("unmarshal json: %w", err)
+	}
+	return nil
+}
+
+func formatTime(t time.Time) string {
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func nullableTime(t *time.Time) any {
+	if t == nil {
+		return nil
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+func boolToInt(v bool) int {
+	if v {
+		return 1
+	}
+	return 0
+}
+
+func maxTime(a, b time.Time) time.Time {
+	if a.After(b) {
+		return a
+	}
+	return b
+}
+
+func validateEventWorkflowMatch(handoff Handoff, event EventRecord) error {
+	if event.WorkflowID == "" {
+		return fmt.Errorf("event %s requires workflow_id", event.ID)
+	}
+	if event.WorkflowID != handoff.WorkflowID {
+		return fmt.Errorf("event %s workflow_id %s does not match handoff workflow_id %s", event.ID, event.WorkflowID, handoff.WorkflowID)
+	}
+	return nil
+}

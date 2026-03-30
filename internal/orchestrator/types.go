@@ -1,0 +1,241 @@
+package orchestrator
+
+import "time"
+
+type HandoffState string
+
+const (
+	StateCreated    HandoffState = "created"
+	StateDispatched HandoffState = "dispatched"
+	StateReceived   HandoffState = "received"
+	StateStarted    HandoffState = "started"
+	StateSubmitted  HandoffState = "submitted"
+	StateReviewed   HandoffState = "reviewed"
+	StateCompleted  HandoffState = "completed"
+	StateFailed     HandoffState = "failed"
+	StateExpired    HandoffState = "expired"
+)
+
+type WorkflowStatus string
+
+const (
+	WorkflowActive    WorkflowStatus = "active"
+	WorkflowBlocked   WorkflowStatus = "blocked"
+	WorkflowCompleted WorkflowStatus = "completed"
+	WorkflowFailed    WorkflowStatus = "failed"
+)
+
+type EventType string
+
+const (
+	EventTransportRequested         EventType = "transport_requested"
+	EventTransportAccepted          EventType = "transport_accepted"
+	EventTransportRejected          EventType = "transport_rejected"
+	EventTransportTimeout           EventType = "transport_timeout"
+	EventTransportDeliveryConfirmed EventType = "transport_delivery_confirmed"
+	EventReceived                   EventType = "received"
+	EventStarted                    EventType = "started"
+	EventSubmitted                  EventType = "submitted"
+	EventReviewed                   EventType = "reviewed"
+	EventCompleted                  EventType = "completed"
+	EventFailed                     EventType = "failed"
+	EventExpired                    EventType = "expired"
+	EventArtifactAttached           EventType = "artifact_attached"
+	EventArtifactReplaced           EventType = "artifact_replaced"
+	EventArtifactValidated          EventType = "artifact_validated"
+	EventWatchTriggered             EventType = "watch_triggered"
+	EventReminderSent               EventType = "reminder_sent"
+	EventEscalationOpened           EventType = "escalation_opened"
+	EventEscalationResolved         EventType = "escalation_resolved"
+)
+
+type ActorType string
+
+const (
+	ActorAgent   ActorType = "agent"
+	ActorUser    ActorType = "user"
+	ActorCron    ActorType = "cron"
+	ActorSystem  ActorType = "system"
+	ActorWebhook ActorType = "webhook"
+)
+
+type ActorRef struct {
+	Type    ActorType `json:"type"`
+	ID      string    `json:"id"`
+	Address string    `json:"address,omitempty"`
+}
+
+type TaskKind string
+
+const (
+	TaskGeneric          TaskKind = "generic_task"
+	TaskArtifactRequired TaskKind = "artifact_required_task"
+	TaskReviewRequired   TaskKind = "review_required_task"
+)
+
+type ArtifactMode string
+
+const (
+	ArtifactModeNone     ArtifactMode = "none"
+	ArtifactModeOptional ArtifactMode = "optional"
+	ArtifactModeRequired ArtifactMode = "required"
+)
+
+type ReviewDecision string
+
+const (
+	ReviewDecisionApproved         ReviewDecision = "approved"
+	ReviewDecisionRevisionRequired ReviewDecision = "revision_required"
+	ReviewDecisionRejected         ReviewDecision = "rejected"
+)
+
+type ArtifactPolicy struct {
+	Mode         ArtifactMode `json:"mode"`
+	Types        []string     `json:"types"`
+	MinCount     int          `json:"min_count"`
+	AllowReplace bool         `json:"allow_replace"`
+}
+
+type Workflow struct {
+	ID               string         `json:"id"`
+	Kind             string         `json:"kind"`
+	InitiatorActor   ActorRef       `json:"initiator_actor"`
+	Status           WorkflowStatus `json:"status"`
+	RootHandoffID    string         `json:"root_handoff_id"`
+	CurrentHandoffID string         `json:"current_handoff_id,omitempty"`
+	CreatedAt        time.Time      `json:"created_at"`
+	UpdatedAt        time.Time      `json:"updated_at"`
+	CompletedAt      *time.Time     `json:"completed_at,omitempty"`
+}
+
+type Artifact struct {
+	ID        string         `json:"id"`
+	HandoffID string         `json:"handoff_id"`
+	Type      string         `json:"type"`
+	URI       string         `json:"uri"`
+	Version   string         `json:"version,omitempty"`
+	Checksum  string         `json:"checksum,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+	CreatedBy ActorRef       `json:"created_by"`
+	CreatedAt time.Time      `json:"created_at"`
+}
+
+type Watch struct {
+	ID               string    `json:"id"`
+	HandoffID        string    `json:"handoff_id"`
+	WatchType        string    `json:"watch_type"`
+	EventType        EventType `json:"event_type"`
+	DeadlineAt       time.Time `json:"deadline_at"`
+	Status           string    `json:"status"`
+	LastCheckedAt    time.Time `json:"last_checked_at"`
+	LastResult       string    `json:"last_result,omitempty"`
+	EscalationPolicy string    `json:"escalation_policy,omitempty"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+type RepairRecord struct {
+	ID            string    `json:"id"`
+	Action        string    `json:"action"`
+	TargetType    string    `json:"target_type"`
+	TargetID      string    `json:"target_id"`
+	Reason        string    `json:"reason"`
+	RequestedBy   ActorRef  `json:"requested_by"`
+	CreatedAt     time.Time `json:"created_at"`
+	InvalidatesID string    `json:"invalidates_id,omitempty"`
+	ReplacementID string    `json:"replacement_id,omitempty"`
+	ReopenedState string    `json:"reopened_state,omitempty"`
+}
+
+type DispatchAttempt struct {
+	ID           string    `json:"id"`
+	HandoffID    string    `json:"handoff_id"`
+	Adapter      string    `json:"adapter"`
+	Target       string    `json:"target"`
+	RequestedAt  time.Time `json:"requested_at"`
+	ResultStatus string    `json:"result_status"`
+	FinishedAt   time.Time `json:"finished_at"`
+	ExternalID   string    `json:"external_id,omitempty"`
+}
+
+type TransportStatus string
+
+const (
+	TransportAccepted TransportStatus = "accepted"
+	TransportRejected TransportStatus = "rejected"
+	TransportTimeout  TransportStatus = "timeout"
+)
+
+type DispatchRequest struct {
+	Command string         `json:"command"`
+	Args    []string       `json:"args,omitempty"`
+	Target  string         `json:"target"`
+	Message string         `json:"message,omitempty"`
+	Payload map[string]any `json:"payload,omitempty"`
+}
+
+type DispatchResult struct {
+	TransportStatus TransportStatus `json:"transport_status"`
+	ExternalID      string          `json:"external_id,omitempty"`
+	Stdout          string          `json:"stdout,omitempty"`
+	Stderr          string          `json:"stderr,omitempty"`
+}
+
+type ObserverHint struct {
+	ID         string         `json:"id"`
+	HandoffID  string         `json:"handoff_id"`
+	WorkflowID string         `json:"workflow_id,omitempty"`
+	SignalType string         `json:"signal_type"`
+	Details    map[string]any `json:"details,omitempty"`
+	CreatedAt  time.Time      `json:"created_at"`
+}
+
+type Handoff struct {
+	ID                            string         `json:"id"`
+	WorkflowID                    string         `json:"workflow_id"`
+	WorkflowKind                  string         `json:"workflow_kind"`
+	ParentHandoffID               *string        `json:"parent_handoff_id,omitempty"`
+	DependsOnHandoffIDs           []string       `json:"depends_on_handoff_ids,omitempty"`
+	RequiredForWorkflowCompletion bool           `json:"required_for_workflow_completion"`
+	State                         HandoffState   `json:"state"`
+	StateVersion                  int64          `json:"state_version"`
+	TaskKind                      TaskKind       `json:"task_kind"`
+	Intent                        string         `json:"intent"`
+	PayloadRef                    string         `json:"payload_ref,omitempty"`
+	DeadlineAt                    *time.Time     `json:"deadline_at,omitempty"`
+	ProducerActor                 ActorRef       `json:"producer_actor"`
+	SenderActor                   ActorRef       `json:"sender_actor"`
+	ReceiverActor                 ActorRef       `json:"receiver_actor"`
+	ReviewerActor                 ActorRef       `json:"reviewer_actor"`
+	SubjectActor                  ActorRef       `json:"subject_actor"`
+	ArtifactPolicy                ArtifactPolicy `json:"artifact_policy"`
+	NeedsReview                   bool           `json:"needs_review"`
+	ReviewDecision                ReviewDecision `json:"review_decision,omitempty"`
+	HasReceived                   bool           `json:"has_received"`
+	HasStarted                    bool           `json:"has_started"`
+	HasSubmitted                  bool           `json:"has_submitted"`
+	HasReviewed                   bool           `json:"has_reviewed"`
+	ArtifactCount                 int            `json:"artifact_count"`
+	CreatedAt                     time.Time      `json:"created_at"`
+	UpdatedAt                     time.Time      `json:"updated_at"`
+	CompletedAt                   *time.Time     `json:"completed_at,omitempty"`
+}
+
+type EventRecord struct {
+	ID                string         `json:"id"`
+	WorkflowID        string         `json:"workflow_id,omitempty"`
+	HandoffID         string         `json:"handoff_id"`
+	Type              EventType      `json:"type"`
+	ProducerEventTime time.Time      `json:"producer_event_time"`
+	IngestedAt        time.Time      `json:"ingested_at"`
+	ProducerActor     ActorRef       `json:"producer_actor"`
+	SubjectActor      ActorRef       `json:"subject_actor"`
+	Payload           map[string]any `json:"payload,omitempty"`
+	IdempotencyKey    string         `json:"idempotency_key,omitempty"`
+	CorrelationID     string         `json:"correlation_id,omitempty"`
+	CausationID       string         `json:"causation_id,omitempty"`
+	Accepted          bool           `json:"accepted"`
+	RejectionReason   string         `json:"rejection_reason,omitempty"`
+	AttemptID         string         `json:"attempt_id,omitempty"`
+	ArtifactCount     int            `json:"artifact_count"`
+	ReviewDecision    ReviewDecision `json:"review_decision,omitempty"`
+}
