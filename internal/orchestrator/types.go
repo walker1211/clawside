@@ -5,15 +5,17 @@ import "time"
 type HandoffState string
 
 const (
-	StateCreated    HandoffState = "created"
-	StateDispatched HandoffState = "dispatched"
-	StateReceived   HandoffState = "received"
-	StateStarted    HandoffState = "started"
-	StateSubmitted  HandoffState = "submitted"
-	StateReviewed   HandoffState = "reviewed"
-	StateCompleted  HandoffState = "completed"
-	StateFailed     HandoffState = "failed"
-	StateExpired    HandoffState = "expired"
+	StateCreated      HandoffState = "created"
+	StateDispatched   HandoffState = "dispatched"
+	StateReceived     HandoffState = "received"
+	StateClaimed      HandoffState = "claimed"
+	StateStarted      HandoffState = "started"
+	StateCheckpointed HandoffState = "checkpointed"
+	StateSubmitted    HandoffState = "submitted"
+	StateReviewed     HandoffState = "reviewed"
+	StateCompleted    HandoffState = "completed"
+	StateFailed       HandoffState = "failed"
+	StateExpired      HandoffState = "expired"
 )
 
 type WorkflowStatus string
@@ -34,7 +36,9 @@ const (
 	EventTransportTimeout           EventType = "transport_timeout"
 	EventTransportDeliveryConfirmed EventType = "transport_delivery_confirmed"
 	EventReceived                   EventType = "received"
+	EventClaimed                    EventType = "claimed"
 	EventStarted                    EventType = "started"
+	EventCheckpointed               EventType = "checkpointed"
 	EventSubmitted                  EventType = "submitted"
 	EventReviewed                   EventType = "reviewed"
 	EventCompleted                  EventType = "completed"
@@ -160,9 +164,11 @@ type DispatchAttempt struct {
 type TransportStatus string
 
 const (
-	TransportAccepted TransportStatus = "accepted"
-	TransportRejected TransportStatus = "rejected"
-	TransportTimeout  TransportStatus = "timeout"
+	TransportRequested        TransportStatus = "requested"
+	TransportAccepted         TransportStatus = "accepted"
+	TransportRejected         TransportStatus = "rejected"
+	TransportTimeout          TransportStatus = "timeout"
+	TransportDeliveryConfirmed TransportStatus = "delivery_confirmed"
 )
 
 type DispatchRequest struct {
@@ -201,20 +207,30 @@ type Handoff struct {
 	TaskKind                      TaskKind       `json:"task_kind"`
 	Intent                        string         `json:"intent"`
 	PayloadRef                    string         `json:"payload_ref,omitempty"`
+	DeliveryTargetRef             string         `json:"delivery_target_ref,omitempty"`
 	DeadlineAt                    *time.Time     `json:"deadline_at,omitempty"`
 	ProducerActor                 ActorRef       `json:"producer_actor"`
 	SenderActor                   ActorRef       `json:"sender_actor"`
 	ReceiverActor                 ActorRef       `json:"receiver_actor"`
 	ReviewerActor                 ActorRef       `json:"reviewer_actor"`
 	SubjectActor                  ActorRef       `json:"subject_actor"`
+	CurrentOwner                  ActorRef       `json:"current_owner"`
+	LeaseHolder                   ActorRef       `json:"lease_holder"`
+	EscalationOwner               ActorRef       `json:"escalation_owner"`
+	FallbackOwner                 ActorRef       `json:"fallback_owner"`
+	LeasedAt                      *time.Time     `json:"leased_at,omitempty"`
+	LeaseExpiresAt                *time.Time     `json:"lease_expires_at,omitempty"`
 	ArtifactPolicy                ArtifactPolicy `json:"artifact_policy"`
 	NeedsReview                   bool           `json:"needs_review"`
 	ReviewDecision                ReviewDecision `json:"review_decision,omitempty"`
 	HasReceived                   bool           `json:"has_received"`
+	HasClaimed                    bool           `json:"has_claimed"`
 	HasStarted                    bool           `json:"has_started"`
+	HasCheckpointed               bool           `json:"has_checkpointed"`
 	HasSubmitted                  bool           `json:"has_submitted"`
 	HasReviewed                   bool           `json:"has_reviewed"`
 	ArtifactCount                 int            `json:"artifact_count"`
+	LastAuthoritativeEventID      string         `json:"last_authoritative_event_id,omitempty"`
 	CreatedAt                     time.Time      `json:"created_at"`
 	UpdatedAt                     time.Time      `json:"updated_at"`
 	CompletedAt                   *time.Time     `json:"completed_at,omitempty"`

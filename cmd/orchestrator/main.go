@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"openclaw/internal/orchestrator"
+	"github.com/walker1211/clawside/internal/orchestrator"
 
 	_ "modernc.org/sqlite"
 )
@@ -34,12 +34,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return runHandoff(args[1:], stdout, stderr)
 	case "event":
 		return runEvent(args[1:], stdout, stderr)
+	case "signal":
+		return runSignal(args[1:], stdout, stderr)
 	case "workflow":
 		return runWorkflow(args[1:], stdout, stderr)
 	case "watch":
 		return runWatch(args[1:], stdout, stderr)
 	case "repair":
 		return runRepair(args[1:], stdout, stderr)
+	case "repair-candidate":
+		return runRepairCandidate(args[1:], stdout, stderr)
+	case "divergence":
+		return runDivergence(args[1:], stdout, stderr)
+	case "ownership":
+		return runOwnership(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
 	}
@@ -58,6 +66,28 @@ func runHandoff(args []string, stdout, stderr io.Writer) error {
 		return runHandoffList(args[1:], stdout, stderr)
 	case "dispatch":
 		return runHandoffDispatch(args[1:], stdout, stderr)
+	case "timeline":
+		return runHandoffTimeline(args[1:], stdout, stderr)
+	case "receive":
+		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionReceive)
+	case "claim":
+		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionClaim)
+	case "start":
+		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionStart)
+	case "checkpoint":
+		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionCheckpoint)
+	case "submit":
+		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionSubmit)
+	case "review":
+		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionReview)
+	case "request-revision":
+		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionRequestRevision)
+	case "approve":
+		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionApprove)
+	case "complete":
+		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionComplete)
+	case "fail":
+		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionFail)
 	default:
 		return fmt.Errorf("unknown handoff subcommand %q", args[0])
 	}
@@ -74,6 +104,32 @@ func runEvent(args []string, stdout, stderr io.Writer) error {
 		return runEventList(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown event subcommand %q", args[0])
+	}
+}
+
+func runSignal(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing signal subcommand")
+	}
+	switch args[0] {
+	case "record":
+		return runSignalRecord(args[1:], stdout, stderr)
+	case "list":
+		return runSignalList(args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("unknown signal subcommand %q", args[0])
+	}
+}
+
+func runDivergence(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing divergence subcommand")
+	}
+	switch args[0] {
+	case "list":
+		return runDivergenceList(args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("unknown divergence subcommand %q", args[0])
 	}
 }
 
@@ -116,8 +172,34 @@ func runRepair(args []string, stdout, stderr io.Writer) error {
 		return runRepairReopenHandoff(args[1:], stdout, stderr)
 	case "backfill-event":
 		return runRepairBackfillEvent(args[1:], stdout, stderr)
+	case "list":
+		return runRepairList(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown repair subcommand %q", args[0])
+	}
+}
+
+func runRepairCandidate(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing repair-candidate subcommand")
+	}
+	switch args[0] {
+	case "list":
+		return runRepairCandidateList(args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("unknown repair-candidate subcommand %q", args[0])
+	}
+}
+
+func runOwnership(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing ownership subcommand")
+	}
+	switch args[0] {
+	case "get":
+		return runOwnershipGet(args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("unknown ownership subcommand %q", args[0])
 	}
 }
 
@@ -537,6 +619,216 @@ func runWatchRun(args []string, stdout, stderr io.Writer) error {
 	return printJSON(stdout, result)
 }
 
+func runHandoffTimeline(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("handoff timeline", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var handoffID string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&handoffID, "handoff-id", "", "handoff id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" || handoffID == "" {
+		return fmt.Errorf("missing db or handoff-id")
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	events, err := store.ListEventIngestionAudit(context.Background(), handoffID)
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, events)
+}
+
+func runHandoffProtocolAction(args []string, stdout, stderr io.Writer, action orchestrator.ProtocolAction) error {
+	_ = stderr
+	fs := flag.NewFlagSet(string(action), flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var workflowID string
+	var handoffID string
+	var actor string
+	var artifactCount int
+	var reviewDecision string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&workflowID, "workflow-id", "", "workflow id")
+	fs.StringVar(&handoffID, "handoff-id", "", "handoff id")
+	fs.StringVar(&actor, "actor", "", "actor")
+	fs.IntVar(&artifactCount, "artifact-count", 0, "artifact count")
+	fs.StringVar(&reviewDecision, "review-decision", "", "review decision")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" || handoffID == "" || actor == "" {
+		return fmt.Errorf("missing db, handoff-id, or actor")
+	}
+	if artifactCount < 0 {
+		return fmt.Errorf("artifact-count must be >= 0")
+	}
+	switch action {
+	case orchestrator.ProtocolActionReview:
+		if !isValidReviewDecision(orchestrator.ReviewDecision(reviewDecision)) {
+			return fmt.Errorf("handoff review requires valid review decision")
+		}
+	case orchestrator.ProtocolActionApprove, orchestrator.ProtocolActionRequestRevision:
+		if reviewDecision != "" {
+			return fmt.Errorf("%s does not accept review-decision", action)
+		}
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	svc := orchestrator.NewService(store, nil)
+	actorRef, err := parseActorRef(actor)
+	if err != nil {
+		return err
+	}
+	result, err := svc.ApplyProtocolAction(context.Background(), orchestrator.ProtocolRequest{
+		Action:         action,
+		WorkflowID:     workflowID,
+		HandoffID:      handoffID,
+		Actor:          actorRef,
+		ArtifactCount:  artifactCount,
+		ReviewDecision: orchestrator.ReviewDecision(reviewDecision),
+	})
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, result)
+}
+
+func runSignalRecord(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("signal record", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var workflowID string
+	var handoffID string
+	var signalType string
+	var producerActor string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&workflowID, "workflow-id", "", "workflow id")
+	fs.StringVar(&handoffID, "handoff-id", "", "handoff id")
+	fs.StringVar(&signalType, "type", "", "signal type")
+	fs.StringVar(&producerActor, "producer-actor", "", "producer actor")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" || workflowID == "" || handoffID == "" || signalType == "" || producerActor == "" {
+		return fmt.Errorf("missing db, workflow-id, handoff-id, type, or producer-actor")
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	handoff, err := store.LoadHandoff(context.Background(), handoffID)
+	if err != nil {
+		return err
+	}
+	if workflowID != handoff.WorkflowID {
+		return fmt.Errorf("workflow-id does not match handoff")
+	}
+	svc := orchestrator.NewService(store, nil)
+	producerRef, err := parseActorRef(producerActor)
+	if err != nil {
+		return err
+	}
+	if producerRef.Type != orchestrator.ActorSystem {
+		return fmt.Errorf("signal record requires system producer actor")
+	}
+	event := orchestrator.EventRecord{
+		WorkflowID:    workflowID,
+		HandoffID:     handoffID,
+		Type:          orchestrator.EventType(signalType),
+		ProducerActor: producerRef,
+	}
+	if err := svc.RecordObservedSignal(context.Background(), orchestrator.RecordObserverHintInput{Event: event}); err != nil {
+		return err
+	}
+	return printJSON(stdout, map[string]any{"recorded": true, "type": signalType, "handoff_id": handoffID})
+}
+
+func runSignalList(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("signal list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var handoffID string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&handoffID, "handoff-id", "", "handoff id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" || handoffID == "" {
+		return fmt.Errorf("missing db or handoff-id")
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	signals, err := store.ListObservedSignalsByHandoff(context.Background(), handoffID)
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, signals)
+}
+
+func runDivergenceList(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("divergence list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var handoffID string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&handoffID, "handoff-id", "", "handoff id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" || handoffID == "" {
+		return fmt.Errorf("missing db or handoff-id")
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	divergences, err := store.ListDivergences(context.Background(), handoffID)
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, divergences)
+}
+
 func runRepairInvalidateEvent(args []string, stdout, stderr io.Writer) error {
 	_ = stderr
 	fs := flag.NewFlagSet("repair invalidate-event", flag.ContinueOnError)
@@ -694,6 +986,96 @@ func runRepairBackfillEvent(args []string, stdout, stderr io.Writer) error {
 	return printJSON(stdout, repair)
 }
 
+func runRepairList(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("repair list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var handoffID string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&handoffID, "handoff-id", "", "handoff id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" {
+		return fmt.Errorf("missing db")
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	repairs, err := store.ListRepairs(context.Background(), handoffID)
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, repairs)
+}
+
+func runRepairCandidateList(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("repair-candidate list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var handoffID string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&handoffID, "handoff-id", "", "handoff id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" || handoffID == "" {
+		return fmt.Errorf("missing db or handoff-id")
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	candidates, err := store.ListRepairCandidatesByHandoff(context.Background(), handoffID)
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, candidates)
+}
+
+func runOwnershipGet(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("ownership get", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var handoffID string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&handoffID, "handoff-id", "", "handoff id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" || handoffID == "" {
+		return fmt.Errorf("missing db or handoff-id")
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	binding, err := store.LoadOwnershipBinding(context.Background(), handoffID)
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, binding)
+}
+
 func eventRequiresSubjectActor(eventType orchestrator.EventType) bool {
 	switch eventType {
 	case orchestrator.EventTransportRequested,
@@ -714,6 +1096,17 @@ func parseActorRef(raw string) (orchestrator.ActorRef, error) {
 		return orchestrator.ActorRef{}, fmt.Errorf("invalid actor %q", raw)
 	}
 	return orchestrator.ActorRef{Type: orchestrator.ActorType(parts[0]), ID: parts[1]}, nil
+}
+
+func isValidReviewDecision(decision orchestrator.ReviewDecision) bool {
+	switch decision {
+	case orchestrator.ReviewDecisionApproved,
+		orchestrator.ReviewDecisionRevisionRequired,
+		orchestrator.ReviewDecisionRejected:
+		return true
+	default:
+		return false
+	}
 }
 
 func splitCSV(raw string) []string {

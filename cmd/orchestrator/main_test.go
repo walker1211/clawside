@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"openclaw/internal/orchestrator"
+	"github.com/walker1211/clawside/internal/orchestrator"
 
 	_ "modernc.org/sqlite"
 )
@@ -94,7 +94,7 @@ func TestRunEventRecordPersistsAcceptedEventAndPrintsDecision(t *testing.T) {
 	}
 }
 
-func TestRunEventRecordAllowsSystemOnlyTransportEvent(t *testing.T) {
+func TestRunEventRecordRejectsTransportSignalEvent(t *testing.T) {
 	dbPath, created := seedTestHandoff(t)
 	stdout := new(bytes.Buffer)
 	stderr := new(bytes.Buffer)
@@ -107,14 +107,11 @@ func TestRunEventRecordAllowsSystemOnlyTransportEvent(t *testing.T) {
 		"--type", "transport_accepted",
 		"--producer-actor", "system:orchestrator",
 	}, stdout, stderr)
-	if err != nil {
-		t.Fatalf("run transport event record: %v", err)
+	if err == nil {
+		t.Fatalf("expected transport signal event to be rejected by authoritative event record command")
 	}
-	if !strings.Contains(stdout.String(), `"accepted": true`) {
-		t.Fatalf("expected accepted transport decision json, got %s", stdout.String())
-	}
-	if !strings.Contains(stdout.String(), `"next": "created"`) {
-		t.Fatalf("expected transport event to keep created state, got %s", stdout.String())
+	if !strings.Contains(err.Error(), "signal-only") {
+		t.Fatalf("expected signal-only rejection, got %v", err)
 	}
 }
 
@@ -321,6 +318,137 @@ func TestRunHandoffListPrintsItems(t *testing.T) {
 	}
 }
 
+func TestRunHandoffReceivePrintsProtocolResult(t *testing.T) {
+	dbPath, created := seedTestHandoff(t)
+	dispatchTestHandoff(t, dbPath, created.Handoff.ID)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"handoff", "receive",
+		"--db", dbPath,
+		"--workflow-id", created.Workflow.ID,
+		"--handoff-id", created.Handoff.ID,
+		"--actor", "agent:writer",
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run handoff receive: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"action": "handoff.receive"`) {
+		t.Fatalf("expected receive action in json, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"state": "received"`) {
+		t.Fatalf("expected received state in json, got %s", stdout.String())
+	}
+}
+
+func TestRunHandoffApprovePrintsReviewedDecision(t *testing.T) {
+	dbPath, created := seedReviewTestHandoff(t)
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventReceived, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventStarted, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventSubmitted, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"handoff", "approve",
+		"--db", dbPath,
+		"--workflow-id", created.Workflow.ID,
+		"--handoff-id", created.Handoff.ID,
+		"--actor", "agent:editor",
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run handoff approve: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"action": "handoff.approve"`) {
+		t.Fatalf("expected approve action in json, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"review_decision": "approved"`) {
+		t.Fatalf("expected approved review decision in json, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"state": "reviewed"`) {
+		t.Fatalf("expected reviewed state in json, got %s", stdout.String())
+	}
+}
+
+func TestRunHandoffReviewRejectsMissingDecision(t *testing.T) {
+	dbPath, created := seedReviewTestHandoff(t)
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventReceived, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventStarted, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventSubmitted, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"handoff", "review",
+		"--db", dbPath,
+		"--workflow-id", created.Workflow.ID,
+		"--handoff-id", created.Handoff.ID,
+		"--actor", "agent:editor",
+	}, stdout, stderr)
+	if err == nil {
+		t.Fatalf("expected handoff review without review-decision to be rejected")
+	}
+	if !strings.Contains(err.Error(), "valid review decision") {
+		t.Fatalf("expected valid review decision error, got %v", err)
+	}
+}
+
+func TestRunHandoffRequestRevisionPrintsReviewedDecision(t *testing.T) {
+	dbPath, created := seedReviewTestHandoff(t)
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventReceived, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventStarted, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventSubmitted, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"handoff", "request-revision",
+		"--db", dbPath,
+		"--workflow-id", created.Workflow.ID,
+		"--handoff-id", created.Handoff.ID,
+		"--actor", "agent:editor",
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run handoff request-revision: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"action": "handoff.request_revision"`) {
+		t.Fatalf("expected request_revision action in json, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"review_decision": "revision_required"`) {
+		t.Fatalf("expected revision_required review decision in json, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"state": "reviewed"`) {
+		t.Fatalf("expected reviewed state in json, got %s", stdout.String())
+	}
+}
+
+func TestRunHandoffFailPrintsFailedState(t *testing.T) {
+	dbPath, created := seedTestHandoff(t)
+	dispatchTestHandoff(t, dbPath, created.Handoff.ID)
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventReceived, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	recordAcceptedEvent(t, dbPath, created, orchestrator.EventStarted, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"handoff", "fail",
+		"--db", dbPath,
+		"--workflow-id", created.Workflow.ID,
+		"--handoff-id", created.Handoff.ID,
+		"--actor", "agent:writer",
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run handoff fail: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"action": "handoff.fail"`) {
+		t.Fatalf("expected fail action in json, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"state": "failed"`) {
+		t.Fatalf("expected failed state in json, got %s", stdout.String())
+	}
+}
+
 func TestRunEventListPrintsEffectiveAcceptedEntries(t *testing.T) {
 	dbPath, created := seedTestHandoff(t)
 	recordAcceptedEvent(t, dbPath, created, orchestrator.EventReceived, orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"})
@@ -341,6 +469,110 @@ func TestRunEventListPrintsEffectiveAcceptedEntries(t *testing.T) {
 	}
 	if strings.Contains(stdout.String(), `"type": "watch_triggered"`) {
 		t.Fatalf("expected audit-only event to be excluded, got %s", stdout.String())
+	}
+}
+
+func TestRunHandoffTimelinePrintsAuditEntries(t *testing.T) {
+	dbPath, created := seedTestHandoff(t)
+	dispatchTestHandoff(t, dbPath, created.Handoff.ID)
+	recordObserverHint(t, dbPath, created, orchestrator.EventWatchTriggered, orchestrator.ActorRef{Type: orchestrator.ActorSystem, ID: "watchdog"})
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"handoff", "timeline",
+		"--db", dbPath,
+		"--handoff-id", created.Handoff.ID,
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run handoff timeline: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"type": "watch_triggered"`) {
+		t.Fatalf("expected watch_triggered in timeline, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"rejection_reason": "observer_hint"`) {
+		t.Fatalf("expected observer_hint audit entry, got %s", stdout.String())
+	}
+}
+
+func TestRunSignalRecordRejectsWorkflowMismatch(t *testing.T) {
+	dbPath, created := seedTestHandoff(t)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"signal", "record",
+		"--db", dbPath,
+		"--workflow-id", "wf_wrong",
+		"--handoff-id", created.Handoff.ID,
+		"--type", "watch_triggered",
+		"--producer-actor", "system:watchdog",
+	}, stdout, stderr)
+	if err == nil {
+		t.Fatalf("expected signal record workflow mismatch to be rejected")
+	}
+	if !strings.Contains(err.Error(), "workflow-id does not match handoff") {
+		t.Fatalf("expected workflow mismatch error, got %v", err)
+	}
+}
+
+func TestRunSignalListPrintsObservedSignals(t *testing.T) {
+	dbPath, created := seedTestHandoff(t)
+	recordObserverHint(t, dbPath, created, orchestrator.EventWatchTriggered, orchestrator.ActorRef{Type: orchestrator.ActorSystem, ID: "watchdog"})
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"signal", "list",
+		"--db", dbPath,
+		"--handoff-id", created.Handoff.ID,
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run signal list: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"kind": "watch_triggered"`) {
+		t.Fatalf("expected watch_triggered signal, got %s", stdout.String())
+	}
+}
+
+func TestRunRepairCandidateListPrintsCandidates(t *testing.T) {
+	dbPath, created := seedTestHandoff(t)
+	dispatchTestHandoff(t, dbPath, created.Handoff.ID)
+	recordSignal(t, dbPath, created.Workflow.ID, created.Handoff.ID, orchestrator.EventTransportAccepted, orchestrator.ActorRef{Type: orchestrator.ActorSystem, ID: "adapter"})
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"repair-candidate", "list",
+		"--db", dbPath,
+		"--handoff-id", created.Handoff.ID,
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run repair-candidate list: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"suggested_action": "review"`) {
+		t.Fatalf("expected review repair candidate, got %s", stdout.String())
+	}
+}
+
+func TestRunOwnershipGetPrintsBinding(t *testing.T) {
+	dbPath, created := seedTestHandoff(t)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"ownership", "get",
+		"--db", dbPath,
+		"--handoff-id", created.Handoff.ID,
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run ownership get: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"handoff_id": "`+created.Handoff.ID+`"`) {
+		t.Fatalf("expected handoff id in ownership binding, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), `"current_owner"`) {
+		t.Fatalf("expected current_owner in ownership binding, got %s", stdout.String())
 	}
 }
 
@@ -668,6 +900,42 @@ func recordAcceptedEvent(t *testing.T, dbPath string, created orchestrator.Creat
 	if current.State == orchestrator.StateCreated && eventType != orchestrator.EventTransportRequested {
 		dispatchTestHandoff(t, dbPath, created.Handoff.ID)
 	}
+	if eventType == orchestrator.EventStarted {
+		recordAcceptedEvent(t, dbPath, created, orchestrator.EventClaimed, subject)
+	}
+	if eventType == orchestrator.EventSubmitted {
+		current, err := store.LoadHandoff(context.Background(), created.Handoff.ID)
+		if err != nil {
+			t.Fatalf("load handoff before submitted: %v", err)
+		}
+		if current.State == orchestrator.StateStarted {
+			recordAcceptedEvent(t, dbPath, created, orchestrator.EventCheckpointed, subject)
+		}
+	}
+	if eventType == orchestrator.EventCompleted {
+		current, err := store.LoadHandoff(context.Background(), created.Handoff.ID)
+		if err != nil {
+			t.Fatalf("load handoff before completed: %v", err)
+		}
+		if current.State == orchestrator.StateStarted {
+			recordAcceptedEvent(t, dbPath, created, orchestrator.EventCheckpointed, subject)
+			current, err = store.LoadHandoff(context.Background(), created.Handoff.ID)
+			if err != nil {
+				t.Fatalf("reload handoff before completed: %v", err)
+			}
+		}
+		if current.State == orchestrator.StateCheckpointed {
+			recordAcceptedEvent(t, dbPath, created, orchestrator.EventSubmitted, subject)
+			current, err = store.LoadHandoff(context.Background(), created.Handoff.ID)
+			if err != nil {
+				t.Fatalf("reload handoff after submitted: %v", err)
+			}
+		}
+		if current.NeedsReview && current.State == orchestrator.StateSubmitted {
+			recordAcceptedEvent(t, dbPath, created, orchestrator.EventReviewed, current.ReviewerActor)
+		}
+	}
+
 	eventID := orchestrator.NewID("evt_test")
 	_, err = svc.RecordEvent(context.Background(), orchestrator.RecordEventInput{Event: orchestrator.EventRecord{
 		ID:                eventID,
@@ -724,6 +992,22 @@ func recordObserverHint(t *testing.T, dbPath string, created orchestrator.Create
 	}})
 	if err != nil {
 		t.Fatalf("record observer hint: %v", err)
+	}
+}
+
+func recordSignal(t *testing.T, dbPath, workflowID, handoffID string, eventType orchestrator.EventType, producer orchestrator.ActorRef) {
+	t.Helper()
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	if err := run([]string{
+		"signal", "record",
+		"--db", dbPath,
+		"--workflow-id", workflowID,
+		"--handoff-id", handoffID,
+		"--type", string(eventType),
+		"--producer-actor", string(producer.Type) + ":" + producer.ID,
+	}, stdout, stderr); err != nil {
+		t.Fatalf("record signal: %v", err)
 	}
 }
 

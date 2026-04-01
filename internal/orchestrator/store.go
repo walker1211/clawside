@@ -48,20 +48,30 @@ func (s *Store) init(ctx context.Context) error {
 			task_kind TEXT NOT NULL,
 			intent TEXT NOT NULL,
 			payload_ref TEXT NOT NULL DEFAULT '',
+			delivery_target_ref TEXT NOT NULL DEFAULT '',
 			deadline_at TEXT,
 			producer_actor_json TEXT NOT NULL,
 			sender_actor_json TEXT NOT NULL,
 			receiver_actor_json TEXT NOT NULL,
 			reviewer_actor_json TEXT NOT NULL,
 			subject_actor_json TEXT NOT NULL,
+			current_owner_json TEXT NOT NULL DEFAULT '{}',
+			lease_holder_json TEXT NOT NULL DEFAULT '{}',
+			escalation_owner_json TEXT NOT NULL DEFAULT '{}',
+			fallback_owner_json TEXT NOT NULL DEFAULT '{}',
+			leased_at TEXT,
+			lease_expires_at TEXT,
 			artifact_policy_json TEXT NOT NULL,
 			needs_review INTEGER NOT NULL,
 			review_decision TEXT NOT NULL DEFAULT '',
 			has_received INTEGER NOT NULL,
+			has_claimed INTEGER NOT NULL DEFAULT 0,
 			has_started INTEGER NOT NULL,
+			has_checkpointed INTEGER NOT NULL DEFAULT 0,
 			has_submitted INTEGER NOT NULL,
 			has_reviewed INTEGER NOT NULL,
 			artifact_count INTEGER NOT NULL,
+			last_authoritative_event_id TEXT NOT NULL DEFAULT '',
 			created_at TEXT NOT NULL,
 			updated_at TEXT NOT NULL,
 			completed_at TEXT
@@ -165,6 +175,45 @@ func (s *Store) init(ctx context.Context) error {
 			replacement_id TEXT NOT NULL DEFAULT '',
 			reopened_state TEXT NOT NULL DEFAULT ''
 		)`,
+		`CREATE TABLE IF NOT EXISTS ownership_bindings (
+			handoff_id TEXT PRIMARY KEY,
+			current_owner_json TEXT NOT NULL,
+			lease_holder_json TEXT NOT NULL,
+			reviewer_actor_json TEXT NOT NULL,
+			escalation_owner_json TEXT NOT NULL,
+			fallback_owner_json TEXT NOT NULL,
+			leased_at TEXT,
+			lease_expires_at TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL,
+			FOREIGN KEY (handoff_id) REFERENCES handoffs(id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS observed_signals (
+			id TEXT PRIMARY KEY,
+			handoff_id TEXT NOT NULL,
+			workflow_id TEXT NOT NULL,
+			kind TEXT NOT NULL,
+			reason TEXT NOT NULL DEFAULT '',
+			event_id TEXT NOT NULL DEFAULT '',
+			attempt_id TEXT NOT NULL DEFAULT '',
+			details_json TEXT NOT NULL,
+			observed_at TEXT NOT NULL,
+			FOREIGN KEY (handoff_id) REFERENCES handoffs(id),
+			FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+		)`,
+		`CREATE TABLE IF NOT EXISTS repair_candidates (
+			id TEXT PRIMARY KEY,
+			handoff_id TEXT NOT NULL,
+			workflow_id TEXT NOT NULL,
+			signal_id TEXT NOT NULL DEFAULT '',
+			reason TEXT NOT NULL,
+			suggested_action TEXT NOT NULL,
+			status TEXT NOT NULL,
+			details_json TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			FOREIGN KEY (handoff_id) REFERENCES handoffs(id),
+			FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+		)`,
 	}
 
 	for _, statement := range statements {
@@ -201,6 +250,70 @@ func (s *Store) SaveDispatchAttemptStatus(ctx context.Context, attempt DispatchA
 
 func (s *Store) SaveDivergence(ctx context.Context, hint ObserverHint) error {
 	return saveDivergenceExec(ctx, s.db, hint)
+}
+
+func (s *Store) UpsertOwnershipBinding(ctx context.Context, binding OwnershipBinding) error {
+	return saveOwnershipBindingExec(ctx, s.db, binding)
+}
+
+func (s *Store) LoadOwnershipBinding(ctx context.Context, handoffID string) (OwnershipBinding, error) {
+	return loadOwnershipBindingTx(ctx, s.db, handoffID)
+}
+
+func (s *Store) AppendObservedSignal(ctx context.Context, signal ObservedSignal) error {
+	return appendObservedSignalExec(ctx, s.db, signal)
+}
+
+func (s *Store) ListObservedSignalsByHandoff(ctx context.Context, handoffID string) ([]ObservedSignal, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, handoff_id, workflow_id, kind, reason, event_id, attempt_id, details_json, observed_at
+		FROM observed_signals WHERE handoff_id = ? ORDER BY observed_at, id
+	`, handoffID)
+	if err != nil {
+		return nil, fmt.Errorf("list observed signals for %s: %w", handoffID, err)
+	}
+	defer rows.Close()
+
+	var signals []ObservedSignal
+	for rows.Next() {
+		signal, err := scanObservedSignal(rows)
+		if err != nil {
+			return nil, err
+		}
+		signals = append(signals, signal)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate observed signals for %s: %w", handoffID, err)
+	}
+	return signals, nil
+}
+
+func (s *Store) AppendRepairCandidate(ctx context.Context, candidate RepairCandidate) error {
+	return appendRepairCandidateExec(ctx, s.db, candidate)
+}
+
+func (s *Store) ListRepairCandidatesByHandoff(ctx context.Context, handoffID string) ([]RepairCandidate, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, handoff_id, workflow_id, signal_id, reason, suggested_action, status, details_json, created_at
+		FROM repair_candidates WHERE handoff_id = ? ORDER BY created_at, id
+	`, handoffID)
+	if err != nil {
+		return nil, fmt.Errorf("list repair candidates for %s: %w", handoffID, err)
+	}
+	defer rows.Close()
+
+	var candidates []RepairCandidate
+	for rows.Next() {
+		candidate, err := scanRepairCandidate(rows)
+		if err != nil {
+			return nil, err
+		}
+		candidates = append(candidates, candidate)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate repair candidates for %s: %w", handoffID, err)
+	}
+	return candidates, nil
 }
 
 func (s *Store) ListDivergences(ctx context.Context, handoffID string) ([]ObserverHint, error) {
@@ -251,16 +364,7 @@ func (s *Store) ListDispatchAttempts(ctx context.Context, handoffID string) ([]D
 	for rows.Next() {
 		var attempt DispatchAttempt
 		var requestedAt, finishedAt string
-		if err := rows.Scan(
-			&attempt.ID,
-			&attempt.HandoffID,
-			&attempt.Adapter,
-			&attempt.Target,
-			&requestedAt,
-			&attempt.ResultStatus,
-			&finishedAt,
-			&attempt.ExternalID,
-		); err != nil {
+		if err := rows.Scan(&attempt.ID, &attempt.HandoffID, &attempt.Adapter, &attempt.Target, &requestedAt, &attempt.ResultStatus, &finishedAt, &attempt.ExternalID); err != nil {
 			return nil, fmt.Errorf("scan dispatch attempt: %w", err)
 		}
 		parsedRequestedAt, err := time.Parse(time.RFC3339Nano, requestedAt)
@@ -374,6 +478,73 @@ func (s *Store) ListEvents(ctx context.Context, handoffID string) ([]EventRecord
 	return s.EffectiveEvents(ctx, handoffID)
 }
 
+func (s *Store) ListEventIngestionAudit(ctx context.Context, handoffID string) ([]EventRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT
+			id, workflow_id, handoff_id, type, producer_event_time, ingested_at,
+			producer_actor_json, subject_actor_json, payload_json,
+			idempotency_key, correlation_id, causation_id, accepted,
+			rejection_reason, attempt_id, artifact_count, review_decision
+		FROM event_ingestion_audit
+		WHERE handoff_id = ?
+		ORDER BY ingested_at, producer_event_time, id
+	`, handoffID)
+	if err != nil {
+		return nil, fmt.Errorf("query event ingestion audit for %s: %w", handoffID, err)
+	}
+	defer rows.Close()
+
+	var events []EventRecord
+	for rows.Next() {
+		event, err := scanEventRecord(rows)
+		if err != nil {
+			return nil, err
+		}
+		events = append(events, event)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate event ingestion audit for %s: %w", handoffID, err)
+	}
+	return events, nil
+}
+
+func (s *Store) ListRepairs(ctx context.Context, handoffID string) ([]RepairRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, action, target_type, target_id, reason, requested_by_json, created_at, invalidates_id, replacement_id, reopened_state
+		FROM repairs
+		WHERE ? = ''
+			OR (target_type = 'handoff' AND target_id = ?)
+			OR invalidates_id IN (SELECT id FROM accepted_events WHERE handoff_id = ?)
+		ORDER BY created_at, id
+	`, handoffID, handoffID, handoffID)
+	if err != nil {
+		return nil, fmt.Errorf("list repairs for %s: %w", handoffID, err)
+	}
+	defer rows.Close()
+
+	var repairs []RepairRecord
+	for rows.Next() {
+		var repair RepairRecord
+		var requestedByJSON, createdAt string
+		if err := rows.Scan(&repair.ID, &repair.Action, &repair.TargetType, &repair.TargetID, &repair.Reason, &requestedByJSON, &createdAt, &repair.InvalidatesID, &repair.ReplacementID, &repair.ReopenedState); err != nil {
+			return nil, fmt.Errorf("scan repair: %w", err)
+		}
+		if err := unmarshalJSON(requestedByJSON, &repair.RequestedBy); err != nil {
+			return nil, err
+		}
+		parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+		if err != nil {
+			return nil, fmt.Errorf("parse repair created_at: %w", err)
+		}
+		repair.CreatedAt = parsedCreatedAt
+		repairs = append(repairs, repair)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate repairs for %s: %w", handoffID, err)
+	}
+	return repairs, nil
+}
+
 func saveWorkflowExec(ctx context.Context, db execer, workflow Workflow) error {
 	initiatorJSON, err := marshalJSON(workflow.InitiatorActor)
 	if err != nil {
@@ -393,17 +564,7 @@ func saveWorkflowExec(ctx context.Context, db execer, workflow Workflow) error {
 			created_at = excluded.created_at,
 			updated_at = excluded.updated_at,
 			completed_at = excluded.completed_at
-	`,
-		workflow.ID,
-		workflow.Kind,
-		initiatorJSON,
-		workflow.Status,
-		workflow.RootHandoffID,
-		workflow.CurrentHandoffID,
-		formatTime(workflow.CreatedAt),
-		formatTime(workflow.UpdatedAt),
-		nullableTime(workflow.CompletedAt),
-	)
+	`, workflow.ID, workflow.Kind, initiatorJSON, workflow.Status, workflow.RootHandoffID, workflow.CurrentHandoffID, formatTime(workflow.CreatedAt), formatTime(workflow.UpdatedAt), nullableTime(workflow.CompletedAt))
 	if err != nil {
 		return fmt.Errorf("save workflow %s: %w", workflow.ID, err)
 	}
@@ -435,6 +596,22 @@ func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
 	if err != nil {
 		return err
 	}
+	currentOwnerJSON, err := marshalJSON(handoff.CurrentOwner)
+	if err != nil {
+		return err
+	}
+	leaseHolderJSON, err := marshalJSON(handoff.LeaseHolder)
+	if err != nil {
+		return err
+	}
+	escalationJSON, err := marshalJSON(handoff.EscalationOwner)
+	if err != nil {
+		return err
+	}
+	fallbackJSON, err := marshalJSON(handoff.FallbackOwner)
+	if err != nil {
+		return err
+	}
 	policyJSON, err := marshalJSON(handoff.ArtifactPolicy)
 	if err != nil {
 		return err
@@ -443,11 +620,13 @@ func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
 		INSERT INTO handoffs (
 			id, workflow_id, workflow_kind, parent_handoff_id, depends_on_handoff_ids_json,
 			required_for_workflow_completion, state, state_version, task_kind, intent,
-			payload_ref, deadline_at, producer_actor_json, sender_actor_json, receiver_actor_json,
-			reviewer_actor_json, subject_actor_json, artifact_policy_json, needs_review,
-			review_decision, has_received, has_started, has_submitted, has_reviewed,
-			artifact_count, created_at, updated_at, completed_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			payload_ref, delivery_target_ref, deadline_at, producer_actor_json, sender_actor_json, receiver_actor_json,
+			reviewer_actor_json, subject_actor_json, current_owner_json, lease_holder_json,
+			escalation_owner_json, fallback_owner_json, leased_at, lease_expires_at,
+			artifact_policy_json, needs_review, review_decision, has_received, has_claimed,
+			has_started, has_checkpointed, has_submitted, has_reviewed, artifact_count,
+			last_authoritative_event_id, created_at, updated_at, completed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			workflow_id = excluded.workflow_id,
 			workflow_kind = excluded.workflow_kind,
@@ -459,20 +638,30 @@ func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
 			task_kind = excluded.task_kind,
 			intent = excluded.intent,
 			payload_ref = excluded.payload_ref,
+			delivery_target_ref = excluded.delivery_target_ref,
 			deadline_at = excluded.deadline_at,
 			producer_actor_json = excluded.producer_actor_json,
 			sender_actor_json = excluded.sender_actor_json,
 			receiver_actor_json = excluded.receiver_actor_json,
 			reviewer_actor_json = excluded.reviewer_actor_json,
 			subject_actor_json = excluded.subject_actor_json,
+			current_owner_json = excluded.current_owner_json,
+			lease_holder_json = excluded.lease_holder_json,
+			escalation_owner_json = excluded.escalation_owner_json,
+			fallback_owner_json = excluded.fallback_owner_json,
+			leased_at = excluded.leased_at,
+			lease_expires_at = excluded.lease_expires_at,
 			artifact_policy_json = excluded.artifact_policy_json,
 			needs_review = excluded.needs_review,
 			review_decision = excluded.review_decision,
 			has_received = excluded.has_received,
+			has_claimed = excluded.has_claimed,
 			has_started = excluded.has_started,
+			has_checkpointed = excluded.has_checkpointed,
 			has_submitted = excluded.has_submitted,
 			has_reviewed = excluded.has_reviewed,
 			artifact_count = excluded.artifact_count,
+			last_authoritative_event_id = excluded.last_authoritative_event_id,
 			created_at = excluded.created_at,
 			updated_at = excluded.updated_at,
 			completed_at = excluded.completed_at
@@ -488,20 +677,30 @@ func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
 		handoff.TaskKind,
 		handoff.Intent,
 		handoff.PayloadRef,
+		handoff.DeliveryTargetRef,
 		nullableTime(handoff.DeadlineAt),
 		producerJSON,
 		senderJSON,
 		receiverJSON,
 		reviewerJSON,
 		subjectJSON,
+		currentOwnerJSON,
+		leaseHolderJSON,
+		escalationJSON,
+		fallbackJSON,
+		nullableTime(handoff.LeasedAt),
+		nullableTime(handoff.LeaseExpiresAt),
 		policyJSON,
 		boolToInt(handoff.NeedsReview),
 		handoff.ReviewDecision,
 		boolToInt(handoff.HasReceived),
+		boolToInt(handoff.HasClaimed),
 		boolToInt(handoff.HasStarted),
+		boolToInt(handoff.HasCheckpointed),
 		boolToInt(handoff.HasSubmitted),
 		boolToInt(handoff.HasReviewed),
 		handoff.ArtifactCount,
+		handoff.LastAuthoritativeEventID,
 		formatTime(handoff.CreatedAt),
 		formatTime(handoff.UpdatedAt),
 		nullableTime(handoff.CompletedAt),
@@ -509,7 +708,7 @@ func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
 	if err != nil {
 		return fmt.Errorf("save handoff %s: %w", handoff.ID, err)
 	}
-	return nil
+	return saveOwnershipBindingExec(ctx, db, OwnershipBindingFromHandoff(handoff))
 }
 
 func saveWatchExec(ctx context.Context, db execer, watch Watch) error {
@@ -518,18 +717,7 @@ func saveWatchExec(ctx context.Context, db execer, watch Watch) error {
 			id, handoff_id, watch_type, event_type, deadline_at, status,
 			last_checked_at, last_result, escalation_policy, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
-		watch.ID,
-		watch.HandoffID,
-		watch.WatchType,
-		watch.EventType,
-		formatTime(watch.DeadlineAt),
-		watch.Status,
-		formatTime(watch.LastCheckedAt),
-		watch.LastResult,
-		watch.EscalationPolicy,
-		formatTime(watch.CreatedAt),
-	)
+	`, watch.ID, watch.HandoffID, watch.WatchType, watch.EventType, formatTime(watch.DeadlineAt), watch.Status, formatTime(watch.LastCheckedAt), watch.LastResult, watch.EscalationPolicy, formatTime(watch.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("save watch %s: %w", watch.ID, err)
 	}
@@ -551,18 +739,7 @@ func (s *Store) ListWatches(ctx context.Context, handoffID string) ([]Watch, err
 	for rows.Next() {
 		var watch Watch
 		var deadlineAt, lastCheckedAt, createdAt string
-		if err := rows.Scan(
-			&watch.ID,
-			&watch.HandoffID,
-			&watch.WatchType,
-			&watch.EventType,
-			&deadlineAt,
-			&watch.Status,
-			&lastCheckedAt,
-			&watch.LastResult,
-			&watch.EscalationPolicy,
-			&createdAt,
-		); err != nil {
+		if err := rows.Scan(&watch.ID, &watch.HandoffID, &watch.WatchType, &watch.EventType, &deadlineAt, &watch.Status, &lastCheckedAt, &watch.LastResult, &watch.EscalationPolicy, &createdAt); err != nil {
 			return nil, fmt.Errorf("scan watch: %w", err)
 		}
 		parsedDeadlineAt, err := time.Parse(time.RFC3339Nano, deadlineAt)
@@ -598,20 +775,84 @@ func saveRepairExec(ctx context.Context, db execer, repair RepairRecord) error {
 			id, action, target_type, target_id, reason, requested_by_json,
 			created_at, invalidates_id, replacement_id, reopened_state
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`,
-		repair.ID,
-		repair.Action,
-		repair.TargetType,
-		repair.TargetID,
-		repair.Reason,
-		requestedByJSON,
-		formatTime(repair.CreatedAt),
-		repair.InvalidatesID,
-		repair.ReplacementID,
-		repair.ReopenedState,
-	)
+	`, repair.ID, repair.Action, repair.TargetType, repair.TargetID, repair.Reason, requestedByJSON, formatTime(repair.CreatedAt), repair.InvalidatesID, repair.ReplacementID, repair.ReopenedState)
 	if err != nil {
 		return fmt.Errorf("save repair %s: %w", repair.ID, err)
+	}
+	return nil
+}
+
+func saveOwnershipBindingExec(ctx context.Context, db execer, binding OwnershipBinding) error {
+	currentOwnerJSON, err := marshalJSON(binding.CurrentOwner)
+	if err != nil {
+		return err
+	}
+	leaseHolderJSON, err := marshalJSON(binding.LeaseHolder)
+	if err != nil {
+		return err
+	}
+	reviewerJSON, err := marshalJSON(binding.ReviewerActor)
+	if err != nil {
+		return err
+	}
+	escalationJSON, err := marshalJSON(binding.EscalationOwner)
+	if err != nil {
+		return err
+	}
+	fallbackJSON, err := marshalJSON(binding.FallbackOwner)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO ownership_bindings (
+			handoff_id, current_owner_json, lease_holder_json, reviewer_actor_json,
+			escalation_owner_json, fallback_owner_json, leased_at, lease_expires_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(handoff_id) DO UPDATE SET
+			current_owner_json = excluded.current_owner_json,
+			lease_holder_json = excluded.lease_holder_json,
+			reviewer_actor_json = excluded.reviewer_actor_json,
+			escalation_owner_json = excluded.escalation_owner_json,
+			fallback_owner_json = excluded.fallback_owner_json,
+			leased_at = excluded.leased_at,
+			lease_expires_at = excluded.lease_expires_at,
+			created_at = excluded.created_at,
+			updated_at = excluded.updated_at
+	`, binding.HandoffID, currentOwnerJSON, leaseHolderJSON, reviewerJSON, escalationJSON, fallbackJSON, nullableTime(binding.LeasedAt), nullableTime(binding.LeaseExpiresAt), formatTime(binding.CreatedAt), formatTime(binding.UpdatedAt))
+	if err != nil {
+		return fmt.Errorf("save ownership binding %s: %w", binding.HandoffID, err)
+	}
+	return nil
+}
+
+func appendObservedSignalExec(ctx context.Context, db execer, signal ObservedSignal) error {
+	detailsJSON, err := marshalJSON(signal.Details)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO observed_signals (
+			id, handoff_id, workflow_id, kind, reason, event_id, attempt_id, details_json, observed_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, signal.ID, signal.HandoffID, signal.WorkflowID, signal.Kind, signal.Reason, signal.EventID, signal.AttemptID, detailsJSON, formatTime(signal.ObservedAt))
+	if err != nil {
+		return fmt.Errorf("append observed signal %s: %w", signal.ID, err)
+	}
+	return nil
+}
+
+func appendRepairCandidateExec(ctx context.Context, db execer, candidate RepairCandidate) error {
+	detailsJSON, err := marshalJSON(candidate.Details)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO repair_candidates (
+			id, handoff_id, workflow_id, signal_id, reason, suggested_action, status, details_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, candidate.ID, candidate.HandoffID, candidate.WorkflowID, candidate.SignalID, candidate.Reason, candidate.SuggestedAction, candidate.Status, detailsJSON, formatTime(candidate.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("append repair candidate %s: %w", candidate.ID, err)
 	}
 	return nil
 }
@@ -632,17 +873,7 @@ func (s *Store) LoadWorkflow(ctx context.Context, workflowID string) (Workflow, 
 		createdAt, updatedAt string
 		completedAt          sql.NullString
 	)
-	if err := row.Scan(
-		&workflow.ID,
-		&workflow.Kind,
-		&initiatorJSON,
-		&workflow.Status,
-		&workflow.RootHandoffID,
-		&workflow.CurrentHandoffID,
-		&createdAt,
-		&updatedAt,
-		&completedAt,
-	); err != nil {
+	if err := row.Scan(&workflow.ID, &workflow.Kind, &initiatorJSON, &workflow.Status, &workflow.RootHandoffID, &workflow.CurrentHandoffID, &createdAt, &updatedAt, &completedAt); err != nil {
 		return Workflow{}, fmt.Errorf("load workflow %s: %w", workflowID, err)
 	}
 	if err := unmarshalJSON(initiatorJSON, &workflow.InitiatorActor); err != nil {
@@ -751,6 +982,9 @@ func (s *Store) RecordAcceptedEvent(ctx context.Context, event EventRecord) (Han
 	if !event.Accepted {
 		return Handoff{}, fmt.Errorf("accepted event api requires event.Accepted=true")
 	}
+	if isObservedSignalEvent(event.Type) {
+		return Handoff{}, fmt.Errorf("accepted event api does not accept observed signal event %s", event.Type)
+	}
 
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -789,17 +1023,20 @@ func recordAcceptedEventTx(ctx context.Context, tx queryerExecer, event EventRec
 	projected.TaskKind = handoff.TaskKind
 	projected.Intent = handoff.Intent
 	projected.PayloadRef = handoff.PayloadRef
+	projected.DeliveryTargetRef = handoff.DeliveryTargetRef
 	projected.DeadlineAt = handoff.DeadlineAt
 	projected.ProducerActor = handoff.ProducerActor
 	projected.SenderActor = handoff.SenderActor
 	projected.ReceiverActor = handoff.ReceiverActor
 	projected.ReviewerActor = handoff.ReviewerActor
 	projected.SubjectActor = handoff.SubjectActor
+	projected.EscalationOwner = handoff.EscalationOwner
+	projected.FallbackOwner = handoff.FallbackOwner
 	projected.ArtifactPolicy = handoff.ArtifactPolicy
 	projected.NeedsReview = handoff.NeedsReview
 	projected.CreatedAt = handoff.CreatedAt
 	projected.UpdatedAt = maxTime(handoff.UpdatedAt, event.IngestedAt)
-
+	projected.LastAuthoritativeEventID = event.ID
 	if err := insertEventRow(ctx, tx, "accepted_events", event); err != nil {
 		return Handoff{}, err
 	}
@@ -813,13 +1050,14 @@ func (s *Store) RecordRejectedEvent(ctx context.Context, event EventRecord) erro
 	if event.Accepted {
 		return fmt.Errorf("rejected event api requires event.Accepted=false")
 	}
-
-	handoff, err := loadHandoffTx(ctx, s.db, event.HandoffID)
-	if err != nil {
-		return err
-	}
-	if err := validateEventWorkflowMatch(handoff, event); err != nil {
-		return err
+	if event.WorkflowID != "" {
+		handoff, err := loadHandoffTx(ctx, s.db, event.HandoffID)
+		if err != nil {
+			return err
+		}
+		if err := validateEventWorkflowMatch(handoff, event); err != nil {
+			return err
+		}
 	}
 	return insertEventRow(ctx, s.db, "event_ingestion_audit", event)
 }
@@ -843,16 +1081,7 @@ func saveDispatchAttemptExec(ctx context.Context, db execer, attempt DispatchAtt
 		INSERT INTO dispatch_attempts (
 			id, handoff_id, adapter, target, requested_at, result_status, finished_at, external_id
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`,
-		attempt.ID,
-		attempt.HandoffID,
-		attempt.Adapter,
-		attempt.Target,
-		formatTime(attempt.RequestedAt),
-		attempt.ResultStatus,
-		formatTime(attempt.FinishedAt),
-		attempt.ExternalID,
-	)
+	`, attempt.ID, attempt.HandoffID, attempt.Adapter, attempt.Target, formatTime(attempt.RequestedAt), attempt.ResultStatus, formatTime(attempt.FinishedAt), attempt.ExternalID)
 	if err != nil {
 		return fmt.Errorf("save dispatch attempt %s: %w", attempt.ID, err)
 	}
@@ -864,12 +1093,7 @@ func saveDispatchAttemptStatusExec(ctx context.Context, db execer, attempt Dispa
 		UPDATE dispatch_attempts
 		SET result_status = ?, finished_at = ?, external_id = ?
 		WHERE id = ?
-	`,
-		attempt.ResultStatus,
-		formatTime(attempt.FinishedAt),
-		attempt.ExternalID,
-		attempt.ID,
-	)
+	`, attempt.ResultStatus, formatTime(attempt.FinishedAt), attempt.ExternalID, attempt.ID)
 	if err != nil {
 		return fmt.Errorf("update dispatch attempt %s: %w", attempt.ID, err)
 	}
@@ -885,15 +1109,7 @@ func saveDivergenceExec(ctx context.Context, db execer, hint ObserverHint) error
 		INSERT INTO divergences (
 			id, handoff_id, workflow_id, signal_type, reason, details_json, created_at
 		) VALUES (?, ?, ?, ?, ?, ?, ?)
-	`,
-		hint.ID,
-		hint.HandoffID,
-		hint.WorkflowID,
-		hint.SignalType,
-		hint.SignalType,
-		detailsJSON,
-		formatTime(hint.CreatedAt),
-	)
+	`, hint.ID, hint.HandoffID, hint.WorkflowID, hint.SignalType, hint.SignalType, detailsJSON, formatTime(hint.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("save divergence %s: %w", hint.ID, err)
 	}
@@ -920,25 +1136,7 @@ func insertEventRow(ctx context.Context, db execer, table string, event EventRec
 			idempotency_key, correlation_id, causation_id, accepted,
 			rejection_reason, attempt_id, artifact_count, review_decision
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-	`, table),
-		event.ID,
-		event.WorkflowID,
-		event.HandoffID,
-		event.Type,
-		formatTime(event.ProducerEventTime),
-		formatTime(event.IngestedAt),
-		producerJSON,
-		subjectJSON,
-		payloadJSON,
-		event.IdempotencyKey,
-		event.CorrelationID,
-		event.CausationID,
-		boolToInt(event.Accepted),
-		event.RejectionReason,
-		event.AttemptID,
-		event.ArtifactCount,
-		event.ReviewDecision,
-	)
+	`, table), event.ID, event.WorkflowID, event.HandoffID, event.Type, formatTime(event.ProducerEventTime), formatTime(event.IngestedAt), producerJSON, subjectJSON, payloadJSON, event.IdempotencyKey, event.CorrelationID, event.CausationID, boolToInt(event.Accepted), event.RejectionReason, event.AttemptID, event.ArtifactCount, event.ReviewDecision)
 	if err != nil {
 		return fmt.Errorf("insert %s %s: %w", table, event.ID, err)
 	}
@@ -955,25 +1153,7 @@ func scanEventRecord(scanner interface{ Scan(...any) error }) (EventRecord, erro
 		producerAt   string
 		ingestedAt   string
 	)
-	if err := scanner.Scan(
-		&event.ID,
-		&event.WorkflowID,
-		&event.HandoffID,
-		&event.Type,
-		&producerAt,
-		&ingestedAt,
-		&producerJSON,
-		&subjectJSON,
-		&payloadJSON,
-		&event.IdempotencyKey,
-		&event.CorrelationID,
-		&event.CausationID,
-		&accepted,
-		&event.RejectionReason,
-		&event.AttemptID,
-		&event.ArtifactCount,
-		&event.ReviewDecision,
-	); err != nil {
+	if err := scanner.Scan(&event.ID, &event.WorkflowID, &event.HandoffID, &event.Type, &producerAt, &ingestedAt, &producerJSON, &subjectJSON, &payloadJSON, &event.IdempotencyKey, &event.CorrelationID, &event.CausationID, &accepted, &event.RejectionReason, &event.AttemptID, &event.ArtifactCount, &event.ReviewDecision); err != nil {
 		return EventRecord{}, fmt.Errorf("scan event record: %w", err)
 	}
 	parsedProducerAt, err := time.Parse(time.RFC3339Nano, producerAt)
@@ -999,25 +1179,62 @@ func scanEventRecord(scanner interface{ Scan(...any) error }) (EventRecord, erro
 	return event, nil
 }
 
+func scanObservedSignal(scanner interface{ Scan(...any) error }) (ObservedSignal, error) {
+	var signal ObservedSignal
+	var detailsJSON, observedAt string
+	if err := scanner.Scan(&signal.ID, &signal.HandoffID, &signal.WorkflowID, &signal.Kind, &signal.Reason, &signal.EventID, &signal.AttemptID, &detailsJSON, &observedAt); err != nil {
+		return ObservedSignal{}, fmt.Errorf("scan observed signal: %w", err)
+	}
+	parsedObservedAt, err := time.Parse(time.RFC3339Nano, observedAt)
+	if err != nil {
+		return ObservedSignal{}, fmt.Errorf("parse observed signal observed_at: %w", err)
+	}
+	signal.ObservedAt = parsedObservedAt
+	if err := unmarshalJSON(detailsJSON, &signal.Details); err != nil {
+		return ObservedSignal{}, err
+	}
+	return signal, nil
+}
+
+func scanRepairCandidate(scanner interface{ Scan(...any) error }) (RepairCandidate, error) {
+	var candidate RepairCandidate
+	var detailsJSON, createdAt string
+	if err := scanner.Scan(&candidate.ID, &candidate.HandoffID, &candidate.WorkflowID, &candidate.SignalID, &candidate.Reason, &candidate.SuggestedAction, &candidate.Status, &detailsJSON, &createdAt); err != nil {
+		return RepairCandidate{}, fmt.Errorf("scan repair candidate: %w", err)
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return RepairCandidate{}, fmt.Errorf("parse repair candidate created_at: %w", err)
+	}
+	candidate.CreatedAt = parsedCreatedAt
+	if err := unmarshalJSON(detailsJSON, &candidate.Details); err != nil {
+		return RepairCandidate{}, err
+	}
+	return candidate, nil
+}
+
 func loadHandoffTx(ctx context.Context, db queryer, handoffID string) (Handoff, error) {
 	row := db.QueryRowContext(ctx, `
 		SELECT
 			id, workflow_id, workflow_kind, parent_handoff_id, depends_on_handoff_ids_json,
 			required_for_workflow_completion, state, state_version, task_kind, intent,
-			payload_ref, deadline_at, producer_actor_json, sender_actor_json, receiver_actor_json,
-			reviewer_actor_json, subject_actor_json, artifact_policy_json, needs_review,
-			review_decision, has_received, has_started, has_submitted, has_reviewed,
-			artifact_count, created_at, updated_at, completed_at
+			payload_ref, delivery_target_ref, deadline_at, producer_actor_json, sender_actor_json, receiver_actor_json,
+			reviewer_actor_json, subject_actor_json, current_owner_json, lease_holder_json,
+			escalation_owner_json, fallback_owner_json, leased_at, lease_expires_at,
+			artifact_policy_json, needs_review, review_decision, has_received, has_claimed,
+			has_started, has_checkpointed, has_submitted, has_reviewed,
+			artifact_count, last_authoritative_event_id, created_at, updated_at, completed_at
 		FROM handoffs WHERE id = ?
 	`, handoffID)
 
 	var (
-		handoff                                                                       Handoff
-		parentID, deadlineAt, completedAt                                             sql.NullString
-		createdAt, updatedAt                                                          string
-		producerJSON, senderJSON, receiverJSON, reviewerJSON, subjectJSON, policyJSON string
-		dependsJSON                                                                   string
-		required, needsReview, hasReceived, hasStarted, hasSubmitted, hasReviewed     int
+		handoff Handoff
+		parentID, deadlineAt, leasedAt, leaseExpiresAt, completedAt sql.NullString
+		createdAt, updatedAt string
+		producerJSON, senderJSON, receiverJSON, reviewerJSON, subjectJSON string
+		currentOwnerJSON, leaseHolderJSON, escalationJSON, fallbackJSON, policyJSON string
+		dependsJSON string
+		required, needsReview, hasReceived, hasClaimed, hasStarted, hasCheckpointed, hasSubmitted, hasReviewed int
 	)
 	if err := row.Scan(
 		&handoff.ID,
@@ -1031,20 +1248,30 @@ func loadHandoffTx(ctx context.Context, db queryer, handoffID string) (Handoff, 
 		&handoff.TaskKind,
 		&handoff.Intent,
 		&handoff.PayloadRef,
+		&handoff.DeliveryTargetRef,
 		&deadlineAt,
 		&producerJSON,
 		&senderJSON,
 		&receiverJSON,
 		&reviewerJSON,
 		&subjectJSON,
+		&currentOwnerJSON,
+		&leaseHolderJSON,
+		&escalationJSON,
+		&fallbackJSON,
+		&leasedAt,
+		&leaseExpiresAt,
 		&policyJSON,
 		&needsReview,
 		&handoff.ReviewDecision,
 		&hasReceived,
+		&hasClaimed,
 		&hasStarted,
+		&hasCheckpointed,
 		&hasSubmitted,
 		&hasReviewed,
 		&handoff.ArtifactCount,
+		&handoff.LastAuthoritativeEventID,
 		&createdAt,
 		&updatedAt,
 		&completedAt,
@@ -1057,7 +1284,9 @@ func loadHandoffTx(ctx context.Context, db queryer, handoffID string) (Handoff, 
 	handoff.RequiredForWorkflowCompletion = required == 1
 	handoff.NeedsReview = needsReview == 1
 	handoff.HasReceived = hasReceived == 1
+	handoff.HasClaimed = hasClaimed == 1
 	handoff.HasStarted = hasStarted == 1
+	handoff.HasCheckpointed = hasCheckpointed == 1
 	handoff.HasSubmitted = hasSubmitted == 1
 	handoff.HasReviewed = hasReviewed == 1
 	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
@@ -1088,6 +1317,18 @@ func loadHandoffTx(ctx context.Context, db queryer, handoffID string) (Handoff, 
 	if err := unmarshalJSON(subjectJSON, &handoff.SubjectActor); err != nil {
 		return Handoff{}, err
 	}
+	if err := unmarshalJSON(currentOwnerJSON, &handoff.CurrentOwner); err != nil {
+		return Handoff{}, err
+	}
+	if err := unmarshalJSON(leaseHolderJSON, &handoff.LeaseHolder); err != nil {
+		return Handoff{}, err
+	}
+	if err := unmarshalJSON(escalationJSON, &handoff.EscalationOwner); err != nil {
+		return Handoff{}, err
+	}
+	if err := unmarshalJSON(fallbackJSON, &handoff.FallbackOwner); err != nil {
+		return Handoff{}, err
+	}
 	if err := unmarshalJSON(policyJSON, &handoff.ArtifactPolicy); err != nil {
 		return Handoff{}, err
 	}
@@ -1098,6 +1339,20 @@ func loadHandoffTx(ctx context.Context, db queryer, handoffID string) (Handoff, 
 		}
 		handoff.DeadlineAt = &parsed
 	}
+	if leasedAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, leasedAt.String)
+		if err != nil {
+			return Handoff{}, fmt.Errorf("parse handoff leased_at: %w", err)
+		}
+		handoff.LeasedAt = &parsed
+	}
+	if leaseExpiresAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, leaseExpiresAt.String)
+		if err != nil {
+			return Handoff{}, fmt.Errorf("parse handoff lease_expires_at: %w", err)
+		}
+		handoff.LeaseExpiresAt = &parsed
+	}
 	if completedAt.Valid {
 		parsed, err := time.Parse(time.RFC3339Nano, completedAt.String)
 		if err != nil {
@@ -1106,6 +1361,63 @@ func loadHandoffTx(ctx context.Context, db queryer, handoffID string) (Handoff, 
 		handoff.CompletedAt = &parsed
 	}
 	return handoff, nil
+}
+
+func loadOwnershipBindingTx(ctx context.Context, db queryer, handoffID string) (OwnershipBinding, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT handoff_id, current_owner_json, lease_holder_json, reviewer_actor_json,
+			escalation_owner_json, fallback_owner_json, leased_at, lease_expires_at, created_at, updated_at
+		FROM ownership_bindings WHERE handoff_id = ?
+	`, handoffID)
+	var (
+		binding OwnershipBinding
+		currentOwnerJSON, leaseHolderJSON, reviewerJSON, escalationJSON, fallbackJSON string
+		leasedAt, leaseExpiresAt sql.NullString
+		createdAt, updatedAt string
+	)
+	if err := row.Scan(&binding.HandoffID, &currentOwnerJSON, &leaseHolderJSON, &reviewerJSON, &escalationJSON, &fallbackJSON, &leasedAt, &leaseExpiresAt, &createdAt, &updatedAt); err != nil {
+		return OwnershipBinding{}, fmt.Errorf("load ownership binding %s: %w", handoffID, err)
+	}
+	if err := unmarshalJSON(currentOwnerJSON, &binding.CurrentOwner); err != nil {
+		return OwnershipBinding{}, err
+	}
+	if err := unmarshalJSON(leaseHolderJSON, &binding.LeaseHolder); err != nil {
+		return OwnershipBinding{}, err
+	}
+	if err := unmarshalJSON(reviewerJSON, &binding.ReviewerActor); err != nil {
+		return OwnershipBinding{}, err
+	}
+	if err := unmarshalJSON(escalationJSON, &binding.EscalationOwner); err != nil {
+		return OwnershipBinding{}, err
+	}
+	if err := unmarshalJSON(fallbackJSON, &binding.FallbackOwner); err != nil {
+		return OwnershipBinding{}, err
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return OwnershipBinding{}, fmt.Errorf("parse ownership binding created_at: %w", err)
+	}
+	parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return OwnershipBinding{}, fmt.Errorf("parse ownership binding updated_at: %w", err)
+	}
+	binding.CreatedAt = parsedCreatedAt
+	binding.UpdatedAt = parsedUpdatedAt
+	if leasedAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, leasedAt.String)
+		if err != nil {
+			return OwnershipBinding{}, fmt.Errorf("parse ownership leased_at: %w", err)
+		}
+		binding.LeasedAt = &parsed
+	}
+	if leaseExpiresAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, leaseExpiresAt.String)
+		if err != nil {
+			return OwnershipBinding{}, fmt.Errorf("parse ownership lease_expires_at: %w", err)
+		}
+		binding.LeaseExpiresAt = &parsed
+	}
+	return binding, nil
 }
 
 func saveProjectedHandoffTx(ctx context.Context, db execer, handoff Handoff, expectedStateVersion int64) error {
@@ -1133,6 +1445,22 @@ func saveProjectedHandoffTx(ctx context.Context, db execer, handoff Handoff, exp
 	if err != nil {
 		return err
 	}
+	currentOwnerJSON, err := marshalJSON(handoff.CurrentOwner)
+	if err != nil {
+		return err
+	}
+	leaseHolderJSON, err := marshalJSON(handoff.LeaseHolder)
+	if err != nil {
+		return err
+	}
+	escalationJSON, err := marshalJSON(handoff.EscalationOwner)
+	if err != nil {
+		return err
+	}
+	fallbackJSON, err := marshalJSON(handoff.FallbackOwner)
+	if err != nil {
+		return err
+	}
 	policyJSON, err := marshalJSON(handoff.ArtifactPolicy)
 	if err != nil {
 		return err
@@ -1149,20 +1477,30 @@ func saveProjectedHandoffTx(ctx context.Context, db execer, handoff Handoff, exp
 			task_kind = ?,
 			intent = ?,
 			payload_ref = ?,
+			delivery_target_ref = ?,
 			deadline_at = ?,
 			producer_actor_json = ?,
 			sender_actor_json = ?,
 			receiver_actor_json = ?,
 			reviewer_actor_json = ?,
 			subject_actor_json = ?,
+			current_owner_json = ?,
+			lease_holder_json = ?,
+			escalation_owner_json = ?,
+			fallback_owner_json = ?,
+			leased_at = ?,
+			lease_expires_at = ?,
 			artifact_policy_json = ?,
 			needs_review = ?,
 			review_decision = ?,
 			has_received = ?,
+			has_claimed = ?,
 			has_started = ?,
+			has_checkpointed = ?,
 			has_submitted = ?,
 			has_reviewed = ?,
 			artifact_count = ?,
+			last_authoritative_event_id = ?,
 			created_at = ?,
 			updated_at = ?,
 			completed_at = ?
@@ -1178,20 +1516,30 @@ func saveProjectedHandoffTx(ctx context.Context, db execer, handoff Handoff, exp
 		handoff.TaskKind,
 		handoff.Intent,
 		handoff.PayloadRef,
+		handoff.DeliveryTargetRef,
 		nullableTime(handoff.DeadlineAt),
 		producerJSON,
 		senderJSON,
 		receiverJSON,
 		reviewerJSON,
 		subjectJSON,
+		currentOwnerJSON,
+		leaseHolderJSON,
+		escalationJSON,
+		fallbackJSON,
+		nullableTime(handoff.LeasedAt),
+		nullableTime(handoff.LeaseExpiresAt),
 		policyJSON,
 		boolToInt(handoff.NeedsReview),
 		handoff.ReviewDecision,
 		boolToInt(handoff.HasReceived),
+		boolToInt(handoff.HasClaimed),
 		boolToInt(handoff.HasStarted),
+		boolToInt(handoff.HasCheckpointed),
 		boolToInt(handoff.HasSubmitted),
 		boolToInt(handoff.HasReviewed),
 		handoff.ArtifactCount,
+		handoff.LastAuthoritativeEventID,
 		formatTime(handoff.CreatedAt),
 		formatTime(handoff.UpdatedAt),
 		nullableTime(handoff.CompletedAt),
@@ -1208,7 +1556,7 @@ func saveProjectedHandoffTx(ctx context.Context, db execer, handoff Handoff, exp
 	if rowsAffected != 1 {
 		return fmt.Errorf("update handoff %s: optimistic concurrency conflict", handoff.ID)
 	}
-	return nil
+	return saveOwnershipBindingExec(ctx, db, OwnershipBindingFromHandoff(handoff))
 }
 
 func marshalJSON(value any) (string, error) {
@@ -1223,7 +1571,7 @@ func marshalJSON(value any) (string, error) {
 }
 
 func unmarshalJSON(raw string, target any) error {
-	if raw == "" {
+	if raw == "" || raw == "null" {
 		return nil
 	}
 	if err := json.Unmarshal([]byte(raw), target); err != nil {

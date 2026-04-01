@@ -34,11 +34,10 @@ func (m *StateMachine) Apply(event EventRecord) (Handoff, Decision) {
 		if err := validateTransportActor(next, event); err != nil {
 			return next, rejectDecision(next.State, err.Error())
 		}
-		if next.State == StateCreated {
-			next.State = StateDispatched
-			break
+		if next.State != StateCreated {
+			return next, rejectDecision(next.State, "transport_requested requires created")
 		}
-		return next, rejectDecision(next.State, fmt.Sprintf("transport event %s does not advance handoff state", event.Type))
+		next.State = StateDispatched
 	case EventTransportAccepted, EventTransportRejected, EventTransportTimeout, EventTransportDeliveryConfirmed:
 		if err := validateTransportActor(next, event); err != nil {
 			return next, rejectDecision(next.State, err.Error())
@@ -49,50 +48,77 @@ func (m *StateMachine) Apply(event EventRecord) (Handoff, Decision) {
 		if err := validateReceiverActor(next, event); err != nil {
 			return next, rejectDecision(next.State, err.Error())
 		}
-		if next.State == StateReceived || next.State == StateStarted || next.State == StateSubmitted || next.State == StateReviewed || next.State == StateCompleted || next.State == StateFailed || next.State == StateExpired {
-			return next, rejectDecision(next.State, "received cannot rollback or repeat current state")
-		}
 		if next.State != StateDispatched {
 			return next, rejectDecision(next.State, "received requires dispatched")
 		}
 		next.State = StateReceived
 		next.HasReceived = true
-	case EventStarted:
-		if err := validateReceiverActor(next, event); err != nil {
+	case EventClaimed:
+		if err := validateWorkerActor(next, event, "claimed"); err != nil {
 			return next, rejectDecision(next.State, err.Error())
 		}
-		if next.State == StateStarted || next.State == StateSubmitted || next.State == StateReviewed || next.State == StateCompleted || next.State == StateFailed || next.State == StateExpired {
-			return next, rejectDecision(next.State, "started cannot rollback or repeat current state")
-		}
 		if next.State != StateReceived {
-			return next, rejectDecision(next.State, "started requires received")
+			return next, rejectDecision(next.State, "claimed requires received")
+		}
+		next.State = StateClaimed
+		next.HasReceived = true
+		next.HasClaimed = true
+		next.CurrentOwner = event.SubjectActor
+		next.LeaseHolder = event.SubjectActor
+		leasedAt := event.IngestedAt
+		if leasedAt.IsZero() {
+			leasedAt = event.ProducerEventTime
+		}
+		if !leasedAt.IsZero() {
+			next.LeasedAt = &leasedAt
+		}
+	case EventStarted:
+		if err := validateWorkerActor(next, event, "started"); err != nil {
+			return next, rejectDecision(next.State, err.Error())
+		}
+		if next.State != StateClaimed {
+			return next, rejectDecision(next.State, "started requires claimed")
 		}
 		next.State = StateStarted
 		next.HasReceived = true
+		next.HasClaimed = true
 		next.HasStarted = true
-	case EventSubmitted:
-		if err := validateReceiverActor(next, event); err != nil {
+	case EventCheckpointed:
+		if err := validateWorkerActor(next, event, "checkpointed"); err != nil {
 			return next, rejectDecision(next.State, err.Error())
 		}
-		if next.State == StateSubmitted || next.State == StateReviewed || next.State == StateCompleted || next.State == StateFailed || next.State == StateExpired {
-			return next, rejectDecision(next.State, "submitted cannot rollback or repeat current state")
+		if next.State != StateStarted && !(next.State == StateReviewed && next.ReviewDecision == ReviewDecisionRevisionRequired) {
+			return next, rejectDecision(next.State, "checkpointed requires started or revision_required review")
 		}
-		if next.State != StateStarted {
-			return next, rejectDecision(next.State, "submitted requires started")
+		next.State = StateCheckpointed
+		next.HasReceived = true
+		next.HasClaimed = true
+		next.HasStarted = true
+		next.HasCheckpointed = true
+		next.HasSubmitted = false
+		next.HasReviewed = false
+		next.ReviewDecision = ""
+	case EventSubmitted:
+		if err := validateWorkerActor(next, event, "submitted"); err != nil {
+			return next, rejectDecision(next.State, err.Error())
+		}
+		if next.State != StateCheckpointed && !(next.State == StateReviewed && next.ReviewDecision == ReviewDecisionRevisionRequired) {
+			return next, rejectDecision(next.State, "submitted requires checkpointed")
 		}
 		next.State = StateSubmitted
 		next.HasReceived = true
+		next.HasClaimed = true
 		next.HasStarted = true
+		next.HasCheckpointed = true
 		next.HasSubmitted = true
+		next.HasReviewed = false
+		next.ReviewDecision = ""
 		if event.ArtifactCount > 0 {
 			next.ArtifactCount = event.ArtifactCount
 		}
 	case EventReviewed:
 		if err := validateReviewerActor(next, event); err != nil {
 			return next, rejectDecision(next.State, err.Error())
-		}
-		if next.State == StateReviewed || next.State == StateCompleted || next.State == StateFailed || next.State == StateExpired {
-			return next, rejectDecision(next.State, "reviewed cannot rollback or repeat current state")
 		}
 		if next.State != StateSubmitted {
 			return next, rejectDecision(next.State, "reviewed requires submitted")
@@ -102,16 +128,18 @@ func (m *StateMachine) Apply(event EventRecord) (Handoff, Decision) {
 		}
 		next.State = StateReviewed
 		next.HasReceived = true
+		next.HasClaimed = true
 		next.HasStarted = true
+		next.HasCheckpointed = true
 		next.HasSubmitted = true
 		next.HasReviewed = true
 		next.ReviewDecision = event.ReviewDecision
 	case EventCompleted:
-		if err := validateReceiverActor(next, event); err != nil {
+		if err := validateWorkerActor(next, event, "completed"); err != nil {
 			return next, rejectDecision(next.State, err.Error())
 		}
-		if !canTransitionToCompleted(next.State) {
-			return next, rejectDecision(next.State, "completed requires started, submitted, or reviewed state")
+		if !canTransitionToCompleted(next) {
+			return next, rejectDecision(next.State, "completed requires checkpointed, submitted, or reviewed state")
 		}
 		if err := validateCompletionPrereqs(next); err != nil {
 			return next, rejectDecision(next.State, err.Error())
@@ -125,11 +153,11 @@ func (m *StateMachine) Apply(event EventRecord) (Handoff, Decision) {
 			next.CompletedAt = &timestamp
 		}
 	case EventFailed:
-		if err := validateReceiverActor(next, event); err != nil {
+		if err := validateWorkerActor(next, event, "failed"); err != nil {
 			return next, rejectDecision(next.State, err.Error())
 		}
 		if !canTransitionToFailed(next.State) {
-			return next, rejectDecision(next.State, "failed requires dispatched, received, started, submitted, or reviewed")
+			return next, rejectDecision(next.State, "failed requires dispatched, received, claimed, started, checkpointed, submitted, or reviewed")
 		}
 		next.State = StateFailed
 	case EventExpired:
@@ -137,7 +165,7 @@ func (m *StateMachine) Apply(event EventRecord) (Handoff, Decision) {
 			return next, rejectDecision(next.State, err.Error())
 		}
 		if !canTransitionToExpired(next.State) {
-			return next, rejectDecision(next.State, "expired requires dispatched, received, started, or submitted")
+			return next, rejectDecision(next.State, "expired requires dispatched, received, claimed, started, checkpointed, or submitted")
 		}
 		next.State = StateExpired
 	default:
@@ -175,8 +203,14 @@ func validateCompletionPrereqs(h Handoff) error {
 	if !h.HasReceived {
 		return fmt.Errorf("completed requires received")
 	}
+	if !h.HasClaimed {
+		return fmt.Errorf("completed requires claimed")
+	}
 	if !h.HasStarted {
 		return fmt.Errorf("completed requires started")
+	}
+	if !h.HasCheckpointed {
+		return fmt.Errorf("completed requires checkpointed")
 	}
 	if h.requiresSubmitted() && !h.HasSubmitted {
 		return fmt.Errorf("completed requires submitted")
@@ -185,9 +219,6 @@ func validateCompletionPrereqs(h Handoff) error {
 		return fmt.Errorf("completed requires required artifacts")
 	}
 	if h.requiresReview() {
-		if !h.HasSubmitted {
-			return fmt.Errorf("completed requires submitted")
-		}
 		if !h.HasReviewed {
 			return fmt.Errorf("completed requires reviewed")
 		}
@@ -220,10 +251,14 @@ func requiredArtifactCount(h Handoff) int {
 	return 0
 }
 
-func canTransitionToCompleted(state HandoffState) bool {
-	switch state {
-	case StateStarted, StateSubmitted, StateReviewed:
-		return true
+func canTransitionToCompleted(h Handoff) bool {
+	switch h.State {
+	case StateCheckpointed:
+		return !h.requiresSubmitted()
+	case StateSubmitted:
+		return !h.requiresReview()
+	case StateReviewed:
+		return h.requiresReview()
 	default:
 		return false
 	}
@@ -231,7 +266,7 @@ func canTransitionToCompleted(state HandoffState) bool {
 
 func canTransitionToFailed(state HandoffState) bool {
 	switch state {
-	case StateDispatched, StateReceived, StateStarted, StateSubmitted, StateReviewed:
+	case StateDispatched, StateReceived, StateClaimed, StateStarted, StateCheckpointed, StateSubmitted, StateReviewed:
 		return true
 	default:
 		return false
@@ -240,7 +275,7 @@ func canTransitionToFailed(state HandoffState) bool {
 
 func canTransitionToExpired(state HandoffState) bool {
 	switch state {
-	case StateDispatched, StateReceived, StateStarted, StateSubmitted:
+	case StateDispatched, StateReceived, StateClaimed, StateStarted, StateCheckpointed, StateSubmitted:
 		return true
 	default:
 		return false
@@ -278,6 +313,25 @@ func validateReceiverActor(h Handoff, event EventRecord) error {
 		return nil
 	}
 	return fmt.Errorf("event %s requires receiver or workflow controller producer", event.Type)
+}
+
+func validateWorkerActor(h Handoff, event EventRecord, action string) error {
+	if event.SubjectActor.ID == "" || event.SubjectActor.Type == "" {
+		return fmt.Errorf("%s requires explicit subject actor", action)
+	}
+	if event.ProducerActor.ID == "" || event.ProducerActor.Type == "" {
+		return fmt.Errorf("%s requires explicit producer actor", action)
+	}
+	if !sameActor(event.SubjectActor, event.ProducerActor) {
+		return fmt.Errorf("%s requires subject actor to match producer actor", action)
+	}
+	if sameActor(h.LeaseHolder, event.SubjectActor) || sameActor(h.CurrentOwner, event.SubjectActor) || sameActor(h.ReceiverActor, event.SubjectActor) {
+		return nil
+	}
+	if event.ProducerActor.Type == ActorSystem && event.ProducerActor.ID == "workflow-controller" {
+		return nil
+	}
+	return fmt.Errorf("%s requires current owner or lease holder", action)
 }
 
 func validateReviewerActor(h Handoff, event EventRecord) error {
@@ -327,21 +381,42 @@ func hydrateFlags(h Handoff) Handoff {
 	switch h.State {
 	case StateReviewed:
 		h.HasReceived = true
+		h.HasClaimed = true
 		h.HasStarted = true
+		h.HasCheckpointed = true
 		h.HasSubmitted = true
 		h.HasReviewed = true
 	case StateSubmitted:
 		h.HasReceived = true
+		h.HasClaimed = true
 		h.HasStarted = true
+		h.HasCheckpointed = true
 		h.HasSubmitted = true
+	case StateCheckpointed:
+		h.HasReceived = true
+		h.HasClaimed = true
+		h.HasStarted = true
+		h.HasCheckpointed = true
 	case StateStarted:
 		h.HasReceived = true
+		h.HasClaimed = true
 		h.HasStarted = true
+	case StateClaimed:
+		h.HasReceived = true
+		h.HasClaimed = true
 	case StateReceived:
 		h.HasReceived = true
 	case StateCompleted:
 		h.HasReceived = true
+		h.HasClaimed = true
 		h.HasStarted = true
+		h.HasCheckpointed = true
+		if h.requiresSubmitted() || h.HasSubmitted {
+			h.HasSubmitted = true
+		}
+		if h.requiresReview() || h.HasReviewed {
+			h.HasReviewed = true
+		}
 	}
 	return h
 }

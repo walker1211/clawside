@@ -1,13 +1,54 @@
-# Telegram Sender
+# clawside
 
-一个最小可用的本地 Telegram sender service。
+`clawside` 是挂在 OpenClaw 外侧的 truth layer / sidecar。
 
-它提供 `POST /send` HTTP 接口，把消息写入 SQLite 队列，再由后台 worker 调用 Telegram Bot API 发送。调用方只需要投递任务，不直接接触
-bot token。
+它不是 OpenClaw runtime 本体，也不只等于一个 Telegram sender。这个仓库当前承载三类侧车能力：本地 sender、handoff/workflow orchestrator foundations，以及面向 OpenClaw 的 adapter / bridge 基础设施。
+
+## 与 OpenClaw 的关系
+
+- **OpenClaw** 负责会话、消息和 agent runtime
+- **clawside** 负责仓库外侧的确定性数据面，例如 handoff/workflow truth、watch、repair、sender bridge
+- 仓库会继续保留对上游 OpenClaw 的稳定兼容面，例如 `~/.openclaw/openclaw.json`、`--adapter openclaw`、`scripts/openclaw-dispatch`
+
+## Today
+
+当前仓库已经提供或部分提供这些能力：
+
+- **Telegram sender**：本地 HTTP sender service，负责入队、鉴权、幂等和 worker 发送
+- **orchestrator CLI / store / state machine / watch / repair foundations**：提供 handoff、event、workflow、watch、repair 的基础骨架
+- **OpenClaw adapter foundations**：用于把调度和桥接动作接到现有 OpenClaw 兼容入口
+- **A2A delivery bridge skill**：在官方 announce / nested 回传链路不稳定时，为主 agent 提供显式消息投递桥
+
+这表示仓库今天已经不只是 sender，但也**还没有**完整交付成一套可直接安装即用的 MCP server + skill 产品面。
+
+## Target
+
+目标形态是把 `clawside` 作为 **MCP sidecar / truth layer** 接到 OpenClaw 外侧：
+
+1. 先把 clawside 作为外部 MCP server 接入 OpenClaw
+2. 普通用户优先通过 skill 发起和推进任务
+3. skill 再调用底层 truth / orchestration tools
+
+推荐理解为：
+
+- **定位上**：MCP sidecar / truth layer
+- **默认使用路径上**：先装 MCP，再用 skill
+
+这里描述的是目标接入形态，不代表当前仓库已经完整提供 MCP server 与配套 skill 套件。
+
+## 组件概览
+
+- `cmd/config-builder/`：生成 sender 派生配置的 Go CLI
+- `cmd/orchestrator/`：低层 orchestrator 调试 / 操作入口
+- `internal/configbuilder/`：从 OpenClaw 源配置提取 sender 所需最小配置
+- `internal/orchestrator/`：handoff、workflow、event、watch、repair、adapter 基础实现
+- `internal/a2adelivery/`：A2A delivery bridge、轮询与编排逻辑
+- `main.go` + `http_handler.go` + `worker.go`：sender 服务入口、HTTP API 和发送 worker
+- `.claude/skills/openclaw-a2a-delivery/`：OpenClaw A2A delivery skill 定义
 
 ## 快速开始
 
-### 1. 生成派生配置
+### 1. 生成 sender 派生配置
 
 ```bash
 export SENDER_AUTH_KEY='your-local-sender-key'
@@ -26,27 +67,21 @@ export SENDER_AUTH_KEY='your-local-sender-key'
 
 说明：
 
-- `scripts/config_builder.sh` 是稳定入口，内部已切换为 Go builder
+- `scripts/config_builder.sh` 是稳定入口，内部调用 Go builder
 - `configs/config.toml` 是派生文件，不手工维护
 - `configs/config.toml` 包含 bot token 与本地 sender 鉴权 key，已加入 `.gitignore`
 - builder 会把输出文件权限收紧为 `600`
 - `sender_auth_key` 与 Telegram bot token 分离，仅用于本地 `/send` 鉴权
 
-### 2. 启动服务
+### 2. 启动 sender 服务
 
 ```bash
 ./scripts/start.sh
 ```
 
-`scripts/start.sh` 会先检查：
+`scripts/start.sh` 会先检查 `configs/config.toml`；缺失时直接失败并提示先生成配置。
 
-- `configs/config.toml`
-
-缺失时直接失败并提示先生成配置。
-
-sender 运行时只读取 `configs/config.toml`，不再以 `BOT_TOKEN_*` 作为主配置入口。
-
-默认监听：
+sender 默认监听：
 
 ```text
 127.0.0.1:8787
@@ -78,105 +113,50 @@ curl -X POST http://127.0.0.1:8787/send \
 }
 ```
 
-说明：
-
-- `Authorization: Bearer <sender_auth_key>` 是必填的本地鉴权头
-- `idempotency_key` 用于防止同一业务请求重复入队
-- phase-1 幂等语义下，重复使用同一个 `idempotency_key` 时会直接返回已有 job，而不是重复创建新任务
-- 如果同一个 `idempotency_key` 对应的请求 payload 不同，当前只记录 conflict signal 日志并继续返回已有 job，暂不对外返回冲突错误
-
-### 4. 查询服务与任务状态
-
-基础存活检查：
+### 4. 查询 sender 状态
 
 ```bash
 curl http://127.0.0.1:8787/healthz
-```
-
-返回示例：
-
-```json
-{
-  "status": "ok"
-}
-```
-
-readiness 检查：
-
-```bash
 curl http://127.0.0.1:8787/readyz
-```
-
-当 store 可访问、worker 已启动且最近心跳未超出阈值时返回：
-
-```json
-{
-  "status": "ok"
-}
-```
-
-查询任务统计：
-
-```bash
 curl http://127.0.0.1:8787/stats
-```
-
-返回示例：
-
-```json
-{
-  "pending_count": 3,
-  "retry_count": 1,
-  "sending_count": 0,
-  "failed_count": 2,
-  "sent_count": 10,
-  "oldest_pending_age_seconds": 42
-}
-```
-
-按状态分页查询任务列表：
-
-```bash
 curl "http://127.0.0.1:8787/jobs?status=pending&limit=20"
-```
-
-返回示例：
-
-```json
-{
-  "jobs": [
-    {
-      "job_id": 1,
-      "status": "pending",
-      "attempt_count": 0,
-      "created_at": "2026-03-17T10:00:00Z",
-      "updated_at": "2026-03-17T10:00:00Z"
-    }
-  ]
-}
-```
-
-查询单个任务状态：
-
-```bash
 curl http://127.0.0.1:8787/jobs/<job_id>
 ```
 
-返回字段：
+## 低层 CLI / 调试入口
 
-```json
-{
-  "job_id": 1,
-  "status": "pending",
-  "attempt_count": 0,
-  "last_error": "",
-  "created_at": "2026-03-17T10:00:00Z",
-  "updated_at": "2026-03-17T10:00:00Z",
-  "sent_at": null
-}
+如果你需要直接操作当前已存在的底层能力，可以使用这些入口：
+
+### sender / config builder
+
+```bash
+go run ./cmd/config-builder --input ~/.openclaw/openclaw.json --output ./configs/config.toml
+go run .
 ```
 
-## 权限与输入边界
+### orchestrator CLI
+
+```bash
+go run ./cmd/orchestrator handoff create --db ./sender.db --workflow-kind generic --sender agent:planner --receiver agent:writer --task-kind generic_task --intent "write summary"
+go run ./cmd/orchestrator handoff list --db ./sender.db
+go run ./cmd/orchestrator workflow list --db ./sender.db
+go run ./cmd/orchestrator watch run --db ./sender.db
+```
+
+### OpenClaw A2A delivery skill
+
+边界：
+
+- 只支持 **主 agent 显式调用**
+- 通过现有 sender backend 完成投递
+- 不直接调用 Telegram API
+- 不尝试修复官方 announce 链路，只做 sender bridge
+
+相关文件：
+
+- `.claude/skills/openclaw-a2a-delivery/SKILL.md`
+
+## sender 权限与输入边界
 
 sender 在 HTTP 入队前执行权限校验：
 
@@ -190,38 +170,9 @@ chat_id ∈ global_allow_user_ids OR chat_id ∈ bot.allow_user_ids
 - 未命中全局，但命中当前 bot 私有 allowlist，也可发送
 - 两边都没命中，则请求会被拒绝，且不会入队
 
-另外当前 MVP 还做了这些输入收紧：
+另外当前实现还做了这些输入收紧：
 
 - `bot` 必须是服务端已配置的逻辑 bot 名
 - `text` 必须是纯文本，不能为空
 - `text` 超过 Telegram 单条文本限制（4096 字符）会在入队前直接拒绝
 - `max_attempts` 必须在 `1..5` 范围内
-
-## OpenClaw A2A delivery skill
-
-当前仓库还包含一个 **OpenClaw A2A delivery skill**，用于在官方 announce / nested 回传链路不稳定时，给主 agent
-提供一条显式、可观测的消息投递桥。
-
-边界：
-
-- 只支持 **主 agent 显式调用**
-- 通过现有 sender backend 完成投递
-- 不直接调用 Telegram API
-- 不尝试修复官方 announce 链路，只做 sender bridge
-
-相关 skill 文件：
-
-- `.claude/skills/openclaw-a2a-delivery/SKILL.md`
-
-## 相关文件
-
-- `cmd/config-builder/main.go`：Go builder CLI 入口
-- `internal/configbuilder/`：Go builder 核心逻辑
-- `internal/a2adelivery/`：A2A delivery bridge、轮询与编排逻辑
-- `scripts/config_builder.sh`：稳定 shell 入口，调用 Go builder
-- `scripts/start.sh`：检查 `configs/config.toml` 后启动 sender
-- `.claude/skills/openclaw-a2a-delivery/SKILL.md`：A2A delivery skill 定义
-- `config.go`：加载派生配置
-- `http_handler.go`：执行鉴权、bot/allowlist 校验、幂等复用和状态查询
-- `store.go`：持久化 jobs、幂等键与 sending lease 恢复
-- `worker.go`：消费队列、发送 Telegram 消息并处理重试

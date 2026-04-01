@@ -100,8 +100,8 @@ func TestE2EObserverHintAndReopenRepair(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDivergences: %v", err)
 	}
-	if len(divergences) != 1 {
-		t.Fatalf("expected 1 divergence hint, got %d", len(divergences))
+	if len(divergences) != 2 {
+		t.Fatalf("expected 2 divergence hints (transport signal + manual observer hint), got %d", len(divergences))
 	}
 
 	mustRecordAcceptedEvent(t, createSvc, created, EventReceived, created.Handoff.ReceiverActor)
@@ -151,14 +151,15 @@ func TestE2EObserverHintAndReopenRepair(t *testing.T) {
 	if len(watchDeadlines) != 3 {
 		t.Fatalf("expected 3 reopened watches, got %d", len(watchDeadlines))
 	}
-	if watchDeadlines["wait_for_received"] != testNow().Add(5*time.Minute).Format(time.RFC3339Nano) {
-		t.Fatalf("expected wait_for_received deadline to be preserved, got %s", watchDeadlines["wait_for_received"])
+	reopenedAt := testNow().Add(1 * time.Hour)
+	if watchDeadlines["wait_for_received"] != reopenedAt.Add(5*time.Minute).Format(time.RFC3339Nano) {
+		t.Fatalf("expected wait_for_received deadline rebuilt from reopen time, got %s", watchDeadlines["wait_for_received"])
 	}
-	if watchDeadlines["wait_for_started"] != testNow().Add(10*time.Minute).Format(time.RFC3339Nano) {
-		t.Fatalf("expected wait_for_started deadline to be preserved, got %s", watchDeadlines["wait_for_started"])
+	if watchDeadlines["wait_for_started"] != reopenedAt.Add(10*time.Minute).Format(time.RFC3339Nano) {
+		t.Fatalf("expected wait_for_started deadline rebuilt from reopen time, got %s", watchDeadlines["wait_for_started"])
 	}
-	if watchDeadlines["wait_for_progress"] != testNow().Add(15*time.Minute).Format(time.RFC3339Nano) {
-		t.Fatalf("expected wait_for_progress deadline to be preserved, got %s", watchDeadlines["wait_for_progress"])
+	if watchDeadlines["wait_for_progress"] != reopenedAt.Add(15*time.Minute).Format(time.RFC3339Nano) {
+		t.Fatalf("expected wait_for_progress deadline rebuilt from reopen time, got %s", watchDeadlines["wait_for_progress"])
 	}
 
 	effective, err := store.EffectiveEvents(context.Background(), created.Handoff.ID)
@@ -172,7 +173,14 @@ func TestE2EObserverHintAndReopenRepair(t *testing.T) {
 
 func mustRecordSubmittedWithArtifacts(t *testing.T, svc *Service, created CreateHandoffResult, artifactCount int) {
 	t.Helper()
-	_, err := svc.RecordEvent(context.Background(), RecordEventInput{Event: EventRecord{
+	handoff, err := svc.store.LoadHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff before submitted: %v", err)
+	}
+	if handoff.State == StateStarted {
+		mustRecordAcceptedEvent(t, svc, created, EventCheckpointed, created.Handoff.ReceiverActor)
+	}
+	_, err = svc.RecordEvent(context.Background(), RecordEventInput{Event: EventRecord{
 		ID:                NewID("evt"),
 		WorkflowID:        created.Workflow.ID,
 		HandoffID:         created.Handoff.ID,

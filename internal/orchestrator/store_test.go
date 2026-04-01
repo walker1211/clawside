@@ -151,13 +151,14 @@ func TestStorePersistsProducerEventTimeAndIngestedAtSeparately(t *testing.T) {
 	producerEventTime := time.Date(2026, 3, 28, 8, 0, 0, 0, time.UTC)
 	ingestedAt := producerEventTime.Add(5 * time.Minute)
 	event := EventRecord{
-		ID:                "evt_transport",
+		ID:                "evt_received_timestamps",
 		WorkflowID:        workflow.ID,
 		HandoffID:         handoff.ID,
-		Type:              EventTransportAccepted,
+		Type:              EventReceived,
 		ProducerEventTime: producerEventTime,
 		IngestedAt:        ingestedAt,
-		ProducerActor:     ActorRef{Type: ActorSystem, ID: "orchestrator"},
+		ProducerActor:     handoff.ReceiverActor,
+		SubjectActor:      handoff.ReceiverActor,
 		Accepted:          true,
 	}
 

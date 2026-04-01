@@ -119,6 +119,9 @@ func (s *Service) CreateHandoff(ctx context.Context, input CreateHandoffInput) (
 		ReceiverActor:                 input.Receiver,
 		ReviewerActor:                 input.Reviewer,
 		SubjectActor:                  input.Receiver,
+		CurrentOwner:                  input.Receiver,
+		EscalationOwner:               input.Sender,
+		FallbackOwner:                 input.Sender,
 		ArtifactPolicy:                input.ArtifactPolicy,
 		NeedsReview:                   input.NeedsReview,
 		CreatedAt:                     now,
@@ -150,6 +153,10 @@ func (s *Service) CreateHandoff(ctx context.Context, input CreateHandoffInput) (
 }
 
 func (s *Service) RecordEvent(ctx context.Context, input RecordEventInput) (EventDecision, error) {
+	return s.RecordAuthoritativeEvent(ctx, input)
+}
+
+func (s *Service) RecordAuthoritativeEvent(ctx context.Context, input RecordEventInput) (EventDecision, error) {
 	event := input.Event
 	if event.ID == "" {
 		event.ID = NewID("evt")
@@ -161,8 +168,8 @@ func (s *Service) RecordEvent(ctx context.Context, input RecordEventInput) (Even
 		event.IngestedAt = s.now().UTC()
 	}
 
-	if isObservedOnlyEvent(event.Type) {
-		return EventDecision{}, fmt.Errorf("event %s is observer-only and cannot be recorded as authoritative", event.Type)
+	if isObservedSignalEvent(event.Type) {
+		return EventDecision{}, fmt.Errorf("event %s is signal-only and cannot be recorded as authoritative", event.Type)
 	}
 
 	handoff, err := loadHandoffTx(ctx, s.store.db, event.HandoffID)
@@ -172,6 +179,9 @@ func (s *Service) RecordEvent(ctx context.Context, input RecordEventInput) (Even
 
 	_, decision := NewStateMachine(handoff).Apply(event)
 	if !decision.Accepted {
+		if event.WorkflowID == "" {
+			event.WorkflowID = handoff.WorkflowID
+		}
 		event.Accepted = false
 		event.RejectionReason = decision.Reason
 		if err := s.store.RecordRejectedEvent(ctx, event); err != nil {
@@ -263,25 +273,9 @@ func (s *Service) BackfillEvent(ctx context.Context, input BackfillEventInput) (
 		return RepairRecord{}, fmt.Errorf("backfill event rejected: %s", decision.Reason)
 	}
 	event.Accepted = true
-	projected.ID = handoff.ID
-	projected.WorkflowID = handoff.WorkflowID
-	projected.WorkflowKind = handoff.WorkflowKind
-	projected.ParentHandoffID = handoff.ParentHandoffID
-	projected.DependsOnHandoffIDs = append([]string(nil), handoff.DependsOnHandoffIDs...)
-	projected.RequiredForWorkflowCompletion = handoff.RequiredForWorkflowCompletion
-	projected.TaskKind = handoff.TaskKind
-	projected.Intent = handoff.Intent
-	projected.PayloadRef = handoff.PayloadRef
-	projected.DeadlineAt = handoff.DeadlineAt
-	projected.ProducerActor = handoff.ProducerActor
-	projected.SenderActor = handoff.SenderActor
-	projected.ReceiverActor = handoff.ReceiverActor
-	projected.ReviewerActor = handoff.ReviewerActor
-	projected.SubjectActor = handoff.SubjectActor
-	projected.ArtifactPolicy = handoff.ArtifactPolicy
-	projected.NeedsReview = handoff.NeedsReview
-	projected.CreatedAt = handoff.CreatedAt
+	projected = preserveStaticHandoffFields(projected, handoff)
 	projected.UpdatedAt = maxTime(handoff.UpdatedAt, event.IngestedAt)
+	projected.LastAuthoritativeEventID = event.ID
 	if err := insertEventRow(ctx, tx, "accepted_events", event); err != nil {
 		return RepairRecord{}, err
 	}
@@ -306,6 +300,13 @@ func (s *Service) DispatchHandoff(ctx context.Context, input DispatchHandoffInpu
 	}
 	if handoff.State != StateCreated {
 		return DispatchHandoffResult{}, fmt.Errorf("dispatch requires created handoff state")
+	}
+	if handoff.DeliveryTargetRef == "" && input.Target != "" {
+		handoff.DeliveryTargetRef = input.Target
+		handoff.UpdatedAt = now
+		if err := s.store.SaveHandoff(ctx, handoff); err != nil {
+			return DispatchHandoffResult{}, err
+		}
 	}
 	attempt := DispatchAttempt{
 		ID:           NewID("attempt"),
@@ -366,7 +367,8 @@ func (s *Service) DispatchHandoff(ctx context.Context, input DispatchHandoffInpu
 			ProducerEventTime: attempt.FinishedAt,
 			IngestedAt:        attempt.FinishedAt,
 			ProducerActor:     ActorRef{Type: ActorSystem, ID: "adapter"},
-			Accepted:          true,
+			Accepted:          false,
+			RejectionReason:   "observer_hint",
 			AttemptID:         attempt.ID,
 		}
 		switch adapterResult.TransportStatus {
@@ -377,7 +379,7 @@ func (s *Service) DispatchHandoff(ctx context.Context, input DispatchHandoffInpu
 		default:
 			transportResultEvent.Type = EventTransportRejected
 		}
-		if _, err := s.store.RecordAcceptedEvent(ctx, transportResultEvent); err != nil {
+		if err := s.RecordObservedSignal(ctx, RecordObserverHintInput{Event: transportResultEvent}); err != nil {
 			return DispatchHandoffResult{}, err
 		}
 		events = append(events, transportResultEvent)
@@ -386,6 +388,10 @@ func (s *Service) DispatchHandoff(ctx context.Context, input DispatchHandoffInpu
 }
 
 func (s *Service) RecordObserverHint(ctx context.Context, input RecordObserverHintInput) error {
+	return s.RecordObservedSignal(ctx, input)
+}
+
+func (s *Service) RecordObservedSignal(ctx context.Context, input RecordObserverHintInput) error {
 	if input.Hint != nil {
 		hint := *input.Hint
 		if hint.ID == "" {
@@ -404,7 +410,16 @@ func (s *Service) RecordObserverHint(ctx context.Context, input RecordObserverHi
 		if hint.WorkflowID == "" {
 			hint.WorkflowID = handoff.WorkflowID
 		}
-		return s.store.SaveDivergence(ctx, hint)
+		signal := ObservedSignal{
+			ID:         NewID("signal"),
+			HandoffID:  hint.HandoffID,
+			WorkflowID: hint.WorkflowID,
+			Kind:       ObservedSignalKind(hint.SignalType),
+			Reason:     hint.SignalType,
+			Details:    hint.Details,
+			ObservedAt: hint.CreatedAt,
+		}
+		return s.persistObservedSignal(ctx, handoff, nil, &hint, signal)
 	}
 
 	event := input.Event
@@ -420,12 +435,79 @@ func (s *Service) RecordObserverHint(ctx context.Context, input RecordObserverHi
 	if event.ProducerActor.Type != ActorSystem {
 		return fmt.Errorf("observer hint %s requires system actor", event.Type)
 	}
-	if !isObservedOnlyEvent(event.Type) {
+	signalKind, ok := observedSignalKindForEvent(event.Type)
+	if !ok {
 		return fmt.Errorf("observer hint %s requires observer-only event type", event.Type)
+	}
+	handoff, err := s.store.LoadHandoff(ctx, event.HandoffID)
+	if err != nil {
+		return err
+	}
+	if event.WorkflowID == "" {
+		event.WorkflowID = handoff.WorkflowID
+	}
+	if err := validateEventWorkflowMatch(handoff, event); err != nil {
+		return err
 	}
 	event.Accepted = false
 	event.RejectionReason = "observer_hint"
-	return s.store.RecordRejectedEvent(ctx, event)
+	signal := ObservedSignal{
+		ID:         NewID("signal"),
+		HandoffID:  event.HandoffID,
+		WorkflowID: event.WorkflowID,
+		Kind:       signalKind,
+		Reason:     string(event.Type),
+		EventID:    event.ID,
+		AttemptID:  event.AttemptID,
+		Details:    event.Payload,
+		ObservedAt: event.IngestedAt,
+	}
+	var hint *ObserverHint
+	if event.Type == EventTransportAccepted || event.Type == EventTransportTimeout || event.Type == EventTransportRejected || event.Type == EventTransportDeliveryConfirmed {
+		hint = &ObserverHint{
+			ID:         NewID("div"),
+			HandoffID:  event.HandoffID,
+			WorkflowID: event.WorkflowID,
+			SignalType: string(event.Type),
+			Details: map[string]any{
+				"attempt_id": event.AttemptID,
+				"event_id":   event.ID,
+			},
+			CreatedAt: event.IngestedAt,
+		}
+	}
+	return s.persistObservedSignal(ctx, handoff, &event, hint, signal)
+}
+
+func (s *Service) persistObservedSignal(ctx context.Context, handoff Handoff, auditEvent *EventRecord, hint *ObserverHint, signal ObservedSignal) error {
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin observed signal tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if auditEvent != nil {
+		if err := insertEventRow(ctx, tx, "event_ingestion_audit", *auditEvent); err != nil {
+			return err
+		}
+	}
+	if hint != nil {
+		if err := saveDivergenceExec(ctx, tx, *hint); err != nil {
+			return err
+		}
+	}
+	if err := appendObservedSignalExec(ctx, tx, signal); err != nil {
+		return err
+	}
+	for _, candidate := range BuildRepairCandidates(handoff, signal, signal.ObservedAt) {
+		if err := appendRepairCandidateExec(ctx, tx, candidate); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit observed signal tx: %w", err)
+	}
+	return nil
 }
 
 func (s *Service) ReopenHandoff(ctx context.Context, handoffID, reason string, actor ActorRef) (RepairRecord, error) {
@@ -546,13 +628,29 @@ func progressEventForTask(h Handoff) EventType {
 	return EventCompleted
 }
 
-func isObservedOnlyEvent(eventType EventType) bool {
-	switch eventType {
-	case EventWatchTriggered, EventReminderSent, EventEscalationOpened, EventEscalationResolved:
-		return true
-	default:
-		return false
-	}
+func preserveStaticHandoffFields(projected, original Handoff) Handoff {
+	projected.ID = original.ID
+	projected.WorkflowID = original.WorkflowID
+	projected.WorkflowKind = original.WorkflowKind
+	projected.ParentHandoffID = original.ParentHandoffID
+	projected.DependsOnHandoffIDs = append([]string(nil), original.DependsOnHandoffIDs...)
+	projected.RequiredForWorkflowCompletion = original.RequiredForWorkflowCompletion
+	projected.TaskKind = original.TaskKind
+	projected.Intent = original.Intent
+	projected.PayloadRef = original.PayloadRef
+	projected.DeliveryTargetRef = original.DeliveryTargetRef
+	projected.DeadlineAt = original.DeadlineAt
+	projected.ProducerActor = original.ProducerActor
+	projected.SenderActor = original.SenderActor
+	projected.ReceiverActor = original.ReceiverActor
+	projected.ReviewerActor = original.ReviewerActor
+	projected.SubjectActor = original.SubjectActor
+	projected.EscalationOwner = original.EscalationOwner
+	projected.FallbackOwner = original.FallbackOwner
+	projected.ArtifactPolicy = original.ArtifactPolicy
+	projected.NeedsReview = original.NeedsReview
+	projected.CreatedAt = original.CreatedAt
+	return projected
 }
 
 func (s *Service) lookupAcceptedEventHandoffID(ctx context.Context, eventID string) (string, error) {
@@ -572,11 +670,18 @@ func (s *Service) replayHandoffProjectionTx(ctx context.Context, tx queryerExece
 	base.State = StateCreated
 	base.StateVersion = 0
 	base.ReviewDecision = ""
+	base.CurrentOwner = ActorRef{}
+	base.LeaseHolder = ActorRef{}
+	base.LeasedAt = nil
+	base.LeaseExpiresAt = nil
 	base.HasReceived = false
+	base.HasClaimed = false
 	base.HasStarted = false
+	base.HasCheckpointed = false
 	base.HasSubmitted = false
 	base.HasReviewed = false
 	base.ArtifactCount = 0
+	base.LastAuthoritativeEventID = ""
 	base.CompletedAt = nil
 	base.UpdatedAt = s.now().UTC()
 
@@ -612,30 +717,16 @@ func (s *Service) replayHandoffProjectionTx(ctx context.Context, tx queryerExece
 	}
 
 	projected, _ := Replay(base, events)
-	projected.ID = handoff.ID
-	projected.WorkflowID = handoff.WorkflowID
-	projected.WorkflowKind = handoff.WorkflowKind
-	projected.ParentHandoffID = handoff.ParentHandoffID
-	projected.DependsOnHandoffIDs = append([]string(nil), handoff.DependsOnHandoffIDs...)
-	projected.RequiredForWorkflowCompletion = handoff.RequiredForWorkflowCompletion
-	projected.TaskKind = handoff.TaskKind
-	projected.Intent = handoff.Intent
-	projected.PayloadRef = handoff.PayloadRef
-	projected.DeadlineAt = handoff.DeadlineAt
-	projected.ProducerActor = handoff.ProducerActor
-	projected.SenderActor = handoff.SenderActor
-	projected.ReceiverActor = handoff.ReceiverActor
-	projected.ReviewerActor = handoff.ReviewerActor
-	projected.SubjectActor = handoff.SubjectActor
-	projected.ArtifactPolicy = handoff.ArtifactPolicy
-	projected.NeedsReview = handoff.NeedsReview
-	projected.CreatedAt = handoff.CreatedAt
+	projected = preserveStaticHandoffFields(projected, handoff)
+	if len(events) > 0 {
+		projected.LastAuthoritativeEventID = events[len(events)-1].ID
+	}
 	projected.UpdatedAt = s.now().UTC()
 
 	if err := saveProjectedHandoffTx(ctx, tx, projected, handoff.StateVersion); err != nil {
 		return err
 	}
-	if err := replaceWatchesExec(ctx, tx, handoffID, CreateDefaultWatches(projected, projected.CreatedAt)); err != nil {
+	if err := replaceWatchesExec(ctx, tx, handoffID, CreateDefaultWatches(projected, s.now().UTC())); err != nil {
 		return err
 	}
 	return nil

@@ -32,6 +32,15 @@ func TestServiceCreateHandoffCreatesWorkflowAndWatches(t *testing.T) {
 	if result.Handoff.State != StateCreated {
 		t.Fatalf("expected created initial handoff state, got %s", result.Handoff.State)
 	}
+	if !sameActor(result.Handoff.CurrentOwner, result.Handoff.ReceiverActor) {
+		t.Fatalf("expected current owner initialized to receiver, got %+v", result.Handoff.CurrentOwner)
+	}
+	if !sameActor(result.Handoff.EscalationOwner, result.Handoff.SenderActor) {
+		t.Fatalf("expected escalation owner initialized to sender, got %+v", result.Handoff.EscalationOwner)
+	}
+	if !sameActor(result.Handoff.FallbackOwner, result.Handoff.SenderActor) {
+		t.Fatalf("expected fallback owner initialized to sender, got %+v", result.Handoff.FallbackOwner)
+	}
 }
 
 func TestServiceDispatchHandoffRecordsAttemptAndTransportEvents(t *testing.T) {
@@ -86,6 +95,43 @@ func TestServiceDispatchHandoffRejectsNonCreatedState(t *testing.T) {
 	}
 }
 
+func TestServiceRecordAuthoritativeEventDefaultsWorkflowIDBeforeRejectedAudit(t *testing.T) {
+	svc := newTestService(t)
+	created := mustCreateTestHandoff(t, svc)
+
+	_, err := svc.RecordAuthoritativeEvent(context.Background(), RecordEventInput{Event: EventRecord{
+		ID:                NewID("evt"),
+		HandoffID:         created.Handoff.ID,
+		Type:              EventStarted,
+		ProducerEventTime: testNow(),
+		IngestedAt:        testNow(),
+		SubjectActor:      created.Handoff.ReceiverActor,
+		ProducerActor:     created.Handoff.ReceiverActor,
+	}})
+	if err == nil {
+		t.Fatalf("expected invalid transition to be rejected")
+	}
+	if err.Error() != "started requires claimed" {
+		t.Fatalf("expected transition rejection, got %v", err)
+	}
+
+	var workflowID string
+	var accepted bool
+	var rejectionReason string
+	if err := svc.store.db.QueryRow(`SELECT workflow_id, accepted, rejection_reason FROM event_ingestion_audit WHERE handoff_id = ? ORDER BY ingested_at DESC, id DESC LIMIT 1`, created.Handoff.ID).Scan(&workflowID, &accepted, &rejectionReason); err != nil {
+		t.Fatalf("query rejected audit row: %v", err)
+	}
+	if workflowID != created.Workflow.ID {
+		t.Fatalf("expected rejected audit workflow_id %q, got %q", created.Workflow.ID, workflowID)
+	}
+	if accepted {
+		t.Fatalf("expected rejected audit row to have accepted=false")
+	}
+	if rejectionReason != "started requires claimed" {
+		t.Fatalf("expected rejection reason persisted, got %q", rejectionReason)
+	}
+}
+
 func TestServiceDispatchHandoffWithOpenClawAdapterRecordsTransportAccepted(t *testing.T) {
 	runner := &captureRunner{stdout: []byte(`{"status":"accepted","external_id":"msg-1"}`)}
 	svc := newTestService(t)
@@ -127,6 +173,26 @@ func TestServiceDispatchHandoffWithOpenClawAdapterRecordsTransportAccepted(t *te
 	}
 	if attempts[0].ExternalID != "msg-1" {
 		t.Fatalf("expected persisted external id msg-1, got %s", attempts[0].ExternalID)
+	}
+	signals, err := svc.store.ListObservedSignalsByHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("ListObservedSignalsByHandoff: %v", err)
+	}
+	if len(signals) != 1 {
+		t.Fatalf("expected 1 observed signal for transport result, got %d", len(signals))
+	}
+	if signals[0].Kind != ObservedSignalTransportAccepted {
+		t.Fatalf("expected transport_accepted observed signal, got %s", signals[0].Kind)
+	}
+	candidates, err := svc.store.ListRepairCandidatesByHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("ListRepairCandidatesByHandoff: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 repair candidate for accepted transport without progress, got %d", len(candidates))
+	}
+	if candidates[0].Reason != RepairCandidateMissingAuthoritativeProgress {
+		t.Fatalf("expected missing_authoritative_progress candidate, got %s", candidates[0].Reason)
 	}
 }
 
@@ -434,6 +500,28 @@ func TestServiceRecordObserverHintWritesAuditEntry(t *testing.T) {
 	if auditCount != 1 {
 		t.Fatalf("expected 1 audit row for observer hint, got %d", auditCount)
 	}
+
+	signals, err := svc.store.ListObservedSignalsByHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("ListObservedSignalsByHandoff: %v", err)
+	}
+	if len(signals) != 1 {
+		t.Fatalf("expected 1 observed signal, got %d", len(signals))
+	}
+	if signals[0].Kind != ObservedSignalWatchTriggered {
+		t.Fatalf("expected watch_triggered observed signal, got %s", signals[0].Kind)
+	}
+
+	candidates, err := svc.store.ListRepairCandidatesByHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("ListRepairCandidatesByHandoff: %v", err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 repair candidate, got %d", len(candidates))
+	}
+	if candidates[0].Reason != RepairCandidateWatchdogEscalation {
+		t.Fatalf("expected watchdog escalation repair candidate, got %s", candidates[0].Reason)
+	}
 }
 
 func TestServiceRecordObserverHintRejectsAuthoritativeEventType(t *testing.T) {
@@ -568,7 +656,150 @@ func TestServiceReopenHandoffMakesEffectiveEventsEmpty(t *testing.T) {
 	}
 }
 
-func TestServiceInvalidateStartedEventReplaysToReceived(t *testing.T) {
+func TestServiceDispatchDoesNotOverwriteDeliveryTargetRef(t *testing.T) {
+	store, _ := newTestStore(t)
+	svc := NewService(store, func() time.Time { return testNow() })
+	created := mustCreateTestHandoff(t, svc)
+
+	handoff, err := store.LoadHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff before dispatch: %v", err)
+	}
+	handoff.DeliveryTargetRef = "agent:writer/session-1"
+	if err := store.SaveHandoff(context.Background(), handoff); err != nil {
+		t.Fatalf("SaveHandoff before dispatch: %v", err)
+	}
+
+	if _, err := svc.DispatchHandoff(context.Background(), DispatchHandoffInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("DispatchHandoff: %v", err)
+	}
+
+	stored, err := store.LoadHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff after dispatch: %v", err)
+	}
+	if stored.DeliveryTargetRef != "agent:writer/session-1" {
+		t.Fatalf("expected dispatch not to overwrite delivery target ref, got %q", stored.DeliveryTargetRef)
+	}
+
+	attempts, err := store.ListDispatchAttempts(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("ListDispatchAttempts: %v", err)
+	}
+	if len(attempts) != 1 {
+		t.Fatalf("expected 1 dispatch attempt, got %d", len(attempts))
+	}
+	if attempts[0].Target != "agent:writer" {
+		t.Fatalf("expected dispatch attempt target recorded, got %q", attempts[0].Target)
+	}
+}
+
+func TestServiceRepairPathsPreserveStaticMetadata(t *testing.T) {
+	store, _ := newTestStore(t)
+	createSvc := NewService(store, func() time.Time { return testNow() })
+	created := mustCreateTestHandoff(t, createSvc)
+
+	handoff, err := store.LoadHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff before metadata seed: %v", err)
+	}
+	deadlineAt := testNow().Add(2 * time.Hour)
+	leaseExpiresAt := testNow().Add(30 * time.Minute)
+	handoff.PayloadRef = "artifact://payload-1"
+	handoff.DeliveryTargetRef = "agent:writer/session-1"
+	handoff.EscalationOwner = ActorRef{Type: ActorUser, ID: "manager"}
+	handoff.FallbackOwner = ActorRef{Type: ActorAgent, ID: "backup-writer"}
+	handoff.DeadlineAt = &deadlineAt
+	handoff.LeaseExpiresAt = &leaseExpiresAt
+	if err := store.SaveHandoff(context.Background(), handoff); err != nil {
+		t.Fatalf("SaveHandoff metadata seed: %v", err)
+	}
+
+	received := mustRecordAcceptedEvent(t, createSvc, created, EventReceived, created.Handoff.ReceiverActor)
+	mustRecordAcceptedEvent(t, createSvc, created, EventStarted, created.Handoff.ReceiverActor)
+	mustRecordAcceptedEvent(t, createSvc, created, EventCompleted, created.Handoff.ReceiverActor)
+
+	reopenSvc := NewService(store, func() time.Time { return testNow().Add(1 * time.Hour) })
+	if _, err := reopenSvc.ReopenHandoff(context.Background(), created.Handoff.ID, "retry work", ActorRef{Type: ActorUser, ID: "operator"}); err != nil {
+		t.Fatalf("ReopenHandoff: %v", err)
+	}
+	storedAfterReopen, err := store.LoadHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff after reopen: %v", err)
+	}
+	if storedAfterReopen.PayloadRef != handoff.PayloadRef {
+		t.Fatalf("expected payload ref preserved after reopen, got %q", storedAfterReopen.PayloadRef)
+	}
+	if storedAfterReopen.DeliveryTargetRef != handoff.DeliveryTargetRef {
+		t.Fatalf("expected delivery target preserved after reopen, got %q", storedAfterReopen.DeliveryTargetRef)
+	}
+	if !sameActor(storedAfterReopen.EscalationOwner, handoff.EscalationOwner) {
+		t.Fatalf("expected escalation owner preserved after reopen, got %+v", storedAfterReopen.EscalationOwner)
+	}
+	if !sameActor(storedAfterReopen.FallbackOwner, handoff.FallbackOwner) {
+		t.Fatalf("expected fallback owner preserved after reopen, got %+v", storedAfterReopen.FallbackOwner)
+	}
+	if storedAfterReopen.DeadlineAt == nil || !storedAfterReopen.DeadlineAt.Equal(*handoff.DeadlineAt) {
+		t.Fatalf("expected deadline preserved after reopen")
+	}
+	if storedAfterReopen.LeaseExpiresAt != nil {
+		t.Fatalf("expected lease expiry cleared after reopen")
+	}
+	if storedAfterReopen.CurrentOwner != (ActorRef{}) {
+		t.Fatalf("expected current owner cleared after reopen, got %+v", storedAfterReopen.CurrentOwner)
+	}
+	if storedAfterReopen.LeaseHolder != (ActorRef{}) {
+		t.Fatalf("expected lease holder cleared after reopen, got %+v", storedAfterReopen.LeaseHolder)
+	}
+
+	mustDispatchTestHandoff(t, reopenSvc, created.Handoff.ID)
+
+	repairSvc := NewService(store, func() time.Time { return testNow().Add(2 * time.Hour) })
+	if _, err := repairSvc.BackfillEvent(context.Background(), BackfillEventInput{
+		Event: EventRecord{
+			ID:                NewID("evt"),
+			WorkflowID:        created.Workflow.ID,
+			HandoffID:         created.Handoff.ID,
+			Type:              EventReceived,
+			ProducerEventTime: testNow().Add(2 * time.Hour),
+			IngestedAt:        testNow().Add(2 * time.Hour),
+			SubjectActor:      created.Handoff.ReceiverActor,
+			ProducerActor:     created.Handoff.ReceiverActor,
+		},
+		Reason:      "rebuild received",
+		RequestedBy: ActorRef{Type: ActorUser, ID: "operator"},
+	}); err != nil {
+		t.Fatalf("BackfillEvent: %v", err)
+	}
+	storedAfterBackfill, err := store.LoadHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff after backfill: %v", err)
+	}
+	if storedAfterBackfill.PayloadRef != handoff.PayloadRef {
+		t.Fatalf("expected payload ref preserved after backfill, got %q", storedAfterBackfill.PayloadRef)
+	}
+	if storedAfterBackfill.DeliveryTargetRef != handoff.DeliveryTargetRef {
+		t.Fatalf("expected delivery target preserved after backfill, got %q", storedAfterBackfill.DeliveryTargetRef)
+	}
+	if !sameActor(storedAfterBackfill.EscalationOwner, handoff.EscalationOwner) {
+		t.Fatalf("expected escalation owner preserved after backfill, got %+v", storedAfterBackfill.EscalationOwner)
+	}
+	if !sameActor(storedAfterBackfill.FallbackOwner, handoff.FallbackOwner) {
+		t.Fatalf("expected fallback owner preserved after backfill, got %+v", storedAfterBackfill.FallbackOwner)
+	}
+	if storedAfterBackfill.LastAuthoritativeEventID == received.ID {
+		t.Fatalf("expected last authoritative event id to move forward after backfill")
+	}
+	if storedAfterBackfill.LastAuthoritativeEventID == "" {
+		t.Fatalf("expected last authoritative event id after backfill")
+	}
+}
+
+func TestServiceInvalidateStartedEventReplaysToClaimed(t *testing.T) {
 	svc := newTestService(t)
 	created := mustCreateTestHandoff(t, svc)
 	mustRecordAcceptedEvent(t, svc, created, EventReceived, created.Handoff.ReceiverActor)
@@ -583,8 +814,8 @@ func TestServiceInvalidateStartedEventReplaysToReceived(t *testing.T) {
 	}
 
 	stored := loadHandoffRow(t, svc.store.db, created.Handoff.ID)
-	if stored.State != StateReceived {
-		t.Fatalf("expected replayed state received, got %s", stored.State)
+	if stored.State != StateClaimed {
+		t.Fatalf("expected replayed state claimed, got %s", stored.State)
 	}
 
 	var watchCount int
@@ -616,9 +847,9 @@ func TestServiceInvalidateEventPreservesWatchDeadlines(t *testing.T) {
 	if err := store.db.QueryRow(`SELECT deadline_at FROM watches WHERE handoff_id = ? AND watch_type = 'wait_for_started'`, created.Handoff.ID).Scan(&deadlineAt); err != nil {
 		t.Fatalf("load watch deadline: %v", err)
 	}
-	want := testNow().Add(10 * time.Minute).Format(time.RFC3339Nano)
+	want := testNow().Add(1*time.Hour + 10*time.Minute).Format(time.RFC3339Nano)
 	if deadlineAt != want {
-		t.Fatalf("expected preserved watch deadline %s, got %s", want, deadlineAt)
+		t.Fatalf("expected rebuilt watch deadline %s, got %s", want, deadlineAt)
 	}
 }
 
@@ -712,6 +943,42 @@ func mustRecordAcceptedEvent(t *testing.T, svc *Service, created CreateHandoffRe
 	}
 	if handoff.State == StateCreated && eventType != EventTransportRequested {
 		mustDispatchTestHandoff(t, svc, created.Handoff.ID)
+	}
+
+	if eventType == EventStarted {
+		mustRecordAcceptedEvent(t, svc, created, EventClaimed, subject)
+	}
+	if eventType == EventSubmitted {
+		handoff, err := svc.store.LoadHandoff(context.Background(), created.Handoff.ID)
+		if err != nil {
+			t.Fatalf("LoadHandoff before submitted: %v", err)
+		}
+		if handoff.State == StateStarted {
+			mustRecordAcceptedEvent(t, svc, created, EventCheckpointed, subject)
+		}
+	}
+	if eventType == EventCompleted {
+		handoff, err := svc.store.LoadHandoff(context.Background(), created.Handoff.ID)
+		if err != nil {
+			t.Fatalf("LoadHandoff before completed: %v", err)
+		}
+		if handoff.State == StateStarted {
+			mustRecordAcceptedEvent(t, svc, created, EventCheckpointed, subject)
+			handoff, err = svc.store.LoadHandoff(context.Background(), created.Handoff.ID)
+			if err != nil {
+				t.Fatalf("ReloadHandoff before completed: %v", err)
+			}
+		}
+		if handoff.State == StateCheckpointed {
+			mustRecordAcceptedEvent(t, svc, created, EventSubmitted, subject)
+			handoff, err = svc.store.LoadHandoff(context.Background(), created.Handoff.ID)
+			if err != nil {
+				t.Fatalf("ReloadHandoff after submitted: %v", err)
+			}
+		}
+		if handoff.NeedsReview && handoff.State == StateSubmitted {
+			mustRecordAcceptedEvent(t, svc, created, EventReviewed, handoff.ReviewerActor)
+		}
 	}
 
 	event := EventRecord{

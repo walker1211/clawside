@@ -6,7 +6,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"openclaw/internal/deliveryrules"
+	"github.com/walker1211/clawside/internal/deliveryrules"
 )
 
 type SendCommand struct {

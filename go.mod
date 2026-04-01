@@ -1,4 +1,4 @@
-module openclaw
+module github.com/walker1211/clawside
 
 go 1.25.0
 

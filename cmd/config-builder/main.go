@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"openclaw/internal/configbuilder"
+	"github.com/walker1211/clawside/internal/configbuilder"
 )
 
 const (

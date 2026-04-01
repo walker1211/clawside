@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"openclaw/internal/deliveryrules"
+	"github.com/walker1211/clawside/internal/deliveryrules"
 )
 
 const (

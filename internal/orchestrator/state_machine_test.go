@@ -365,7 +365,15 @@ func TestReplayUsesIngestedAtBeforeProducerEventTime(t *testing.T) {
 			ID:                "evt_late_received",
 			Type:              EventReceived,
 			ProducerEventTime: now,
-			IngestedAt:        now.Add(2 * time.Minute),
+			IngestedAt:        now.Add(3 * time.Minute),
+			SubjectActor:      ActorRef{Type: ActorAgent, ID: "writer"},
+			ProducerActor:     ActorRef{Type: ActorAgent, ID: "writer"},
+		},
+		{
+			ID:                "evt_claimed",
+			Type:              EventClaimed,
+			ProducerEventTime: now.Add(5 * time.Minute),
+			IngestedAt:        now.Add(1 * time.Minute),
 			SubjectActor:      ActorRef{Type: ActorAgent, ID: "writer"},
 			ProducerActor:     ActorRef{Type: ActorAgent, ID: "writer"},
 		},
@@ -373,7 +381,7 @@ func TestReplayUsesIngestedAtBeforeProducerEventTime(t *testing.T) {
 			ID:                "evt_started",
 			Type:              EventStarted,
 			ProducerEventTime: now.Add(10 * time.Minute),
-			IngestedAt:        now.Add(1 * time.Minute),
+			IngestedAt:        now.Add(2 * time.Minute),
 			SubjectActor:      ActorRef{Type: ActorAgent, ID: "writer"},
 			ProducerActor:     ActorRef{Type: ActorAgent, ID: "writer"},
 		},
@@ -383,13 +391,16 @@ func TestReplayUsesIngestedAtBeforeProducerEventTime(t *testing.T) {
 	if projected.State != StateStarted {
 		t.Fatalf("expected started after replay, got %s", projected.State)
 	}
-	if len(decisions) != 2 {
-		t.Fatalf("expected 2 decisions, got %d", len(decisions))
+	if len(decisions) != 3 {
+		t.Fatalf("expected 3 decisions, got %d", len(decisions))
 	}
-	if !decisions[0].Accepted {
-		t.Fatalf("expected started event to be applied first by ingested time")
+	if !decisions[0].Accepted || decisions[0].Next != StateClaimed {
+		t.Fatalf("expected claimed event to be applied first by ingested time")
 	}
-	if decisions[1].Accepted {
+	if !decisions[1].Accepted || decisions[1].Next != StateStarted {
+		t.Fatalf("expected started event to be applied second by ingested time")
+	}
+	if decisions[2].Accepted {
 		t.Fatalf("expected later-ingested received event to be rejected as rollback")
 	}
 }

@@ -9,7 +9,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"openclaw/internal/deliveryrules"
+	"github.com/walker1211/clawside/internal/deliveryrules"
 )
 
 func RunA2ADeliveryBridge(ctx context.Context, client *SenderClient, input SkillInput, runtimeContext any) (DeliveryResult, error) {

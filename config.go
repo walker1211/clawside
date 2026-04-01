@@ -11,7 +11,7 @@ import (
 
 	toml "github.com/pelletier/go-toml/v2"
 
-	"openclaw/internal/deliveryrules"
+	"github.com/walker1211/clawside/internal/deliveryrules"
 )
 
 type Config struct {
