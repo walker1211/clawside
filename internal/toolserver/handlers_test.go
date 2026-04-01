@@ -103,6 +103,36 @@ func TestHandleWorkflowStatusReturnsProjectedWorkflow(t *testing.T) {
 	}
 }
 
+func TestHandleWorkflowListReturnsAllWorkflows(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	if _, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	}); err != nil {
+		t.Fatalf("HandleHandoffCreate #1: %v", err)
+	}
+	if _, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "researcher"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "collect notes",
+	}); err != nil {
+		t.Fatalf("HandleHandoffCreate #2: %v", err)
+	}
+
+	result, err := h.HandleWorkflowList(context.Background())
+	if err != nil {
+		t.Fatalf("HandleWorkflowList: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 workflows, got %d", len(result))
+	}
+}
+
 func TestHandleHandoffProgressAppliesProtocolAction(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{

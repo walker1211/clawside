@@ -67,6 +67,22 @@ type WorkflowStatusInput struct {
 	WorkflowID string `json:"workflow_id"`
 }
 
+func (h *Handlers) HandleWorkflowList(ctx context.Context) ([]orchestrator.WorkflowView, error) {
+	workflows, err := h.store.ListWorkflows(ctx)
+	if err != nil {
+		return nil, err
+	}
+	views := make([]orchestrator.WorkflowView, 0, len(workflows))
+	for _, workflow := range workflows {
+		view, err := h.svc.WorkflowStatus(ctx, workflow.ID)
+		if err != nil {
+			return nil, err
+		}
+		views = append(views, view)
+	}
+	return views, nil
+}
+
 type A2ADeliverInput struct {
 	TargetAgent             string  `json:"target_agent"`
 	Text                    string  `json:"text"`

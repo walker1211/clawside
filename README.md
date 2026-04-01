@@ -178,6 +178,84 @@ go run ./cmd/a2a-delivery \
 - `cmd/a2a-delivery/main.go`
 - `.claude/skills/openclaw-a2a-delivery/SKILL.md`
 
+### OpenClaw MCP / tool server
+
+如果你希望让 OpenClaw 直接消费 clawside 的最小 tool surface，可以启动新的 stdio MCP server：
+
+```bash
+go run ./cmd/clawside-mcp \
+  --db ./sender.db \
+  --sender-base-url http://127.0.0.1:8787 \
+  --sender-auth-key "$SENDER_AUTH_KEY"
+```
+
+当前 v1 暴露的 tools：
+
+- `handoff_create`
+- `handoff_get`
+- `handoff_progress`
+- `workflow_status`
+- `workflow_list`
+- `a2a_deliver`
+
+推荐理解：
+
+- `handoff_create`：创建一个新的 handoff / workflow 起点
+- `handoff_get`：查询单个 handoff 的当前 truth 与 timeline
+- `handoff_progress`：推进 handoff 协议动作（如 `receive` / `claim` / `start` / `submit` / `approve` / `complete`）
+- `workflow_status`：查询单个 workflow 聚合视图
+- `workflow_list`：列出当前所有 workflow 及其 projected handoffs
+- `a2a_deliver`：通过现有 sender bridge 做真实 outward delivery
+
+边界：
+
+- 这是一个 **最小可用 v1 tool surface**，不是完整 truth-plane MCP 产品面
+- repair / backfill / invalidate / ownership / watch 编辑仍保留在低层 `cmd/orchestrator` 调试入口
+- `a2a_deliver` 依赖本地 sender sidecar 正常运行
+- `handoff_*` / `workflow_status` 依赖 `--db` 指向同一个 sqlite truth store
+
+如果要在 OpenClaw 中接入，核心就是把它作为一个 stdio MCP server 注册，并让 OpenClaw 通过该 server 调用上述 tools。
+
+一个更稳定的本地启动方式是先使用包装脚本：
+
+```bash
+./scripts/start_mcp.sh --db ./sender.db
+```
+
+如果要在 OpenClaw 中注册，也更推荐把 stdio server 指向这个脚本。一个最小配置思路可以理解为：在 OpenClaw 的 MCP servers 配置里注册一个 stdio server，命令指向当前仓库的 `./scripts/start_mcp.sh`，并把 truth store 与 sender 参数一起传进去。例如：
+
+```json
+{
+  "mcpServers": {
+    "clawside": {
+      "command": "/absolute/path/to/clawside/scripts/start_mcp.sh",
+      "args": [
+        "--db",
+        "/absolute/path/to/clawside/sender.db",
+        "--sender-base-url",
+        "http://127.0.0.1:8787",
+        "--sender-auth-key",
+        "${SENDER_AUTH_KEY}"
+      ]
+    }
+  }
+}
+```
+
+注意：
+
+- `command` / `args` 的最终写法要以 OpenClaw 当前支持的 MCP 配置格式为准，上面给的是 **stdio 注册模板**，不是保证可直接粘贴的最终 schema
+- `./scripts/start_mcp.sh` 默认会读取 `CLAWSIDE_DB_PATH`、`CLAWSIDE_SENDER_BASE_URL` 和 `SENDER_AUTH_KEY`，也支持通过 flags 覆盖
+- `--db` 应指向和 orchestrator / sender 共用的 sqlite store
+- 如果只想用 truth / workflow tools，可以不实际调用 `a2a_deliver`；但只要要走真实 Telegram outward delivery，就必须保证 sender sidecar 已启动且 `sender_auth_key` 正确
+
+相关文件：
+
+- `scripts/start_mcp.sh`
+- `cmd/clawside-mcp/main.go`
+- `internal/toolserver/handlers.go`
+- `cmd/clawside-mcp/main_test.go`
+
 ## sender 权限与输入边界
 
 sender 在 HTTP 入队前执行权限校验：

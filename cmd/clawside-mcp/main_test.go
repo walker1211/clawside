@@ -30,7 +30,7 @@ func TestServerListsV1Tools(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"handoff_create", "handoff_get", "handoff_progress", "workflow_status", "a2a_deliver"} {
+	for _, want := range []string{"handoff_create", "handoff_get", "handoff_progress", "workflow_status", "workflow_list", "a2a_deliver"} {
 		if !slices.Contains(names, want) {
 			t.Fatalf("expected tool %s in %v", want, names)
 		}
@@ -62,6 +62,40 @@ func TestServerCallHandoffCreateSucceeds(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("expected handoff_create success, got error result")
+	}
+}
+
+func TestServerCallWorkflowListSucceeds(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	if _, err := c.CallTool(ctx, mcp.CallToolRequest{
+		Params: mcp.CallToolParams{
+			Name: "handoff_create",
+			Arguments: map[string]any{
+				"workflow_kind": "generic",
+				"sender": map[string]any{"type": "agent", "id": "planner"},
+				"receiver": map[string]any{"type": "agent", "id": "writer"},
+				"task_kind": "generic_task",
+				"intent": "draft chapter",
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CallTool(handoff_create): %v", err)
+	}
+
+	result, err := c.CallTool(ctx, mcp.CallToolRequest{
+		Params: mcp.CallToolParams{Name: "workflow_list"},
+	})
+	if err != nil {
+		t.Fatalf("CallTool(workflow_list): %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected workflow_list success, got error result")
 	}
 }
 

@@ -106,6 +106,19 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return handlers.HandleWorkflowStatus(ctx, args)
 	}))
 
+	workflowListTool := mcp.NewTool("workflow_list",
+		mcp.WithDescription("List all workflows with projected handoffs"),
+		mcp.WithInputSchema[struct{}](),
+		mcp.WithOutputSchema[[]orchestrator.WorkflowView](),
+	)
+	s.AddTool(workflowListTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, error) {
+		views, err := handlers.HandleWorkflowList(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(views, "Listed workflows"), nil
+	}))
+
 	a2aDeliverTool := mcp.NewTool("a2a_deliver",
 		mcp.WithDescription("Deliver an A2A message through the sender bridge"),
 		mcp.WithInputSchema[toolserver.A2ADeliverInput](),
