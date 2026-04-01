@@ -70,6 +70,24 @@ Use explicit static `target_agent -> bot` mapping:
 
 Unknown `target_agent` must fail immediately.
 
+## Concrete local entrypoint
+
+The skill should invoke the local bridge CLI:
+
+```bash
+go run ./cmd/a2a-delivery \
+  --target-agent <target_agent> \
+  --text <text> \
+  [--chat-id <chat_id>] \
+  [--idempotency-key <idempotency_key>] \
+  [--delivery-context-to <chat_id>] \
+  [--direct-session-peer-chat-id <chat_id>] \
+  [--inbound-sender-chat-id <chat_id>] \
+  [--sender-auth-key <sender_auth_key>]
+```
+
+The command prints machine-readable JSON with the fixed delivery result contract.
+
 ## Bridge flow
 
 1. Validate input.

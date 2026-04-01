@@ -143,7 +143,27 @@ go run ./cmd/orchestrator workflow list --db ./sender.db
 go run ./cmd/orchestrator watch run --db ./sender.db
 ```
 
-### OpenClaw A2A delivery skill
+### OpenClaw A2A delivery skill / bridge CLI
+
+sender sidecar 启动后，可以直接用新的本地 bridge 入口发起一次定向投递：
+
+```bash
+go run ./cmd/a2a-delivery \
+  --target-agent planner \
+  --text "请直接把结果发给我" \
+  --chat-id 123456789 \
+  --sender-auth-key "$SENDER_AUTH_KEY"
+```
+
+如果不显式传 `--chat-id`，也可以传会话上下文字段让 bridge 解析目标用户：
+
+```bash
+go run ./cmd/a2a-delivery \
+  --target-agent engineer \
+  --text "请把当前状态同步给当前会话用户" \
+  --delivery-context-to 123456789 \
+  --sender-auth-key "$SENDER_AUTH_KEY"
+```
 
 边界：
 
@@ -151,9 +171,11 @@ go run ./cmd/orchestrator watch run --db ./sender.db
 - 通过现有 sender backend 完成投递
 - 不直接调用 Telegram API
 - 不尝试修复官方 announce 链路，只做 sender bridge
+- 这是 OpenClaw/TG 的直接 bridge 入口，不是完整 MCP truth-plane server
 
 相关文件：
 
+- `cmd/a2a-delivery/main.go`
 - `.claude/skills/openclaw-a2a-delivery/SKILL.md`
 
 ## sender 权限与输入边界
