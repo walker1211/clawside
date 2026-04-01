@@ -133,6 +133,211 @@ func TestHandleWorkflowListReturnsAllWorkflows(t *testing.T) {
 	}
 }
 
+func TestHandleWatchListReturnsWatches(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	watches, err := h.HandleWatchList(context.Background(), WatchListInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleWatchList: %v", err)
+	}
+	if len(watches) != len(created.Watches) {
+		t.Fatalf("expected %d watches, got %d", len(created.Watches), len(watches))
+	}
+	if len(watches) == 0 {
+		t.Fatalf("expected non-empty watches")
+	}
+	if watches[0].HandoffID != created.Handoff.ID {
+		t.Fatalf("expected handoff %s, got %s", created.Handoff.ID, watches[0].HandoffID)
+	}
+	if watches[0].WatchType == "" || watches[0].Status == "" {
+		t.Fatalf("expected watch_type and status, got %+v", watches[0])
+	}
+}
+
+func TestHandleWatchListRejectsBlankHandoffID(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	if _, err := h.HandleWatchList(context.Background(), WatchListInput{HandoffID: "  "}); err == nil {
+		t.Fatalf("expected blank handoff_id to fail")
+	}
+}
+
+func TestHandleOwnershipGetReturnsBinding(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	binding, err := h.HandleOwnershipGet(context.Background(), OwnershipGetInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleOwnershipGet: %v", err)
+	}
+	if binding.HandoffID != created.Handoff.ID {
+		t.Fatalf("expected handoff %s, got %s", created.Handoff.ID, binding.HandoffID)
+	}
+	if binding.CurrentOwner.ID != created.Handoff.CurrentOwner.ID {
+		t.Fatalf("expected current owner %s, got %s", created.Handoff.CurrentOwner.ID, binding.CurrentOwner.ID)
+	}
+	if binding.CurrentOwner.Type != created.Handoff.CurrentOwner.Type {
+		t.Fatalf("expected current owner type %s, got %s", created.Handoff.CurrentOwner.Type, binding.CurrentOwner.Type)
+	}
+}
+
+func TestHandleOwnershipGetRejectsBlankHandoffID(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	if _, err := h.HandleOwnershipGet(context.Background(), OwnershipGetInput{HandoffID: ""}); err == nil {
+		t.Fatalf("expected blank handoff_id to fail")
+	}
+}
+
+func TestHandleRepairListReturnsRepairs(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if _, err := h.svc.DispatchHandoff(context.Background(), orchestrator.DispatchHandoffInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("DispatchHandoff: %v", err)
+	}
+	var started orchestrator.EventRecord
+	for _, action := range []string{
+		string(orchestrator.ProtocolActionReceive),
+		string(orchestrator.ProtocolActionClaim),
+		string(orchestrator.ProtocolActionStart),
+	} {
+		result, err := h.HandleHandoffProgress(context.Background(), HandoffProgressInput{
+			Action:     action,
+			WorkflowID: created.Workflow.ID,
+			HandoffID:  created.Handoff.ID,
+			Actor:      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		})
+		if err != nil {
+			t.Fatalf("HandleHandoffProgress(%s): %v", action, err)
+		}
+		started = result.Event
+	}
+	if _, err := h.svc.InvalidateEvent(context.Background(), orchestrator.InvalidateEventInput{
+		EventID: started.ID,
+		Reason:  "test invalidate",
+		Actor:   created.Handoff.SenderActor,
+	}); err != nil {
+		t.Fatalf("InvalidateEvent: %v", err)
+	}
+
+	repairs, err := h.HandleRepairList(context.Background(), RepairListInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleRepairList: %v", err)
+	}
+	if len(repairs) == 0 {
+		t.Fatalf("expected repairs")
+	}
+	if repairs[0].Reason == "" {
+		t.Fatalf("expected repair reason, got %+v", repairs[0])
+	}
+}
+
+func TestHandleRepairCandidateListReturnsCandidates(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if err := h.svc.RecordObservedSignal(context.Background(), orchestrator.RecordObserverHintInput{
+		Hint: &orchestrator.ObserverHint{
+			HandoffID:  created.Handoff.ID,
+			WorkflowID: created.Workflow.ID,
+			SignalType: string(orchestrator.ObservedSignalWatchTriggered),
+			Details: map[string]any{
+				"reason": "watch timeout",
+			},
+			CreatedAt: time.Date(2026, 4, 1, 12, 30, 0, 0, time.UTC),
+		},
+	}); err != nil {
+		t.Fatalf("RecordObservedSignal: %v", err)
+	}
+
+	candidates, err := h.HandleRepairCandidateList(context.Background(), RepairCandidateListInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleRepairCandidateList: %v", err)
+	}
+	if len(candidates) == 0 {
+		t.Fatalf("expected repair candidates")
+	}
+	if candidates[0].HandoffID != created.Handoff.ID {
+		t.Fatalf("expected handoff %s, got %s", created.Handoff.ID, candidates[0].HandoffID)
+	}
+}
+
+func TestHandleDivergenceListReturnsHints(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if err := h.svc.RecordObservedSignal(context.Background(), orchestrator.RecordObserverHintInput{
+		Hint: &orchestrator.ObserverHint{
+			HandoffID:  created.Handoff.ID,
+			WorkflowID: created.Workflow.ID,
+			SignalType: string(orchestrator.ObservedSignalWatchTriggered),
+			Details: map[string]any{
+				"reason": "watch timeout",
+			},
+			CreatedAt: time.Date(2026, 4, 1, 12, 35, 0, 0, time.UTC),
+		},
+	}); err != nil {
+		t.Fatalf("RecordObservedSignal: %v", err)
+	}
+
+	hints, err := h.HandleDivergenceList(context.Background(), DivergenceListInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleDivergenceList: %v", err)
+	}
+	if len(hints) == 0 {
+		t.Fatalf("expected divergence hints")
+	}
+	if hints[0].HandoffID != created.Handoff.ID {
+		t.Fatalf("expected handoff %s, got %s", created.Handoff.ID, hints[0].HandoffID)
+	}
+}
+
 func TestHandleHandoffProgressAppliesProtocolAction(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{

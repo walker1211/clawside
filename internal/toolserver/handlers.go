@@ -67,6 +67,26 @@ type WorkflowStatusInput struct {
 	WorkflowID string `json:"workflow_id"`
 }
 
+type WatchListInput struct {
+	HandoffID string `json:"handoff_id"`
+}
+
+type OwnershipGetInput struct {
+	HandoffID string `json:"handoff_id"`
+}
+
+type RepairListInput struct {
+	HandoffID string `json:"handoff_id,omitempty"`
+}
+
+type RepairCandidateListInput struct {
+	HandoffID string `json:"handoff_id"`
+}
+
+type DivergenceListInput struct {
+	HandoffID string `json:"handoff_id"`
+}
+
 func (h *Handlers) HandleWorkflowList(ctx context.Context) ([]orchestrator.WorkflowView, error) {
 	workflows, err := h.store.ListWorkflows(ctx)
 	if err != nil {
@@ -160,6 +180,42 @@ func (h *Handlers) HandleWorkflowStatus(ctx context.Context, input WorkflowStatu
 	return h.svc.WorkflowStatus(ctx, strings.TrimSpace(input.WorkflowID))
 }
 
+func (h *Handlers) HandleWatchList(ctx context.Context, input WatchListInput) ([]orchestrator.Watch, error) {
+	handoffID, err := requireHandoffID(input.HandoffID)
+	if err != nil {
+		return nil, err
+	}
+	return h.store.ListWatches(ctx, handoffID)
+}
+
+func (h *Handlers) HandleOwnershipGet(ctx context.Context, input OwnershipGetInput) (orchestrator.OwnershipBinding, error) {
+	handoffID, err := requireHandoffID(input.HandoffID)
+	if err != nil {
+		return orchestrator.OwnershipBinding{}, err
+	}
+	return h.store.LoadOwnershipBinding(ctx, handoffID)
+}
+
+func (h *Handlers) HandleRepairList(ctx context.Context, input RepairListInput) ([]orchestrator.RepairRecord, error) {
+	return h.store.ListRepairs(ctx, strings.TrimSpace(input.HandoffID))
+}
+
+func (h *Handlers) HandleRepairCandidateList(ctx context.Context, input RepairCandidateListInput) ([]orchestrator.RepairCandidate, error) {
+	handoffID, err := requireHandoffID(input.HandoffID)
+	if err != nil {
+		return nil, err
+	}
+	return h.store.ListRepairCandidatesByHandoff(ctx, handoffID)
+}
+
+func (h *Handlers) HandleDivergenceList(ctx context.Context, input DivergenceListInput) ([]orchestrator.ObserverHint, error) {
+	handoffID, err := requireHandoffID(input.HandoffID)
+	if err != nil {
+		return nil, err
+	}
+	return h.store.ListDivergences(ctx, handoffID)
+}
+
 func (h *Handlers) HandleA2ADeliver(ctx context.Context, input A2ADeliverInput) (a2adelivery.DeliveryResult, error) {
 	if h.senderClient == nil {
 		return a2adelivery.DeliveryResult{}, fmt.Errorf("sender client is required")
@@ -185,6 +241,14 @@ func toActorRef(input ActorRefInput) (orchestrator.ActorRef, error) {
 		ID:      strings.TrimSpace(input.ID),
 		Address: strings.TrimSpace(input.Address),
 	}, nil
+}
+
+func requireHandoffID(raw string) (string, error) {
+	handoffID := strings.TrimSpace(raw)
+	if handoffID == "" {
+		return "", fmt.Errorf("handoff_id is required")
+	}
+	return handoffID, nil
 }
 
 func toArtifactPolicy(input *ArtifactPolicyInput) orchestrator.ArtifactPolicy {

@@ -119,6 +119,51 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return mcp.NewToolResultStructured(views, "Listed workflows"), nil
 	}))
 
+	watchListTool := mcp.NewTool("watch_list",
+		mcp.WithDescription("List watches for a handoff"),
+		mcp.WithInputSchema[toolserver.WatchListInput](),
+		mcp.WithOutputSchema[[]orchestrator.Watch](),
+	)
+	s.AddTool(watchListTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.WatchListInput) ([]orchestrator.Watch, error) {
+		return handlers.HandleWatchList(ctx, args)
+	}))
+
+	ownershipGetTool := mcp.NewTool("ownership_get",
+		mcp.WithDescription("Get ownership binding for a handoff"),
+		mcp.WithInputSchema[toolserver.OwnershipGetInput](),
+		mcp.WithOutputSchema[orchestrator.OwnershipBinding](),
+	)
+	s.AddTool(ownershipGetTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.OwnershipGetInput) (orchestrator.OwnershipBinding, error) {
+		return handlers.HandleOwnershipGet(ctx, args)
+	}))
+
+	repairListTool := mcp.NewTool("repair_list",
+		mcp.WithDescription("List repairs, optionally filtered by handoff"),
+		mcp.WithInputSchema[toolserver.RepairListInput](),
+		mcp.WithOutputSchema[[]orchestrator.RepairRecord](),
+	)
+	s.AddTool(repairListTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.RepairListInput) ([]orchestrator.RepairRecord, error) {
+		return handlers.HandleRepairList(ctx, args)
+	}))
+
+	repairCandidateListTool := mcp.NewTool("repair_candidate_list",
+		mcp.WithDescription("List repair candidates for a handoff"),
+		mcp.WithInputSchema[toolserver.RepairCandidateListInput](),
+		mcp.WithOutputSchema[[]orchestrator.RepairCandidate](),
+	)
+	s.AddTool(repairCandidateListTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.RepairCandidateListInput) ([]orchestrator.RepairCandidate, error) {
+		return handlers.HandleRepairCandidateList(ctx, args)
+	}))
+
+	divergenceListTool := mcp.NewTool("divergence_list",
+		mcp.WithDescription("List observer divergences for a handoff"),
+		mcp.WithInputSchema[toolserver.DivergenceListInput](),
+		mcp.WithOutputSchema[[]orchestrator.ObserverHint](),
+	)
+	s.AddTool(divergenceListTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.DivergenceListInput) ([]orchestrator.ObserverHint, error) {
+		return handlers.HandleDivergenceList(ctx, args)
+	}))
+
 	a2aDeliverTool := mcp.NewTool("a2a_deliver",
 		mcp.WithDescription("Deliver an A2A message through the sender bridge"),
 		mcp.WithInputSchema[toolserver.A2ADeliverInput](),
