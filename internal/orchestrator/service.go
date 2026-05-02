@@ -63,6 +63,24 @@ type DispatchHandoffInput struct {
 	Message   string
 }
 
+type UpdateWatchInput struct {
+	WatchID          string
+	DeadlineAt       *time.Time
+	Status           *string
+	EscalationPolicy *string
+}
+
+type UpdateOwnershipInput struct {
+	HandoffID       string
+	CurrentOwner    *ActorRef
+	ReviewerActor   *ActorRef
+	EscalationOwner *ActorRef
+	FallbackOwner   *ActorRef
+	LeaseHolder     *ActorRef
+	LeasedAt        *time.Time
+	LeaseExpiresAt  *time.Time
+}
+
 type DispatchHandoffResult struct {
 	Attempt DispatchAttempt `json:"attempt"`
 	Events  []EventRecord   `json:"events"`
@@ -385,6 +403,59 @@ func (s *Service) DispatchHandoff(ctx context.Context, input DispatchHandoffInpu
 		events = append(events, transportResultEvent)
 	}
 	return DispatchHandoffResult{Attempt: attempt, Events: events}, nil
+}
+
+func (s *Service) UpdateWatch(ctx context.Context, input UpdateWatchInput) (Watch, error) {
+	watch, err := s.store.LoadWatch(ctx, input.WatchID)
+	if err != nil {
+		return Watch{}, err
+	}
+	if input.DeadlineAt != nil {
+		watch.DeadlineAt = input.DeadlineAt.UTC()
+	}
+	if input.Status != nil {
+		watch.Status = *input.Status
+	}
+	if input.EscalationPolicy != nil {
+		watch.EscalationPolicy = *input.EscalationPolicy
+	}
+	if err := s.store.UpdateWatch(ctx, watch); err != nil {
+		return Watch{}, err
+	}
+	return s.store.LoadWatch(ctx, watch.ID)
+}
+
+func (s *Service) UpdateOwnership(ctx context.Context, input UpdateOwnershipInput) (OwnershipBinding, error) {
+	handoff, err := s.store.LoadHandoff(ctx, input.HandoffID)
+	if err != nil {
+		return OwnershipBinding{}, err
+	}
+	if input.CurrentOwner != nil {
+		handoff.CurrentOwner = *input.CurrentOwner
+	}
+	if input.ReviewerActor != nil {
+		handoff.ReviewerActor = *input.ReviewerActor
+	}
+	if input.EscalationOwner != nil {
+		handoff.EscalationOwner = *input.EscalationOwner
+	}
+	if input.FallbackOwner != nil {
+		handoff.FallbackOwner = *input.FallbackOwner
+	}
+	if input.LeaseHolder != nil {
+		handoff.LeaseHolder = *input.LeaseHolder
+	}
+	if input.LeasedAt != nil {
+		handoff.LeasedAt = input.LeasedAt
+	}
+	if input.LeaseExpiresAt != nil {
+		handoff.LeaseExpiresAt = input.LeaseExpiresAt
+	}
+	handoff.UpdatedAt = s.now().UTC()
+	if err := s.store.UpdateHandoffOwnership(ctx, handoff); err != nil {
+		return OwnershipBinding{}, err
+	}
+	return s.store.LoadOwnershipBinding(ctx, handoff.ID)
 }
 
 func (s *Service) RecordObserverHint(ctx context.Context, input RecordObserverHintInput) error {

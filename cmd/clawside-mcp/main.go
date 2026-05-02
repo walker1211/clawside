@@ -149,6 +149,15 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return handlers.HandleWatchRun(ctx, args)
 	}))
 
+	watchUpdateTool := mcp.NewTool("watch_update",
+		mcp.WithDescription("Update a watch deadline, status, or escalation policy"),
+		mcp.WithInputSchema[toolserver.WatchUpdateInput](),
+		mcp.WithOutputSchema[orchestrator.Watch](),
+	)
+	s.AddTool(watchUpdateTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.WatchUpdateInput) (orchestrator.Watch, error) {
+		return handlers.HandleWatchUpdate(ctx, args)
+	}))
+
 	ownershipGetTool := mcp.NewTool("ownership_get",
 		mcp.WithDescription("Get ownership binding for a handoff"),
 		mcp.WithInputSchema[toolserver.OwnershipGetInput](),
@@ -156,6 +165,15 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	)
 	s.AddTool(ownershipGetTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.OwnershipGetInput) (orchestrator.OwnershipBinding, error) {
 		return handlers.HandleOwnershipGet(ctx, args)
+	}))
+
+	ownershipUpdateTool := mcp.NewTool("ownership_update",
+		mcp.WithDescription("Update handoff ownership fields and synchronized ownership binding"),
+		mcp.WithInputSchema[toolserver.OwnershipUpdateInput](),
+		mcp.WithOutputSchema[orchestrator.OwnershipBinding](),
+	)
+	s.AddTool(ownershipUpdateTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.OwnershipUpdateInput) (orchestrator.OwnershipBinding, error) {
+		return handlers.HandleOwnershipUpdate(ctx, args)
 	}))
 
 	repairListTool := mcp.NewTool("repair_list",

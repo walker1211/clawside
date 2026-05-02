@@ -93,8 +93,26 @@ type WatchRunInput struct {
 	Now string `json:"now"`
 }
 
+type WatchUpdateInput struct {
+	WatchID          string  `json:"watch_id"`
+	DeadlineAt       *string `json:"deadline_at,omitempty"`
+	Status           *string `json:"status,omitempty"`
+	EscalationPolicy *string `json:"escalation_policy,omitempty"`
+}
+
 type OwnershipGetInput struct {
 	HandoffID string `json:"handoff_id"`
+}
+
+type OwnershipUpdateInput struct {
+	HandoffID       string         `json:"handoff_id"`
+	CurrentOwner    *ActorRefInput `json:"current_owner,omitempty"`
+	ReviewerActor   *ActorRefInput `json:"reviewer_actor,omitempty"`
+	EscalationOwner *ActorRefInput `json:"escalation_owner,omitempty"`
+	FallbackOwner   *ActorRefInput `json:"fallback_owner,omitempty"`
+	LeaseHolder     *ActorRefInput `json:"lease_holder,omitempty"`
+	LeasedAt        *string        `json:"leased_at,omitempty"`
+	LeaseExpiresAt  *string        `json:"lease_expires_at,omitempty"`
 }
 
 type RepairListInput struct {
@@ -280,12 +298,91 @@ func (h *Handlers) HandleWatchRun(ctx context.Context, input WatchRunInput) (orc
 	return h.svc.RunWatchdog(ctx, orchestrator.RunWatchdogInput{Now: now})
 }
 
+func (h *Handlers) HandleWatchUpdate(ctx context.Context, input WatchUpdateInput) (orchestrator.Watch, error) {
+	watchID := strings.TrimSpace(input.WatchID)
+	if watchID == "" {
+		return orchestrator.Watch{}, fmt.Errorf("watch_id is required")
+	}
+	var deadlineAt *time.Time
+	if input.DeadlineAt != nil {
+		parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*input.DeadlineAt))
+		if err != nil {
+			return orchestrator.Watch{}, err
+		}
+		deadlineAt = &parsed
+	}
+	var status *string
+	if input.Status != nil {
+		trimmed := strings.TrimSpace(*input.Status)
+		if !isValidWatchStatus(trimmed) {
+			return orchestrator.Watch{}, fmt.Errorf("watch status must be active or disabled")
+		}
+		status = &trimmed
+	}
+	var escalationPolicy *string
+	if input.EscalationPolicy != nil {
+		trimmed := strings.TrimSpace(*input.EscalationPolicy)
+		escalationPolicy = &trimmed
+	}
+	return h.svc.UpdateWatch(ctx, orchestrator.UpdateWatchInput{
+		WatchID:          watchID,
+		DeadlineAt:       deadlineAt,
+		Status:           status,
+		EscalationPolicy: escalationPolicy,
+	})
+}
+
 func (h *Handlers) HandleOwnershipGet(ctx context.Context, input OwnershipGetInput) (orchestrator.OwnershipBinding, error) {
 	handoffID, err := requireHandoffID(input.HandoffID)
 	if err != nil {
 		return orchestrator.OwnershipBinding{}, err
 	}
 	return h.store.LoadOwnershipBinding(ctx, handoffID)
+}
+
+func (h *Handlers) HandleOwnershipUpdate(ctx context.Context, input OwnershipUpdateInput) (orchestrator.OwnershipBinding, error) {
+	handoffID, err := requireHandoffID(input.HandoffID)
+	if err != nil {
+		return orchestrator.OwnershipBinding{}, err
+	}
+	currentOwner, err := optionalActorRef(input.CurrentOwner)
+	if err != nil {
+		return orchestrator.OwnershipBinding{}, err
+	}
+	reviewerActor, err := optionalActorRef(input.ReviewerActor)
+	if err != nil {
+		return orchestrator.OwnershipBinding{}, err
+	}
+	escalationOwner, err := optionalActorRef(input.EscalationOwner)
+	if err != nil {
+		return orchestrator.OwnershipBinding{}, err
+	}
+	fallbackOwner, err := optionalActorRef(input.FallbackOwner)
+	if err != nil {
+		return orchestrator.OwnershipBinding{}, err
+	}
+	leaseHolder, err := optionalActorRef(input.LeaseHolder)
+	if err != nil {
+		return orchestrator.OwnershipBinding{}, err
+	}
+	leasedAt, err := optionalTime(input.LeasedAt)
+	if err != nil {
+		return orchestrator.OwnershipBinding{}, err
+	}
+	leaseExpiresAt, err := optionalTime(input.LeaseExpiresAt)
+	if err != nil {
+		return orchestrator.OwnershipBinding{}, err
+	}
+	return h.svc.UpdateOwnership(ctx, orchestrator.UpdateOwnershipInput{
+		HandoffID:       handoffID,
+		CurrentOwner:    currentOwner,
+		ReviewerActor:   reviewerActor,
+		EscalationOwner: escalationOwner,
+		FallbackOwner:   fallbackOwner,
+		LeaseHolder:     leaseHolder,
+		LeasedAt:        leasedAt,
+		LeaseExpiresAt:  leaseExpiresAt,
+	})
 }
 
 func (h *Handlers) HandleRepairList(ctx context.Context, input RepairListInput) ([]orchestrator.RepairRecord, error) {
@@ -353,6 +450,37 @@ func toActorRef(input ActorRefInput) (orchestrator.ActorRef, error) {
 		ID:      strings.TrimSpace(input.ID),
 		Address: strings.TrimSpace(input.Address),
 	}, nil
+}
+
+func isValidWatchStatus(status string) bool {
+	switch status {
+	case "active", "disabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func optionalActorRef(input *ActorRefInput) (*orchestrator.ActorRef, error) {
+	if input == nil {
+		return nil, nil
+	}
+	actor, err := toActorRef(*input)
+	if err != nil {
+		return nil, err
+	}
+	return &actor, nil
+}
+
+func optionalTime(input *string) (*time.Time, error) {
+	if input == nil {
+		return nil, nil
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(*input))
+	if err != nil {
+		return nil, err
+	}
+	return &parsed, nil
 }
 
 func requireHandoffID(raw string) (string, error) {

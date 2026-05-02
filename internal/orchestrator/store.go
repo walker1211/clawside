@@ -236,6 +236,47 @@ func (s *Store) SaveWatch(ctx context.Context, watch Watch) error {
 	return saveWatchExec(ctx, s.db, watch)
 }
 
+func (s *Store) LoadWatch(ctx context.Context, watchID string) (Watch, error) {
+	return loadWatchTx(ctx, s.db, watchID)
+}
+
+func (s *Store) UpdateWatch(ctx context.Context, watch Watch) error {
+	result, err := s.db.ExecContext(ctx, `
+		UPDATE watches
+		SET deadline_at = ?, status = ?, escalation_policy = ?
+		WHERE id = ?
+	`, formatTime(watch.DeadlineAt), watch.Status, watch.EscalationPolicy, watch.ID)
+	if err != nil {
+		return fmt.Errorf("update watch %s: %w", watch.ID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected for watch %s: %w", watch.ID, err)
+	}
+	if rowsAffected != 1 {
+		return fmt.Errorf("update watch %s: not found", watch.ID)
+	}
+	return nil
+}
+
+func (s *Store) UpdateHandoffOwnership(ctx context.Context, handoff Handoff) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin ownership update tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := updateHandoffOwnershipExec(ctx, tx, handoff); err != nil {
+		return err
+	}
+	if err := saveOwnershipBindingExec(ctx, tx, OwnershipBindingFromHandoff(handoff)); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit ownership update tx: %w", err)
+	}
+	return nil
+}
+
 func (s *Store) SaveRepair(ctx context.Context, repair RepairRecord) error {
 	return saveRepairExec(ctx, s.db, repair)
 }
@@ -711,6 +752,52 @@ func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
 	return saveOwnershipBindingExec(ctx, db, OwnershipBindingFromHandoff(handoff))
 }
 
+func updateHandoffOwnershipExec(ctx context.Context, db execer, handoff Handoff) error {
+	currentOwnerJSON, err := marshalJSON(handoff.CurrentOwner)
+	if err != nil {
+		return err
+	}
+	leaseHolderJSON, err := marshalJSON(handoff.LeaseHolder)
+	if err != nil {
+		return err
+	}
+	reviewerJSON, err := marshalJSON(handoff.ReviewerActor)
+	if err != nil {
+		return err
+	}
+	escalationJSON, err := marshalJSON(handoff.EscalationOwner)
+	if err != nil {
+		return err
+	}
+	fallbackJSON, err := marshalJSON(handoff.FallbackOwner)
+	if err != nil {
+		return err
+	}
+	result, err := db.ExecContext(ctx, `
+		UPDATE handoffs SET
+			reviewer_actor_json = ?,
+			current_owner_json = ?,
+			lease_holder_json = ?,
+			escalation_owner_json = ?,
+			fallback_owner_json = ?,
+			leased_at = ?,
+			lease_expires_at = ?,
+			updated_at = ?
+		WHERE id = ?
+	`, reviewerJSON, currentOwnerJSON, leaseHolderJSON, escalationJSON, fallbackJSON, nullableTime(handoff.LeasedAt), nullableTime(handoff.LeaseExpiresAt), formatTime(handoff.UpdatedAt), handoff.ID)
+	if err != nil {
+		return fmt.Errorf("update handoff ownership %s: %w", handoff.ID, err)
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("rows affected for handoff ownership %s: %w", handoff.ID, err)
+	}
+	if rowsAffected != 1 {
+		return fmt.Errorf("update handoff ownership %s: not found", handoff.ID)
+	}
+	return nil
+}
+
 func saveWatchExec(ctx context.Context, db execer, watch Watch) error {
 	_, err := db.ExecContext(ctx, `
 		INSERT INTO watches (
@@ -722,6 +809,43 @@ func saveWatchExec(ctx context.Context, db execer, watch Watch) error {
 		return fmt.Errorf("save watch %s: %w", watch.ID, err)
 	}
 	return nil
+}
+
+func loadWatchTx(ctx context.Context, db queryer, watchID string) (Watch, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT id, handoff_id, watch_type, event_type, deadline_at, status,
+			last_checked_at, last_result, escalation_policy, created_at
+		FROM watches WHERE id = ?
+	`, watchID)
+	watch, err := scanWatch(row)
+	if err != nil {
+		return Watch{}, fmt.Errorf("load watch %s: %w", watchID, err)
+	}
+	return watch, nil
+}
+
+func scanWatch(scanner interface{ Scan(...any) error }) (Watch, error) {
+	var watch Watch
+	var deadlineAt, lastCheckedAt, createdAt string
+	if err := scanner.Scan(&watch.ID, &watch.HandoffID, &watch.WatchType, &watch.EventType, &deadlineAt, &watch.Status, &lastCheckedAt, &watch.LastResult, &watch.EscalationPolicy, &createdAt); err != nil {
+		return Watch{}, fmt.Errorf("scan watch: %w", err)
+	}
+	parsedDeadlineAt, err := time.Parse(time.RFC3339Nano, deadlineAt)
+	if err != nil {
+		return Watch{}, fmt.Errorf("parse watch deadline_at: %w", err)
+	}
+	parsedLastCheckedAt, err := time.Parse(time.RFC3339Nano, lastCheckedAt)
+	if err != nil {
+		return Watch{}, fmt.Errorf("parse watch last_checked_at: %w", err)
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return Watch{}, fmt.Errorf("parse watch created_at: %w", err)
+	}
+	watch.DeadlineAt = parsedDeadlineAt
+	watch.LastCheckedAt = parsedLastCheckedAt
+	watch.CreatedAt = parsedCreatedAt
+	return watch, nil
 }
 
 func (s *Store) ListWatches(ctx context.Context, handoffID string) ([]Watch, error) {
@@ -1228,12 +1352,12 @@ func loadHandoffTx(ctx context.Context, db queryer, handoffID string) (Handoff, 
 	`, handoffID)
 
 	var (
-		handoff Handoff
-		parentID, deadlineAt, leasedAt, leaseExpiresAt, completedAt sql.NullString
-		createdAt, updatedAt string
-		producerJSON, senderJSON, receiverJSON, reviewerJSON, subjectJSON string
-		currentOwnerJSON, leaseHolderJSON, escalationJSON, fallbackJSON, policyJSON string
-		dependsJSON string
+		handoff                                                                                                Handoff
+		parentID, deadlineAt, leasedAt, leaseExpiresAt, completedAt                                            sql.NullString
+		createdAt, updatedAt                                                                                   string
+		producerJSON, senderJSON, receiverJSON, reviewerJSON, subjectJSON                                      string
+		currentOwnerJSON, leaseHolderJSON, escalationJSON, fallbackJSON, policyJSON                            string
+		dependsJSON                                                                                            string
 		required, needsReview, hasReceived, hasClaimed, hasStarted, hasCheckpointed, hasSubmitted, hasReviewed int
 	)
 	if err := row.Scan(
@@ -1370,10 +1494,10 @@ func loadOwnershipBindingTx(ctx context.Context, db queryer, handoffID string) (
 		FROM ownership_bindings WHERE handoff_id = ?
 	`, handoffID)
 	var (
-		binding OwnershipBinding
+		binding                                                                       OwnershipBinding
 		currentOwnerJSON, leaseHolderJSON, reviewerJSON, escalationJSON, fallbackJSON string
-		leasedAt, leaseExpiresAt sql.NullString
-		createdAt, updatedAt string
+		leasedAt, leaseExpiresAt                                                      sql.NullString
+		createdAt, updatedAt                                                          string
 	)
 	if err := row.Scan(&binding.HandoffID, &currentOwnerJSON, &leaseHolderJSON, &reviewerJSON, &escalationJSON, &fallbackJSON, &leasedAt, &leaseExpiresAt, &createdAt, &updatedAt); err != nil {
 		return OwnershipBinding{}, fmt.Errorf("load ownership binding %s: %w", handoffID, err)

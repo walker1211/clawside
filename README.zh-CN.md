@@ -185,7 +185,9 @@ go run ./cmd/clawside-mcp \
 - `workflow_list`
 - `watch_list`
 - `watch_run`
+- `watch_update`
 - `ownership_get`
+- `ownership_update`
 - `repair_list`
 - `repair_invalidate_event`
 - `repair_reopen_handoff`
@@ -203,7 +205,9 @@ go run ./cmd/clawside-mcp \
 - `workflow_list`：列出当前所有 workflow 及其 projected handoffs
 - `watch_list`：列出单个 handoff 当前挂载的 watches
 - `watch_run`：按给定 RFC3339 时间运行 due watch 检查
+- `watch_update`：更新单个 watch 的 deadline、status 或 escalation policy
 - `ownership_get`：查询单个 handoff 当前 ownership binding
+- `ownership_update`：更新 handoff ownership 字段，并同步 ownership binding
 - `repair_list`：列出 repair 记录，可按 handoff 过滤
 - `repair_invalidate_event`：使已接受事件失效并重放 handoff truth
 - `repair_reopen_handoff`：重新打开 terminal handoff 并重放 truth
@@ -214,7 +218,7 @@ go run ./cmd/clawside-mcp \
 边界：
 
 - 这是一个最小可用 v1 tool surface，不是完整 truth-plane MCP 产品面
-- repair backfill、ownership 编辑、watch 编辑等更低层动作仍保留在 `cmd/orchestrator` 调试入口
+- repair backfill 和更深层 truth-plane 操作仍不属于 v1 MCP surface
 - `a2a_deliver` 依赖本地 sender sidecar 正常运行
 - `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
 

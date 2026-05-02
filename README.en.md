@@ -185,7 +185,9 @@ Current v1 tools:
 - `workflow_list`
 - `watch_list`
 - `watch_run`
+- `watch_update`
 - `ownership_get`
+- `ownership_update`
 - `repair_list`
 - `repair_invalidate_event`
 - `repair_reopen_handoff`
@@ -203,7 +205,9 @@ Recommended reading:
 - `workflow_list`: lists all workflows with projected handoffs.
 - `watch_list`: lists watches attached to a handoff.
 - `watch_run`: runs due watch checks at a provided RFC3339 timestamp.
+- `watch_update`: updates a watch deadline, status, or escalation policy.
 - `ownership_get`: returns the ownership binding for a handoff.
+- `ownership_update`: updates handoff ownership fields and keeps the ownership binding synchronized.
 - `repair_list`: lists repair records, optionally filtered by handoff.
 - `repair_invalidate_event`: invalidates an accepted event and replays handoff truth.
 - `repair_reopen_handoff`: reopens a terminal handoff and replays truth.
@@ -214,7 +218,7 @@ Recommended reading:
 Boundaries:
 
 - This is a minimal v1 tool surface, not the full truth-plane MCP product surface.
-- Lower-level repair backfill, ownership editing, and watch editing still live in the `cmd/orchestrator` debug entrypoint.
+- Lower-level repair backfill and deeper truth-plane operations still live outside the v1 MCP surface.
 - `a2a_deliver` depends on the local sender sidecar.
 - `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` depend on `--db` pointing to the same sqlite truth store.
 

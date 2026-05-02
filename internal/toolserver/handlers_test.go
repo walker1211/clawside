@@ -224,6 +224,183 @@ func TestHandleWatchRunTriggersDueWatch(t *testing.T) {
 	}
 }
 
+func TestHandleWatchUpdateEditsDeadlineStatusAndEscalationPolicy(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	watch := created.Watches[0]
+	deadline := "2026-04-01T12:30:00Z"
+	status := "disabled"
+	escalationPolicy := "notify-owner"
+	updated, err := h.HandleWatchUpdate(context.Background(), WatchUpdateInput{
+		WatchID:          watch.ID,
+		DeadlineAt:       &deadline,
+		Status:           &status,
+		EscalationPolicy: &escalationPolicy,
+	})
+	if err != nil {
+		t.Fatalf("HandleWatchUpdate: %v", err)
+	}
+	if updated.ID != watch.ID {
+		t.Fatalf("expected watch %s, got %s", watch.ID, updated.ID)
+	}
+	if updated.Status != status {
+		t.Fatalf("expected status %s, got %s", status, updated.Status)
+	}
+	if updated.EscalationPolicy != escalationPolicy {
+		t.Fatalf("expected escalation policy %s, got %s", escalationPolicy, updated.EscalationPolicy)
+	}
+	wantDeadline, err := time.Parse(time.RFC3339Nano, deadline)
+	if err != nil {
+		t.Fatalf("parse deadline: %v", err)
+	}
+	if !updated.DeadlineAt.Equal(wantDeadline) {
+		t.Fatalf("expected deadline %s, got %s", wantDeadline, updated.DeadlineAt)
+	}
+
+	watches, err := h.HandleWatchList(context.Background(), WatchListInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleWatchList: %v", err)
+	}
+	if watches[0].Status != status || watches[0].EscalationPolicy != escalationPolicy || !watches[0].DeadlineAt.Equal(wantDeadline) {
+		t.Fatalf("expected persisted watch update, got %+v", watches[0])
+	}
+}
+
+func TestHandleWatchUpdateRejectsInvalidStatus(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	status := "acitve"
+	if _, err := h.HandleWatchUpdate(context.Background(), WatchUpdateInput{
+		WatchID: created.Watches[0].ID,
+		Status:  &status,
+	}); err == nil {
+		t.Fatalf("expected invalid status to be rejected")
+	}
+}
+
+func TestHandleOwnershipUpdateSyncsBindingAndHandoff(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	leasedAt := "2026-04-01T12:05:00Z"
+	leaseExpiresAt := "2026-04-01T12:35:00Z"
+	updated, err := h.HandleOwnershipUpdate(context.Background(), OwnershipUpdateInput{
+		HandoffID:       created.Handoff.ID,
+		CurrentOwner:    &ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "operator"},
+		ReviewerActor:   &ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "reviewer"},
+		LeaseHolder:     &ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "operator"},
+		EscalationOwner: &ActorRefInput{Type: string(orchestrator.ActorUser), ID: "ops"},
+		FallbackOwner:   &ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		LeasedAt:        &leasedAt,
+		LeaseExpiresAt:  &leaseExpiresAt,
+	})
+	if err != nil {
+		t.Fatalf("HandleOwnershipUpdate: %v", err)
+	}
+	if updated.CurrentOwner.ID != "operator" || updated.LeaseHolder.ID != "operator" {
+		t.Fatalf("expected operator ownership, got %+v", updated)
+	}
+	if updated.ReviewerActor.ID != "reviewer" {
+		t.Fatalf("expected reviewer actor update, got %+v", updated)
+	}
+	if updated.EscalationOwner.ID != "ops" || updated.FallbackOwner.ID != "planner" {
+		t.Fatalf("expected updated escalation/fallback owners, got %+v", updated)
+	}
+	wantLeasedAt, err := time.Parse(time.RFC3339Nano, leasedAt)
+	if err != nil {
+		t.Fatalf("parse leased_at: %v", err)
+	}
+	wantLeaseExpiresAt, err := time.Parse(time.RFC3339Nano, leaseExpiresAt)
+	if err != nil {
+		t.Fatalf("parse lease_expires_at: %v", err)
+	}
+	if updated.LeasedAt == nil || !updated.LeasedAt.Equal(wantLeasedAt) || updated.LeaseExpiresAt == nil || !updated.LeaseExpiresAt.Equal(wantLeaseExpiresAt) {
+		t.Fatalf("expected lease timestamps, got %+v", updated)
+	}
+
+	storedHandoff, err := h.store.LoadHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff: %v", err)
+	}
+	if storedHandoff.CurrentOwner.ID != updated.CurrentOwner.ID || storedHandoff.LeaseHolder.ID != updated.LeaseHolder.ID || storedHandoff.ReviewerActor.ID != updated.ReviewerActor.ID {
+		t.Fatalf("expected handoff ownership sync, got %+v", storedHandoff)
+	}
+	binding, err := h.HandleOwnershipGet(context.Background(), OwnershipGetInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleOwnershipGet: %v", err)
+	}
+	if binding.CurrentOwner.ID != updated.CurrentOwner.ID || binding.LeaseHolder.ID != updated.LeaseHolder.ID {
+		t.Fatalf("expected binding sync, got %+v", binding)
+	}
+}
+
+func TestHandleOwnershipUpdateRollsBackHandoffWhenBindingSyncFails(t *testing.T) {
+	h, db := newTestHandlersWithDB(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if _, err := db.ExecContext(context.Background(), `
+		CREATE TRIGGER fail_ownership_binding_update
+		BEFORE UPDATE ON ownership_bindings
+		BEGIN
+			SELECT RAISE(ABORT, 'binding sync failed');
+		END
+	`); err != nil {
+		t.Fatalf("create ownership trigger: %v", err)
+	}
+
+	_, err = h.HandleOwnershipUpdate(context.Background(), OwnershipUpdateInput{
+		HandoffID:    created.Handoff.ID,
+		CurrentOwner: &ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "operator"},
+	})
+	if err == nil {
+		t.Fatalf("expected ownership update to fail")
+	}
+	storedHandoff, err := h.store.LoadHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff: %v", err)
+	}
+	if storedHandoff.CurrentOwner.ID != created.Handoff.CurrentOwner.ID {
+		t.Fatalf("expected handoff owner rollback to %s, got %s", created.Handoff.CurrentOwner.ID, storedHandoff.CurrentOwner.ID)
+	}
+}
+
 func TestHandleOwnershipGetReturnsBinding(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
@@ -599,6 +776,12 @@ func TestHandleA2ADeliverReturnsStructuredResult(t *testing.T) {
 
 func newTestHandlers(t *testing.T, client *a2adelivery.SenderClient) *Handlers {
 	t.Helper()
+	h, _ := newTestHandlersWithDB(t, client)
+	return h
+}
+
+func newTestHandlersWithDB(t *testing.T, client *a2adelivery.SenderClient) (*Handlers, *sql.DB) {
+	t.Helper()
 	db, err := sql.Open("sqlite", "file:"+t.Name()+"?mode=memory&cache=shared")
 	if err != nil {
 		t.Fatalf("open sqlite db: %v", err)
@@ -611,7 +794,7 @@ func newTestHandlers(t *testing.T, client *a2adelivery.SenderClient) *Handlers {
 	svc := orchestrator.NewService(store, func() time.Time {
 		return time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	})
-	return NewHandlers(svc, store, client)
+	return NewHandlers(svc, store, client), db
 }
 
 func int64Ptr(v int64) *int64 { return &v }
