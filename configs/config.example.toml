@@ -1,0 +1,15 @@
+address = "127.0.0.1:8787"
+database_path = "./sender.db"
+default_max_attempts = 3
+worker_poll_interval = "1s"
+send_timeout = "15s"
+sender_auth_key = "replace-with-local-sender-auth-key"
+
+[telegram]
+global_allow_user_ids = ["123456789"]
+
+[telegram.bots.guardian]
+enabled = true
+account_id = "guardian"
+token = "replace-with-telegram-bot-token"
+allow_user_ids = []

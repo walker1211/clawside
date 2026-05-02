@@ -429,7 +429,6 @@ func TestStoreClaimNextReadyAvoidsDoubleClaimRace(t *testing.T) {
 	claimedAt := time.Date(2026, 3, 16, 10, 0, 0, 0, time.UTC)
 	start := make(chan struct{})
 	var wg sync.WaitGroup
-	wg.Add(2)
 
 	type claimResult struct {
 		job *Job
@@ -437,19 +436,17 @@ func TestStoreClaimNextReadyAvoidsDoubleClaimRace(t *testing.T) {
 	}
 	results := make(chan claimResult, 2)
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		<-start
 		claimed, claimErr := storeA.ClaimNextReady(ctx, claimedAt, 20*time.Second)
 		results <- claimResult{job: claimed, err: claimErr}
-	}()
+	})
 
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		<-start
 		claimed, claimErr := storeB.ClaimNextReady(ctx, claimedAt, 20*time.Second)
 		results <- claimResult{job: claimed, err: claimErr}
-	}()
+	})
 
 	close(start)
 	wg.Wait()

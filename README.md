@@ -1,296 +1,55 @@
 # clawside
 
-`clawside` 是挂在 OpenClaw 外侧的 truth layer / sidecar。
+`clawside` is a local MCP sidecar / truth layer for OpenClaw.
 
-它不是 OpenClaw runtime 本体，也不只等于一个 Telegram sender。这个仓库当前承载三类侧车能力：本地 sender、handoff/workflow orchestrator foundations，以及面向 OpenClaw 的 adapter / bridge 基础设施。
+It currently provides a local Telegram sender, handoff/workflow orchestration foundations, and a minimal OpenClaw-consumable MCP tool surface.
 
-## 与 OpenClaw 的关系
+[中文文档](./README.zh-CN.md) | [English Documentation](./README.en.md)
 
-- **OpenClaw** 负责会话、消息和 agent runtime
-- **clawside** 负责仓库外侧的确定性数据面，例如 handoff/workflow truth、watch、repair、sender bridge
-- 仓库会继续保留对上游 OpenClaw 的稳定兼容面，例如 `~/.openclaw/openclaw.json`、`--adapter openclaw`、`scripts/openclaw-dispatch`
+## Quick Start
 
-## Today
+```bash
+export SENDER_AUTH_KEY='your-local-sender-key'
+./scripts/config_builder.sh
+./build.sh
+./start.sh
+```
 
-当前仓库已经提供或部分提供这些能力：
+The sender listens on `127.0.0.1:8787` by default.
 
-- **Telegram sender**：本地 HTTP sender service，负责入队、鉴权、幂等和 worker 发送
-- **orchestrator CLI / store / state machine / watch / repair foundations**：提供 handoff、event、workflow、watch、repair 的基础骨架
-- **OpenClaw adapter foundations**：用于把调度和桥接动作接到现有 OpenClaw 兼容入口
-- **A2A delivery bridge skill**：在官方 announce / nested 回传链路不稳定时，为主 agent 提供显式消息投递桥
+For managed local lifecycle:
 
-这表示仓库今天已经不只是 sender，但也**还没有**完整交付成一套可直接安装即用的 MCP server + skill 产品面。
+```bash
+./stop.sh
+./restart.sh
+```
 
-## Target
+For the MCP server:
 
-目标形态是把 `clawside` 作为 **MCP sidecar / truth layer** 接到 OpenClaw 外侧：
+```bash
+./scripts/start_mcp.sh --db ./sender.db
+```
 
-1. 先把 clawside 作为外部 MCP server 接入 OpenClaw
-2. 普通用户优先通过 skill 发起和推进任务
-3. skill 再调用底层 truth / orchestration tools
+## Configuration
 
-推荐理解为：
-
-- **定位上**：MCP sidecar / truth layer
-- **默认使用路径上**：先装 MCP，再用 skill
-
-这里描述的是目标接入形态，不代表当前仓库已经完整提供 MCP server 与配套 skill 套件。
-
-## 组件概览
-
-- `cmd/config-builder/`：生成 sender 派生配置的 Go CLI
-- `cmd/orchestrator/`：低层 orchestrator 调试 / 操作入口
-- `internal/configbuilder/`：从 OpenClaw 源配置提取 sender 所需最小配置
-- `internal/orchestrator/`：handoff、workflow、event、watch、repair、adapter 基础实现
-- `internal/a2adelivery/`：A2A delivery bridge、轮询与编排逻辑
-- `main.go` + `http_handler.go` + `worker.go`：sender 服务入口、HTTP API 和发送 worker
-- `.claude/skills/openclaw-a2a-delivery/`：OpenClaw A2A delivery skill 定义
-
-## 快速开始
-
-### 1. 生成 sender 派生配置
+Recommended local setup:
 
 ```bash
 export SENDER_AUTH_KEY='your-local-sender-key'
 ./scripts/config_builder.sh
 ```
 
-默认会读取 `~/.openclaw/openclaw.json`，并在当前工作目录生成：
+This reads `~/.openclaw/openclaw.json` and writes `configs/config.toml` with mode `600`.
 
-- `configs/config.toml`
-
-如需指定输入文件，可以传：
-
-```bash
-./scripts/config_builder.sh --input /path/to/openclaw.json
-```
-
-说明：
-
-- `scripts/config_builder.sh` 是稳定入口，内部调用 Go builder
-- `configs/config.toml` 是派生文件，不手工维护
-- `configs/config.toml` 包含 bot token 与本地 sender 鉴权 key，已加入 `.gitignore`
-- builder 会把输出文件权限收紧为 `600`
-- `sender_auth_key` 与 Telegram bot token 分离，仅用于本地 `/send` 鉴权
-
-### 2. 启动 sender 服务
-
-```bash
-./scripts/start.sh
-```
-
-`scripts/start.sh` 会先检查 `configs/config.toml`；缺失时直接失败并提示先生成配置。
-
-sender 默认监听：
+A non-secret example is available at:
 
 ```text
-127.0.0.1:8787
+configs/config.example.toml
 ```
 
-这个服务默认只允许监听 loopback 地址，适合本机调用。
+`configs/config.toml`, `.env`, `sender.db`, logs, and local runtime data are ignored by git.
 
-### 3. 发送一条消息
+## Documentation
 
-```bash
-curl -X POST http://127.0.0.1:8787/send \
-  -H 'Content-Type: application/json' \
-  -H 'Authorization: Bearer your-local-sender-key' \
-  -d '{
-    "bot": "guardian",
-    "chat_id": <chat-id>,
-    "text": "这是一条测试消息",
-    "idempotency_key": "idem-001"
-  }'
-```
-
-成功时返回：
-
-```json
-{
-  "job_id": 1,
-  "status": "pending",
-  "idempotency_key": "idem-001"
-}
-```
-
-### 4. 查询 sender 状态
-
-```bash
-curl http://127.0.0.1:8787/healthz
-curl http://127.0.0.1:8787/readyz
-curl http://127.0.0.1:8787/stats
-curl "http://127.0.0.1:8787/jobs?status=pending&limit=20"
-curl http://127.0.0.1:8787/jobs/<job_id>
-```
-
-## 低层 CLI / 调试入口
-
-如果你需要直接操作当前已存在的底层能力，可以使用这些入口：
-
-### sender / config builder
-
-```bash
-go run ./cmd/config-builder --input ~/.openclaw/openclaw.json --output ./configs/config.toml
-go run .
-```
-
-### orchestrator CLI
-
-```bash
-go run ./cmd/orchestrator handoff create --db ./sender.db --workflow-kind generic --sender agent:planner --receiver agent:writer --task-kind generic_task --intent "write summary"
-go run ./cmd/orchestrator handoff list --db ./sender.db
-go run ./cmd/orchestrator workflow list --db ./sender.db
-go run ./cmd/orchestrator watch run --db ./sender.db
-```
-
-### OpenClaw A2A delivery skill / bridge CLI
-
-sender sidecar 启动后，可以直接用新的本地 bridge 入口发起一次定向投递：
-
-```bash
-go run ./cmd/a2a-delivery \
-  --target-agent planner \
-  --text "请直接把结果发给我" \
-  --chat-id 123456789 \
-  --sender-auth-key "$SENDER_AUTH_KEY"
-```
-
-如果不显式传 `--chat-id`，也可以传会话上下文字段让 bridge 解析目标用户：
-
-```bash
-go run ./cmd/a2a-delivery \
-  --target-agent engineer \
-  --text "请把当前状态同步给当前会话用户" \
-  --delivery-context-to 123456789 \
-  --sender-auth-key "$SENDER_AUTH_KEY"
-```
-
-边界：
-
-- 只支持 **主 agent 显式调用**
-- 通过现有 sender backend 完成投递
-- 不直接调用 Telegram API
-- 不尝试修复官方 announce 链路，只做 sender bridge
-- 这是 OpenClaw/TG 的直接 bridge 入口，不是完整 MCP truth-plane server
-
-相关文件：
-
-- `cmd/a2a-delivery/main.go`
-- `.claude/skills/openclaw-a2a-delivery/SKILL.md`
-
-### OpenClaw MCP / tool server
-
-如果你希望让 OpenClaw 直接消费 clawside 的最小 tool surface，可以启动新的 stdio MCP server：
-
-```bash
-go run ./cmd/clawside-mcp \
-  --db ./sender.db \
-  --sender-base-url http://127.0.0.1:8787 \
-  --sender-auth-key "$SENDER_AUTH_KEY"
-```
-
-当前 v1 暴露的 tools：
-
-- `handoff_create`
-- `handoff_get`
-- `handoff_dispatch`
-- `handoff_progress`
-- `workflow_status`
-- `workflow_list`
-- `watch_list`
-- `watch_run`
-- `ownership_get`
-- `repair_list`
-- `repair_invalidate_event`
-- `repair_reopen_handoff`
-- `repair_candidate_list`
-- `divergence_list`
-- `a2a_deliver`
-
-推荐理解：
-
-- `handoff_create`：创建一个新的 handoff / workflow 起点
-- `handoff_get`：查询单个 handoff 的当前 truth 与 timeline
-- `handoff_dispatch`：记录 handoff dispatch attempt 与 transport request，让纯 MCP 流程可以先 dispatch 再 receive
-- `handoff_progress`：推进 handoff 协议动作（如 `receive` / `claim` / `start` / `submit` / `approve` / `complete`）
-- `workflow_status`：查询单个 workflow 聚合视图
-- `workflow_list`：列出当前所有 workflow 及其 projected handoffs
-- `watch_list`：列出单个 handoff 当前挂载的 watches
-- `watch_run`：按给定 RFC3339 时间运行 due watch 检查
-- `ownership_get`：查询单个 handoff 当前 ownership binding
-- `repair_list`：列出 repair 记录，可按 handoff 过滤
-- `repair_invalidate_event`：使已接受事件失效并重放 handoff truth
-- `repair_reopen_handoff`：重新打开 terminal handoff 并重放 truth
-- `repair_candidate_list`：列出单个 handoff 的 repair candidates
-- `divergence_list`：列出单个 handoff 的 observer divergence hints
-- `a2a_deliver`：通过现有 sender bridge 做真实 outward delivery
-
-边界：
-
-- 这是一个 **最小可用 v1 tool surface**，不是完整 truth-plane MCP 产品面
-- repair backfill、ownership 编辑、watch 编辑等更低层动作仍保留在 `cmd/orchestrator` 调试入口
-- `a2a_deliver` 依赖本地 sender sidecar 正常运行
-- `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
-
-如果要在 OpenClaw 中接入，核心就是把它作为一个 stdio MCP server 注册，并让 OpenClaw 通过该 server 调用上述 tools。
-
-一个更稳定的本地启动方式是先使用包装脚本：
-
-```bash
-./scripts/start_mcp.sh --db ./sender.db
-```
-
-如果要在 OpenClaw 中注册，也更推荐把 stdio server 指向这个脚本。一个最小配置思路可以理解为：在 OpenClaw 的 MCP servers 配置里注册一个 stdio server，命令指向当前仓库的 `./scripts/start_mcp.sh`，并把 truth store 与 sender 参数一起传进去。例如：
-
-```json
-{
-  "mcpServers": {
-    "clawside": {
-      "command": "/absolute/path/to/clawside/scripts/start_mcp.sh",
-      "args": [
-        "--db",
-        "/absolute/path/to/clawside/sender.db",
-        "--sender-base-url",
-        "http://127.0.0.1:8787",
-        "--sender-auth-key",
-        "${SENDER_AUTH_KEY}"
-      ]
-    }
-  }
-}
-```
-
-注意：
-
-- `command` / `args` 的最终写法要以 OpenClaw 当前支持的 MCP 配置格式为准，上面给的是 **stdio 注册模板**，不是保证可直接粘贴的最终 schema
-- `./scripts/start_mcp.sh` 默认会读取 `CLAWSIDE_DB_PATH`、`CLAWSIDE_SENDER_BASE_URL` 和 `SENDER_AUTH_KEY`，也支持通过 flags 覆盖
-- `--db` 应指向和 orchestrator / sender 共用的 sqlite store
-- 如果只想用 truth / workflow tools，可以不实际调用 `a2a_deliver`；但只要要走真实 Telegram outward delivery，就必须保证 sender sidecar 已启动且 `sender_auth_key` 正确
-
-相关文件：
-
-- `scripts/start_mcp.sh`
-- `cmd/clawside-mcp/main.go`
-- `internal/toolserver/handlers.go`
-- `cmd/clawside-mcp/main_test.go`
-
-## sender 权限与输入边界
-
-sender 在 HTTP 入队前执行权限校验：
-
-```text
-chat_id ∈ global_allow_user_ids OR chat_id ∈ bot.allow_user_ids
-```
-
-也就是：
-
-- 命中全局 allowlist，则当前 bot 可发送
-- 未命中全局，但命中当前 bot 私有 allowlist，也可发送
-- 两边都没命中，则请求会被拒绝，且不会入队
-
-另外当前实现还做了这些输入收紧：
-
-- `bot` 必须是服务端已配置的逻辑 bot 名
-- `text` 必须是纯文本，不能为空
-- `text` 超过 Telegram 单条文本限制（4096 字符）会在入队前直接拒绝
-- `max_attempts` 必须在 `1..5` 范围内
+- [中文文档](./README.zh-CN.md)
+- [English Documentation](./README.en.md)
