@@ -78,6 +78,38 @@ func TestHandleHandoffGetReturnsTimeline(t *testing.T) {
 	}
 }
 
+func TestHandleHandoffDispatchRecordsTransportRequest(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	result, err := h.HandleHandoffDispatch(context.Background(), HandoffDispatchInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffDispatch: %v", err)
+	}
+	if result.Attempt.HandoffID != created.Handoff.ID {
+		t.Fatalf("expected handoff %s, got %s", created.Handoff.ID, result.Attempt.HandoffID)
+	}
+	if result.Attempt.Adapter != "openclaw" || result.Attempt.Target != "agent:writer" {
+		t.Fatalf("expected openclaw agent:writer attempt, got %+v", result.Attempt)
+	}
+	if len(result.Events) == 0 {
+		t.Fatalf("expected transport event")
+	}
+}
+
 func TestHandleWorkflowStatusReturnsProjectedWorkflow(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
@@ -168,6 +200,27 @@ func TestHandleWatchListRejectsBlankHandoffID(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	if _, err := h.HandleWatchList(context.Background(), WatchListInput{HandoffID: "  "}); err == nil {
 		t.Fatalf("expected blank handoff_id to fail")
+	}
+}
+
+func TestHandleWatchRunTriggersDueWatch(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	if _, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	}); err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	result, err := h.HandleWatchRun(context.Background(), WatchRunInput{Now: "2026-04-01T12:06:00Z"})
+	if err != nil {
+		t.Fatalf("HandleWatchRun: %v", err)
+	}
+	if result.RemindersSent == 0 {
+		t.Fatalf("expected reminders to be sent")
 	}
 }
 
@@ -262,6 +315,95 @@ func TestHandleRepairListReturnsRepairs(t *testing.T) {
 	}
 }
 
+func TestHandleRepairInvalidateEventCreatesRepair(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if _, err := h.svc.DispatchHandoff(context.Background(), orchestrator.DispatchHandoffInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("DispatchHandoff: %v", err)
+	}
+	received, err := h.HandleHandoffProgress(context.Background(), HandoffProgressInput{
+		Action:    "receive",
+		HandoffID: created.Handoff.ID,
+		Actor:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffProgress(receive): %v", err)
+	}
+
+	repair, err := h.HandleRepairInvalidateEvent(context.Background(), RepairInvalidateEventInput{
+		EventID: received.Event.ID,
+		Reason:  "bad event",
+		Actor:   ActorRefInput{Type: string(orchestrator.ActorUser), ID: "operator"},
+	})
+	if err != nil {
+		t.Fatalf("HandleRepairInvalidateEvent: %v", err)
+	}
+	if repair.Action != "invalidate_event" {
+		t.Fatalf("expected invalidate_event action, got %s", repair.Action)
+	}
+	if repair.TargetID != received.Event.ID {
+		t.Fatalf("expected target %s, got %s", received.Event.ID, repair.TargetID)
+	}
+}
+
+func TestHandleRepairReopenHandoffCreatesRepair(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if _, err := h.svc.DispatchHandoff(context.Background(), orchestrator.DispatchHandoffInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("DispatchHandoff: %v", err)
+	}
+	for _, action := range []string{"receive", "claim", "start", "checkpoint", "complete"} {
+		if _, err := h.HandleHandoffProgress(context.Background(), HandoffProgressInput{
+			Action:    action,
+			HandoffID: created.Handoff.ID,
+			Actor:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		}); err != nil {
+			t.Fatalf("HandleHandoffProgress(%s): %v", action, err)
+		}
+	}
+
+	repair, err := h.HandleRepairReopenHandoff(context.Background(), RepairReopenHandoffInput{
+		HandoffID: created.Handoff.ID,
+		Reason:    "retry work",
+		Actor:     ActorRefInput{Type: string(orchestrator.ActorUser), ID: "operator"},
+	})
+	if err != nil {
+		t.Fatalf("HandleRepairReopenHandoff: %v", err)
+	}
+	if repair.Action != "reopen_handoff" {
+		t.Fatalf("expected reopen_handoff action, got %s", repair.Action)
+	}
+	if repair.TargetID != created.Handoff.ID {
+		t.Fatalf("expected target %s, got %s", created.Handoff.ID, repair.TargetID)
+	}
+}
+
 func TestHandleRepairCandidateListReturnsCandidates(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
@@ -338,6 +480,40 @@ func TestHandleDivergenceListReturnsHints(t *testing.T) {
 	}
 }
 
+func TestHandleHandoffProgressAcceptsShortActionName(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if _, err := h.svc.DispatchHandoff(context.Background(), orchestrator.DispatchHandoffInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("DispatchHandoff: %v", err)
+	}
+
+	result, err := h.HandleHandoffProgress(context.Background(), HandoffProgressInput{
+		Action:     "receive",
+		WorkflowID: created.Workflow.ID,
+		HandoffID:  created.Handoff.ID,
+		Actor:      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffProgress(receive): %v", err)
+	}
+	if result.Handoff.State != orchestrator.StateReceived {
+		t.Fatalf("expected received state, got %s", result.Handoff.State)
+	}
+}
+
 func TestHandleHandoffProgressAppliesProtocolAction(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
@@ -369,10 +545,10 @@ func TestHandleHandoffProgressAppliesProtocolAction(t *testing.T) {
 	}
 	for _, action := range steps {
 		if _, err := h.HandleHandoffProgress(context.Background(), HandoffProgressInput{
-			Action:     action,
-			WorkflowID: created.Workflow.ID,
-			HandoffID:  created.Handoff.ID,
-			Actor:      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+			Action:        action,
+			WorkflowID:    created.Workflow.ID,
+			HandoffID:     created.Handoff.ID,
+			Actor:         ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
 			ArtifactCount: 1,
 		}); err != nil {
 			t.Fatalf("HandleHandoffProgress(%s): %v", action, err)

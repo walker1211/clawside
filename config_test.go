@@ -143,6 +143,33 @@ address = "127.0.0.1:8787"
 	}
 }
 
+func TestLoadConfigFromTOMLRejectsSenderAuthKeyMatchingBotToken(t *testing.T) {
+	tmpDir := t.TempDir()
+	configPath := filepath.Join(tmpDir, "config.toml")
+	content := strings.TrimSpace(`
+address = "127.0.0.1:8787"
+sender_auth_key = "shared-secret"
+
+[telegram.bots.guardian]
+enabled = true
+account_id = "guardian"
+token = "shared-secret"
+`) + "\n"
+	if err := os.WriteFile(configPath, []byte(content), 0o600); err != nil {
+		t.Fatalf("write temp config: %v", err)
+	}
+
+	_, err := LoadConfigFromTOML(configPath)
+	if err == nil {
+		t.Fatalf("expected sender_auth_key distinctness validation error")
+	}
+
+	errText := strings.ToLower(err.Error())
+	if !strings.Contains(errText, "sender_auth_key") || !strings.Contains(errText, "bot token") {
+		t.Fatalf("expected sender_auth_key bot token distinction error, got: %v", err)
+	}
+}
+
 func TestLoadConfigFromTOMLRejectsInvalidUserID(t *testing.T) {
 	tmpDir := t.TempDir()
 	configPath := filepath.Join(tmpDir, "config.toml")

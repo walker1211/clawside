@@ -79,6 +79,9 @@ func BuildConfigModel(source SourceConfig) (ConfigModel, error) {
 		if token == "" {
 			return ConfigModel{}, fmt.Errorf("missing botToken for telegram account %s (bot %s)", accountID, botName)
 		}
+		if token == senderAuthKey {
+			return ConfigModel{}, fmt.Errorf("sender_auth_key must be distinct from telegram bot token for bot %s", botName)
+		}
 
 		bots[botName] = BotModel{
 			Enabled:      true,

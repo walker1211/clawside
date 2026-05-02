@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/walker1211/clawside/internal/a2adelivery"
 	"github.com/walker1211/clawside/internal/orchestrator"
@@ -22,13 +23,13 @@ type ActorRefInput struct {
 }
 
 type HandoffCreateInput struct {
-	WorkflowKind   string            `json:"workflow_kind"`
-	Sender         ActorRefInput     `json:"sender"`
-	Receiver       ActorRefInput     `json:"receiver"`
-	Reviewer       *ActorRefInput    `json:"reviewer,omitempty"`
-	TaskKind       string            `json:"task_kind"`
-	Intent         string            `json:"intent"`
-	NeedsReview    bool              `json:"needs_review,omitempty"`
+	WorkflowKind   string               `json:"workflow_kind"`
+	Sender         ActorRefInput        `json:"sender"`
+	Receiver       ActorRefInput        `json:"receiver"`
+	Reviewer       *ActorRefInput       `json:"reviewer,omitempty"`
+	TaskKind       string               `json:"task_kind"`
+	Intent         string               `json:"intent"`
+	NeedsReview    bool                 `json:"needs_review,omitempty"`
 	ArtifactPolicy *ArtifactPolicyInput `json:"artifact_policy,omitempty"`
 }
 
@@ -50,25 +51,46 @@ type HandoffGetInput struct {
 }
 
 type HandoffGetOutput struct {
-	Handoff  orchestrator.Handoff     `json:"handoff"`
+	Handoff  orchestrator.Handoff       `json:"handoff"`
 	Timeline []orchestrator.EventRecord `json:"timeline"`
 }
 
+type HandoffDispatchInput struct {
+	HandoffID string   `json:"handoff_id"`
+	Adapter   string   `json:"adapter"`
+	Target    string   `json:"target"`
+	Command   string   `json:"command,omitempty"`
+	Args      []string `json:"args,omitempty"`
+	Message   string   `json:"message,omitempty"`
+}
+
 type HandoffProgressInput struct {
-	Action         string       `json:"action"`
-	WorkflowID     string       `json:"workflow_id,omitempty"`
-	HandoffID      string       `json:"handoff_id"`
+	Action         string        `json:"action"`
+	WorkflowID     string        `json:"workflow_id,omitempty"`
+	HandoffID      string        `json:"handoff_id"`
 	Actor          ActorRefInput `json:"actor"`
-	ArtifactCount  int          `json:"artifact_count,omitempty"`
-	ReviewDecision string       `json:"review_decision,omitempty"`
+	ArtifactCount  int           `json:"artifact_count,omitempty"`
+	ReviewDecision string        `json:"review_decision,omitempty"`
 }
 
 type WorkflowStatusInput struct {
 	WorkflowID string `json:"workflow_id"`
 }
 
+type WorkflowListOutput struct {
+	Workflows []orchestrator.WorkflowView `json:"workflows"`
+}
+
 type WatchListInput struct {
 	HandoffID string `json:"handoff_id"`
+}
+
+type WatchListOutput struct {
+	Watches []orchestrator.Watch `json:"watches"`
+}
+
+type WatchRunInput struct {
+	Now string `json:"now"`
 }
 
 type OwnershipGetInput struct {
@@ -79,12 +101,36 @@ type RepairListInput struct {
 	HandoffID string `json:"handoff_id,omitempty"`
 }
 
+type RepairListOutput struct {
+	Repairs []orchestrator.RepairRecord `json:"repairs"`
+}
+
+type RepairInvalidateEventInput struct {
+	EventID string        `json:"event_id"`
+	Reason  string        `json:"reason"`
+	Actor   ActorRefInput `json:"actor"`
+}
+
+type RepairReopenHandoffInput struct {
+	HandoffID string        `json:"handoff_id"`
+	Reason    string        `json:"reason"`
+	Actor     ActorRefInput `json:"actor"`
+}
+
 type RepairCandidateListInput struct {
 	HandoffID string `json:"handoff_id"`
 }
 
+type RepairCandidateListOutput struct {
+	RepairCandidates []orchestrator.RepairCandidate `json:"repair_candidates"`
+}
+
 type DivergenceListInput struct {
 	HandoffID string `json:"handoff_id"`
+}
+
+type DivergenceListOutput struct {
+	Divergences []orchestrator.ObserverHint `json:"divergences"`
 }
 
 func (h *Handlers) HandleWorkflowList(ctx context.Context) ([]orchestrator.WorkflowView, error) {
@@ -161,13 +207,24 @@ func (h *Handlers) HandleHandoffGet(ctx context.Context, input HandoffGetInput) 
 	return HandoffGetOutput{Handoff: handoff, Timeline: timeline}, nil
 }
 
+func (h *Handlers) HandleHandoffDispatch(ctx context.Context, input HandoffDispatchInput) (orchestrator.DispatchHandoffResult, error) {
+	return h.svc.DispatchHandoff(ctx, orchestrator.DispatchHandoffInput{
+		HandoffID: strings.TrimSpace(input.HandoffID),
+		Adapter:   strings.TrimSpace(input.Adapter),
+		Target:    strings.TrimSpace(input.Target),
+		Command:   strings.TrimSpace(input.Command),
+		Args:      append([]string(nil), input.Args...),
+		Message:   input.Message,
+	})
+}
+
 func (h *Handlers) HandleHandoffProgress(ctx context.Context, input HandoffProgressInput) (orchestrator.ProtocolResult, error) {
 	actor, err := toActorRef(input.Actor)
 	if err != nil {
 		return orchestrator.ProtocolResult{}, err
 	}
 	return h.svc.ApplyProtocolAction(ctx, orchestrator.ProtocolRequest{
-		Action:         orchestrator.ProtocolAction(strings.TrimSpace(input.Action)),
+		Action:         normalizeProtocolAction(input.Action),
 		WorkflowID:     strings.TrimSpace(input.WorkflowID),
 		HandoffID:      strings.TrimSpace(input.HandoffID),
 		Actor:          actor,
@@ -180,12 +237,47 @@ func (h *Handlers) HandleWorkflowStatus(ctx context.Context, input WorkflowStatu
 	return h.svc.WorkflowStatus(ctx, strings.TrimSpace(input.WorkflowID))
 }
 
+func normalizeProtocolAction(raw string) orchestrator.ProtocolAction {
+	switch strings.TrimSpace(raw) {
+	case "receive":
+		return orchestrator.ProtocolActionReceive
+	case "claim":
+		return orchestrator.ProtocolActionClaim
+	case "start":
+		return orchestrator.ProtocolActionStart
+	case "checkpoint":
+		return orchestrator.ProtocolActionCheckpoint
+	case "submit":
+		return orchestrator.ProtocolActionSubmit
+	case "review":
+		return orchestrator.ProtocolActionReview
+	case "request_revision", "request-revision":
+		return orchestrator.ProtocolActionRequestRevision
+	case "approve":
+		return orchestrator.ProtocolActionApprove
+	case "complete":
+		return orchestrator.ProtocolActionComplete
+	case "fail":
+		return orchestrator.ProtocolActionFail
+	default:
+		return orchestrator.ProtocolAction(strings.TrimSpace(raw))
+	}
+}
+
 func (h *Handlers) HandleWatchList(ctx context.Context, input WatchListInput) ([]orchestrator.Watch, error) {
 	handoffID, err := requireHandoffID(input.HandoffID)
 	if err != nil {
 		return nil, err
 	}
 	return h.store.ListWatches(ctx, handoffID)
+}
+
+func (h *Handlers) HandleWatchRun(ctx context.Context, input WatchRunInput) (orchestrator.RunWatchdogResult, error) {
+	now, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(input.Now))
+	if err != nil {
+		return orchestrator.RunWatchdogResult{}, err
+	}
+	return h.svc.RunWatchdog(ctx, orchestrator.RunWatchdogInput{Now: now})
 }
 
 func (h *Handlers) HandleOwnershipGet(ctx context.Context, input OwnershipGetInput) (orchestrator.OwnershipBinding, error) {
@@ -198,6 +290,26 @@ func (h *Handlers) HandleOwnershipGet(ctx context.Context, input OwnershipGetInp
 
 func (h *Handlers) HandleRepairList(ctx context.Context, input RepairListInput) ([]orchestrator.RepairRecord, error) {
 	return h.store.ListRepairs(ctx, strings.TrimSpace(input.HandoffID))
+}
+
+func (h *Handlers) HandleRepairInvalidateEvent(ctx context.Context, input RepairInvalidateEventInput) (orchestrator.RepairRecord, error) {
+	actor, err := toActorRef(input.Actor)
+	if err != nil {
+		return orchestrator.RepairRecord{}, err
+	}
+	return h.svc.InvalidateEvent(ctx, orchestrator.InvalidateEventInput{
+		EventID: strings.TrimSpace(input.EventID),
+		Reason:  strings.TrimSpace(input.Reason),
+		Actor:   actor,
+	})
+}
+
+func (h *Handlers) HandleRepairReopenHandoff(ctx context.Context, input RepairReopenHandoffInput) (orchestrator.RepairRecord, error) {
+	actor, err := toActorRef(input.Actor)
+	if err != nil {
+		return orchestrator.RepairRecord{}, err
+	}
+	return h.svc.ReopenHandoff(ctx, strings.TrimSpace(input.HandoffID), strings.TrimSpace(input.Reason), actor)
 }
 
 func (h *Handlers) HandleRepairCandidateList(ctx context.Context, input RepairCandidateListInput) ([]orchestrator.RepairCandidate, error) {

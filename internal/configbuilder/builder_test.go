@@ -135,6 +135,22 @@ func TestConfigBuilderRejectsBlankSenderAuthKey(t *testing.T) {
 	}
 }
 
+func TestConfigBuilderRejectsSenderAuthKeyMatchingBotToken(t *testing.T) {
+	senderSecret := "TOKEN_PLANNER"
+	withSenderAuthKey(t, &senderSecret)
+
+	source := mustLoadSourceForTest(t, "openclaw.valid.json")
+	_, err := BuildConfigModel(source)
+	if err == nil {
+		t.Fatalf("expected sender auth key distinctness error")
+	}
+
+	errText := strings.ToLower(err.Error())
+	if !strings.Contains(errText, "sender_auth_key") || !strings.Contains(errText, "bot token") {
+		t.Fatalf("expected sender auth key bot token distinction error, got: %v", err)
+	}
+}
+
 func TestConfigBuilderRejectsMissingTelegramRouteBinding(t *testing.T) {
 	senderSecret := "sender-secret"
 	withSenderAuthKey(t, &senderSecret)

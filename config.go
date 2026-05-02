@@ -177,6 +177,9 @@ func LoadConfigFromTOML(path string) (Config, error) {
 		if token == "" {
 			return Config{}, fmt.Errorf("telegram.bots.%s.token is required", normalizedName)
 		}
+		if token == cfg.SenderAuthKey {
+			return Config{}, fmt.Errorf("sender_auth_key must be distinct from telegram bot token for bot %s", normalizedName)
+		}
 
 		accountID := strings.TrimSpace(bot.AccountID)
 		if accountID == "" {

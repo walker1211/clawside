@@ -193,12 +193,16 @@ go run ./cmd/clawside-mcp \
 
 - `handoff_create`
 - `handoff_get`
+- `handoff_dispatch`
 - `handoff_progress`
 - `workflow_status`
 - `workflow_list`
 - `watch_list`
+- `watch_run`
 - `ownership_get`
 - `repair_list`
+- `repair_invalidate_event`
+- `repair_reopen_handoff`
 - `repair_candidate_list`
 - `divergence_list`
 - `a2a_deliver`
@@ -207,12 +211,16 @@ go run ./cmd/clawside-mcp \
 
 - `handoff_create`：创建一个新的 handoff / workflow 起点
 - `handoff_get`：查询单个 handoff 的当前 truth 与 timeline
+- `handoff_dispatch`：记录 handoff dispatch attempt 与 transport request，让纯 MCP 流程可以先 dispatch 再 receive
 - `handoff_progress`：推进 handoff 协议动作（如 `receive` / `claim` / `start` / `submit` / `approve` / `complete`）
 - `workflow_status`：查询单个 workflow 聚合视图
 - `workflow_list`：列出当前所有 workflow 及其 projected handoffs
 - `watch_list`：列出单个 handoff 当前挂载的 watches
+- `watch_run`：按给定 RFC3339 时间运行 due watch 检查
 - `ownership_get`：查询单个 handoff 当前 ownership binding
 - `repair_list`：列出 repair 记录，可按 handoff 过滤
+- `repair_invalidate_event`：使已接受事件失效并重放 handoff truth
+- `repair_reopen_handoff`：重新打开 terminal handoff 并重放 truth
 - `repair_candidate_list`：列出单个 handoff 的 repair candidates
 - `divergence_list`：列出单个 handoff 的 observer divergence hints
 - `a2a_deliver`：通过现有 sender bridge 做真实 outward delivery
@@ -220,9 +228,9 @@ go run ./cmd/clawside-mcp \
 边界：
 
 - 这是一个 **最小可用 v1 tool surface**，不是完整 truth-plane MCP 产品面
-- repair / backfill / invalidate / ownership / watch 编辑仍保留在低层 `cmd/orchestrator` 调试入口
+- repair backfill、ownership 编辑、watch 编辑等更低层动作仍保留在 `cmd/orchestrator` 调试入口
 - `a2a_deliver` 依赖本地 sender sidecar 正常运行
-- `handoff_*` / `workflow_*` / `watch_list` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
+- `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
 
 如果要在 OpenClaw 中接入，核心就是把它作为一个 stdio MCP server 注册，并让 OpenClaw 通过该 server 调用上述 tools。
 

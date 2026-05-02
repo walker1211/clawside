@@ -88,6 +88,15 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return handlers.HandleHandoffGet(ctx, args)
 	}))
 
+	handoffDispatchTool := mcp.NewTool("handoff_dispatch",
+		mcp.WithDescription("Record a handoff dispatch attempt and transport request"),
+		mcp.WithInputSchema[toolserver.HandoffDispatchInput](),
+		mcp.WithOutputSchema[orchestrator.DispatchHandoffResult](),
+	)
+	s.AddTool(handoffDispatchTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.HandoffDispatchInput) (orchestrator.DispatchHandoffResult, error) {
+		return handlers.HandleHandoffDispatch(ctx, args)
+	}))
+
 	handoffProgressTool := mcp.NewTool("handoff_progress",
 		mcp.WithDescription("Apply a protocol-driven handoff action"),
 		mcp.WithInputSchema[toolserver.HandoffProgressInput](),
@@ -108,24 +117,36 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 
 	workflowListTool := mcp.NewTool("workflow_list",
 		mcp.WithDescription("List all workflows with projected handoffs"),
-		mcp.WithInputSchema[struct{}](),
-		mcp.WithOutputSchema[[]orchestrator.WorkflowView](),
+		mcp.WithOutputSchema[toolserver.WorkflowListOutput](),
 	)
 	s.AddTool(workflowListTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, error) {
 		views, err := handlers.HandleWorkflowList(ctx)
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultStructured(views, "Listed workflows"), nil
+		return mcp.NewToolResultStructured(toolserver.WorkflowListOutput{Workflows: views}, "Listed workflows"), nil
 	}))
 
 	watchListTool := mcp.NewTool("watch_list",
 		mcp.WithDescription("List watches for a handoff"),
 		mcp.WithInputSchema[toolserver.WatchListInput](),
-		mcp.WithOutputSchema[[]orchestrator.Watch](),
+		mcp.WithOutputSchema[toolserver.WatchListOutput](),
 	)
-	s.AddTool(watchListTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.WatchListInput) ([]orchestrator.Watch, error) {
-		return handlers.HandleWatchList(ctx, args)
+	s.AddTool(watchListTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.WatchListInput) (*mcp.CallToolResult, error) {
+		watches, err := handlers.HandleWatchList(ctx, args)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(toolserver.WatchListOutput{Watches: watches}, "Listed watches"), nil
+	}))
+
+	watchRunTool := mcp.NewTool("watch_run",
+		mcp.WithDescription("Run due watch checks at the provided RFC3339 timestamp"),
+		mcp.WithInputSchema[toolserver.WatchRunInput](),
+		mcp.WithOutputSchema[orchestrator.RunWatchdogResult](),
+	)
+	s.AddTool(watchRunTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.WatchRunInput) (orchestrator.RunWatchdogResult, error) {
+		return handlers.HandleWatchRun(ctx, args)
 	}))
 
 	ownershipGetTool := mcp.NewTool("ownership_get",
@@ -140,28 +161,58 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	repairListTool := mcp.NewTool("repair_list",
 		mcp.WithDescription("List repairs, optionally filtered by handoff"),
 		mcp.WithInputSchema[toolserver.RepairListInput](),
-		mcp.WithOutputSchema[[]orchestrator.RepairRecord](),
+		mcp.WithOutputSchema[toolserver.RepairListOutput](),
 	)
-	s.AddTool(repairListTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.RepairListInput) ([]orchestrator.RepairRecord, error) {
-		return handlers.HandleRepairList(ctx, args)
+	s.AddTool(repairListTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.RepairListInput) (*mcp.CallToolResult, error) {
+		repairs, err := handlers.HandleRepairList(ctx, args)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(toolserver.RepairListOutput{Repairs: repairs}, "Listed repairs"), nil
+	}))
+
+	repairInvalidateEventTool := mcp.NewTool("repair_invalidate_event",
+		mcp.WithDescription("Invalidate an accepted event and rebuild handoff truth"),
+		mcp.WithInputSchema[toolserver.RepairInvalidateEventInput](),
+		mcp.WithOutputSchema[orchestrator.RepairRecord](),
+	)
+	s.AddTool(repairInvalidateEventTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.RepairInvalidateEventInput) (orchestrator.RepairRecord, error) {
+		return handlers.HandleRepairInvalidateEvent(ctx, args)
+	}))
+
+	repairReopenHandoffTool := mcp.NewTool("repair_reopen_handoff",
+		mcp.WithDescription("Reopen a terminal handoff and rebuild handoff truth"),
+		mcp.WithInputSchema[toolserver.RepairReopenHandoffInput](),
+		mcp.WithOutputSchema[orchestrator.RepairRecord](),
+	)
+	s.AddTool(repairReopenHandoffTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.RepairReopenHandoffInput) (orchestrator.RepairRecord, error) {
+		return handlers.HandleRepairReopenHandoff(ctx, args)
 	}))
 
 	repairCandidateListTool := mcp.NewTool("repair_candidate_list",
 		mcp.WithDescription("List repair candidates for a handoff"),
 		mcp.WithInputSchema[toolserver.RepairCandidateListInput](),
-		mcp.WithOutputSchema[[]orchestrator.RepairCandidate](),
+		mcp.WithOutputSchema[toolserver.RepairCandidateListOutput](),
 	)
-	s.AddTool(repairCandidateListTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.RepairCandidateListInput) ([]orchestrator.RepairCandidate, error) {
-		return handlers.HandleRepairCandidateList(ctx, args)
+	s.AddTool(repairCandidateListTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.RepairCandidateListInput) (*mcp.CallToolResult, error) {
+		candidates, err := handlers.HandleRepairCandidateList(ctx, args)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(toolserver.RepairCandidateListOutput{RepairCandidates: candidates}, "Listed repair candidates"), nil
 	}))
 
 	divergenceListTool := mcp.NewTool("divergence_list",
 		mcp.WithDescription("List observer divergences for a handoff"),
 		mcp.WithInputSchema[toolserver.DivergenceListInput](),
-		mcp.WithOutputSchema[[]orchestrator.ObserverHint](),
+		mcp.WithOutputSchema[toolserver.DivergenceListOutput](),
 	)
-	s.AddTool(divergenceListTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.DivergenceListInput) ([]orchestrator.ObserverHint, error) {
-		return handlers.HandleDivergenceList(ctx, args)
+	s.AddTool(divergenceListTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.DivergenceListInput) (*mcp.CallToolResult, error) {
+		divergences, err := handlers.HandleDivergenceList(ctx, args)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(toolserver.DivergenceListOutput{Divergences: divergences}, "Listed divergences"), nil
 	}))
 
 	a2aDeliverTool := mcp.NewTool("a2a_deliver",
