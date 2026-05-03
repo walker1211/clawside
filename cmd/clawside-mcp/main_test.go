@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,7 +15,54 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 )
 
-func TestServerListsV1Tools(t *testing.T) {
+var documentedV1ToolGroups = map[string][]string{
+	"handoff lifecycle": {"handoff_create", "handoff_get", "handoff_dispatch", "handoff_progress"},
+	"workflow query":    {"workflow_status", "workflow_list"},
+	"watch ownership":  {"watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update"},
+	"repair divergence": {"repair_list", "repair_invalidate_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_list"},
+	"a2a delivery":     {"a2a_deliver"},
+}
+
+var documentedNoInputV1Tools = []string{"workflow_list"}
+
+func TestResolveSenderAuthKeyPrefersExplicitFlag(t *testing.T) {
+	t.Setenv("SENDER_AUTH_KEY", "env-secret")
+
+	got := resolveSenderAuthKey(" flag-secret ")
+
+	if got != "flag-secret" {
+		t.Fatalf("expected explicit sender auth key, got %q", got)
+	}
+}
+
+func TestResolveSenderAuthKeyFallsBackToEnvironment(t *testing.T) {
+	t.Setenv("SENDER_AUTH_KEY", " env-secret ")
+
+	got := resolveSenderAuthKey(" ")
+
+	if got != "env-secret" {
+		t.Fatalf("expected environment sender auth key, got %q", got)
+	}
+}
+
+func TestRunMissingDBDoesNotPrintSenderAuthKey(t *testing.T) {
+	secret := "super-secret-sender-key"
+	var stderr strings.Builder
+
+	err := run([]string{"--sender-auth-key", secret}, nil, &stderr)
+
+	if err == nil {
+		t.Fatalf("expected missing db error")
+	}
+	if strings.Contains(err.Error(), secret) {
+		t.Fatalf("expected error not to include sender auth key, got %q", err.Error())
+	}
+	if strings.Contains(stderr.String(), secret) {
+		t.Fatalf("expected stderr not to include sender auth key, got %q", stderr.String())
+	}
+}
+
+func TestServerListsDocumentedV1Tools(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "clawside.db")
 	c := newTestMCPClient(t, dbPath)
 	defer c.Close()
@@ -31,14 +79,16 @@ func TestServerListsV1Tools(t *testing.T) {
 	for _, tool := range tools.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"handoff_create", "handoff_get", "handoff_dispatch", "handoff_progress", "workflow_status", "workflow_list", "watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update", "repair_list", "repair_invalidate_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_list", "a2a_deliver"} {
-		if !slices.Contains(names, want) {
-			t.Fatalf("expected tool %s in %v", want, names)
+	for group, wants := range documentedV1ToolGroups {
+		for _, want := range wants {
+			if !slices.Contains(names, want) {
+				t.Fatalf("expected %s tool %s in %v", group, want, names)
+			}
 		}
 	}
 }
 
-func TestServerWorkflowListInputSchemaIncludesEmptyProperties(t *testing.T) {
+func TestServerNoInputV1ToolsExposeEmptyObjectSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "clawside.db")
 	c := newTestMCPClient(t, dbPath)
 	defer c.Close()
@@ -51,19 +101,24 @@ func TestServerWorkflowListInputSchemaIncludesEmptyProperties(t *testing.T) {
 		t.Fatalf("ListTools: %v", err)
 	}
 
-	for _, tool := range tools.Tools {
-		if tool.Name != "workflow_list" {
-			continue
+	for _, want := range documentedNoInputV1Tools {
+		found := false
+		for _, tool := range tools.Tools {
+			if tool.Name != want {
+				continue
+			}
+			found = true
+			if tool.InputSchema.Properties == nil {
+				t.Fatalf("expected %s inputSchema.properties to be present", want)
+			}
+			if len(tool.InputSchema.Properties) != 0 {
+				t.Fatalf("expected %s empty properties, got %+v", want, tool.InputSchema.Properties)
+			}
 		}
-		if tool.InputSchema.Properties == nil {
-			t.Fatalf("expected workflow_list inputSchema.properties to be present")
+		if !found {
+			t.Fatalf("expected no-input v1 tool %s", want)
 		}
-		if len(tool.InputSchema.Properties) != 0 {
-			t.Fatalf("expected empty properties, got %+v", tool.InputSchema.Properties)
-		}
-		return
 	}
-	t.Fatalf("expected workflow_list tool")
 }
 
 func TestServerCallHandoffCreateSucceeds(t *testing.T) {
@@ -661,6 +716,133 @@ func TestServerCallA2ADeliverSucceeds(t *testing.T) {
 	}
 }
 
+func TestServerLocalGoldenPathConsumesWorkflowTools(t *testing.T) {
+	var polledJob bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			if got := r.Header.Get("Authorization"); got != "Bearer test-secret" {
+				t.Fatalf("expected sender auth header, got %q", got)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"job_id":202,"status":"pending"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/jobs/202":
+			polledJob = true
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"job_id":202,"status":"sent","attempt_count":1}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath, "--sender-base-url", server.URL, "--sender-auth-key", "test-secret")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	created, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_create", Arguments: map[string]any{
+		"workflow_kind": "generic",
+		"sender":        map[string]any{"type": "agent", "id": "planner"},
+		"receiver":      map[string]any{"type": "agent", "id": "writer"},
+		"task_kind":     "generic_task",
+		"intent":        "draft chapter",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_create): %v", err)
+	}
+	if created.IsError {
+		t.Fatalf("expected handoff_create success")
+	}
+	handoffID := extractHandoffID(t, created)
+	workflowID := extractWorkflowID(t, created)
+
+	dispatched, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_dispatch", Arguments: map[string]any{
+		"handoff_id": handoffID,
+		"adapter":    "openclaw",
+		"target":     "agent:writer",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_dispatch): %v", err)
+	}
+	if dispatched.IsError {
+		t.Fatalf("expected handoff_dispatch success")
+	}
+
+	progressed, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_progress", Arguments: map[string]any{
+		"action":     "receive",
+		"handoff_id": handoffID,
+		"actor":      map[string]any{"type": "agent", "id": "writer"},
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_progress): %v", err)
+	}
+	if progressed.IsError {
+		t.Fatalf("expected handoff_progress success")
+	}
+
+	handoff, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_get", Arguments: map[string]any{"handoff_id": handoffID}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_get): %v", err)
+	}
+	if handoff.IsError {
+		t.Fatalf("expected handoff_get success")
+	}
+	assertStructuredObject(t, handoff, "timeline")
+
+	if workflowID == "" {
+		t.Fatalf("expected workflow id")
+	}
+	workflow, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "workflow_list"}})
+	if err != nil {
+		t.Fatalf("CallTool(workflow_list): %v", err)
+	}
+	if workflow.IsError {
+		t.Fatalf("expected workflow_list success")
+	}
+	assertStructuredObject(t, workflow, "workflows")
+
+	for _, tc := range []struct {
+		tool string
+		args map[string]any
+		key  string
+	}{
+		{tool: "watch_list", args: map[string]any{"handoff_id": handoffID}, key: "watches"},
+		{tool: "ownership_get", args: map[string]any{"handoff_id": handoffID}, key: "current_owner"},
+		{tool: "repair_list", args: map[string]any{"handoff_id": handoffID}, key: "repairs"},
+		{tool: "repair_candidate_list", args: map[string]any{"handoff_id": handoffID}, key: "repair_candidates"},
+		{tool: "divergence_list", args: map[string]any{"handoff_id": handoffID}, key: "divergences"},
+	} {
+		result, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: tc.tool, Arguments: tc.args}})
+		if err != nil {
+			t.Fatalf("CallTool(%s): %v", tc.tool, err)
+		}
+		if result.IsError {
+			t.Fatalf("expected %s success", tc.tool)
+		}
+		assertStructuredObject(t, result, tc.key)
+	}
+
+	delivered, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "a2a_deliver", Arguments: map[string]any{
+		"target_agent": "planner",
+		"text":         "golden path delivery",
+		"chat_id":      700001,
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(a2a_deliver): %v", err)
+	}
+	if delivered.IsError {
+		t.Fatalf("expected a2a_deliver success")
+	}
+	assertStructuredObject(t, delivered, "status")
+	if !polledJob {
+		t.Fatalf("expected a2a_deliver to poll sender job status")
+	}
+}
+
 func assertStructuredObject(t *testing.T, result *mcp.CallToolResult, key string) {
 	t.Helper()
 	payload, ok := result.StructuredContent.(map[string]any)
@@ -690,6 +872,26 @@ func extractHandoffID(t *testing.T, result *mcp.CallToolResult) string {
 		t.Fatalf("expected handoff id in structured content")
 	}
 	return payload.Handoff.ID
+}
+
+func extractWorkflowID(t *testing.T, result *mcp.CallToolResult) string {
+	t.Helper()
+	raw, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	var payload struct {
+		Workflow struct {
+			ID string `json:"id"`
+		} `json:"workflow"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal structured content: %v", err)
+	}
+	if payload.Workflow.ID == "" {
+		t.Fatalf("expected workflow id in structured content")
+	}
+	return payload.Workflow.ID
 }
 
 func extractWatchID(t *testing.T, result *mcp.CallToolResult) string {

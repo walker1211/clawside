@@ -18,9 +18,9 @@ It is not the OpenClaw runtime itself, and it is not only a Telegram sender. The
 - **orchestrator CLI / store / state machine / watch / repair foundations**: foundations for handoffs, events, workflows, watches, and repairs.
 - **OpenClaw adapter foundations**: integration points for dispatching and bridge actions through OpenClaw-compatible entrypoints.
 - **A2A delivery bridge skill**: explicit outward delivery when the official announce / nested callback path is unreliable.
-- **Minimal MCP tool surface**: tools OpenClaw can consume for handoffs, workflows, watches, repairs, and A2A delivery.
+- **MCP + skill v1 surface**: tools OpenClaw can install, register, and consume for handoffs, workflows, watches, repairs, and A2A delivery.
 
-This version is usable as a minimal v1, but it is not yet a complete install-and-use MCP server + skill product suite.
+This version now productizes the minimal v1 into an installable, registerable, and verifiable MCP server + skill suite.
 
 ## Components
 
@@ -159,6 +159,8 @@ curl http://127.0.0.1:8787/jobs/<job_id>
 ```
 
 ## OpenClaw MCP / tool server
+
+This section summarizes the v1 tool contract, startup path, and invocation boundaries.
 
 Start the stdio MCP server:
 

@@ -18,9 +18,9 @@
 - **orchestrator CLI / store / state machine / watch / repair foundations**：提供 handoff、event、workflow、watch、repair 的基础骨架
 - **OpenClaw adapter foundations**：用于把调度和桥接动作接到现有 OpenClaw 兼容入口
 - **A2A delivery bridge skill**：在官方 announce / nested 回传链路不稳定时，为主 agent 提供显式消息投递桥
-- **最小 MCP tool surface**：让 OpenClaw 可以消费 handoff、workflow、watch、repair 和 A2A delivery 工具
+- **MCP + skill v1 surface**：让 OpenClaw 可以安装、注册并消费 handoff、workflow、watch、repair 和 A2A delivery 工具
 
-当前版本可以作为最小可用 v1 使用，但还不是完整安装即用的 MCP server + skill 产品套件。
+当前版本已把最小可用 v1 收口为可安装、可注册、可验证的 MCP server + skill 产品套件。
 
 ## 组件概览
 
@@ -159,6 +159,8 @@ curl http://127.0.0.1:8787/jobs/<job_id>
 ```
 
 ## OpenClaw MCP / tool server
+
+本节汇总 v1 tool contract、启动路径和调用边界。
 
 启动 stdio MCP server：
 
