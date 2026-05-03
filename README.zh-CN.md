@@ -168,7 +168,8 @@ curl http://127.0.0.1:8787/jobs/<job_id>
 go run ./cmd/clawside-mcp \
   --db ./sender.db \
   --sender-base-url http://127.0.0.1:8787 \
-  --sender-auth-key "$SENDER_AUTH_KEY"
+  --sender-auth-key "$SENDER_AUTH_KEY" \
+  --target-agent-map "qa=guardian"
 ```
 
 更稳定的本地启动方式是包装脚本：
@@ -176,6 +177,8 @@ go run ./cmd/clawside-mcp \
 ```bash
 ./scripts/start_mcp.sh --db ./sender.db
 ```
+
+`--target-agent-map` 和 `CLAWSIDE_TARGET_AGENT_BOT_MAP` 接受逗号分隔的 `target_agent=bot` 映射。`a2a_deliver` 调用方仍只传 `target_agent`，不能在请求里绕过路由策略直接指定任意 bot。
 
 当前 v1 暴露的 tools：
 
@@ -215,7 +218,7 @@ go run ./cmd/clawside-mcp \
 - `repair_reopen_handoff`：重新打开 terminal handoff 并重放 truth
 - `repair_candidate_list`：列出单个 handoff 的 repair candidates
 - `divergence_list`：列出单个 handoff 的 observer divergence hints
-- `a2a_deliver`：通过现有 sender bridge 做真实 outward delivery
+- `a2a_deliver`：通过内置或配置的 mapping 把 `target_agent` 解析成 bot 后，经现有 sender bridge 做真实 outward delivery
 
 边界：
 

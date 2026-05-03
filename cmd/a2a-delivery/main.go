@@ -13,7 +13,10 @@ import (
 	"github.com/walker1211/clawside/internal/a2adelivery"
 )
 
-const defaultSenderBaseURL = "http://127.0.0.1:8787"
+const (
+	defaultSenderBaseURL     = "http://127.0.0.1:8787"
+	targetAgentBotMapEnvName = "CLAWSIDE_TARGET_AGENT_BOT_MAP"
+)
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -30,6 +33,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var senderBaseURL string
 	var senderAuthKey string
 	var targetAgent string
+	var targetAgentMap string
 	var text string
 	var chatIDRaw string
 	var idempotencyKey string
@@ -40,6 +44,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&senderBaseURL, "sender-base-url", defaultSenderBaseURL, "sender base url")
 	fs.StringVar(&senderAuthKey, "sender-auth-key", "", "sender auth key")
 	fs.StringVar(&targetAgent, "target-agent", "", "target agent")
+	fs.StringVar(&targetAgentMap, "target-agent-map", "", "comma-separated target_agent=bot mappings")
 	fs.StringVar(&text, "text", "", "delivery text")
 	fs.StringVar(&chatIDRaw, "chat-id", "", "explicit target chat id")
 	fs.StringVar(&idempotencyKey, "idempotency-key", "", "idempotency key")
@@ -60,6 +65,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	senderAuthKey = resolveSenderAuthKey(senderAuthKey)
+	targetAgentMap = resolveTargetAgentBotMap(targetAgentMap)
+	resolver, err := a2adelivery.NewTargetAgentBotResolver(targetAgentMap)
+	if err != nil {
+		return err
+	}
 
 	chatID, err := parseOptionalInt64(chatIDRaw, "chat-id")
 	if err != nil {
@@ -80,7 +90,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	client := a2adelivery.NewSenderClient(senderBaseURL, senderAuthKey, nil)
-	result, err := a2adelivery.RunA2ADeliveryBridge(context.Background(), client, a2adelivery.SkillInput{
+	result, err := a2adelivery.RunA2ADeliveryBridgeWithResolver(context.Background(), client, a2adelivery.SkillInput{
 		TargetAgent:    targetAgent,
 		Text:           text,
 		ChatID:         chatID,
@@ -89,7 +99,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		DeliveryContextTo:       deliveryContextTo,
 		DirectSessionPeerChatID: directSessionPeerChatID,
 		InboundSenderChatID:     inboundSenderChatID,
-	})
+	}, resolver)
 	if err != nil {
 		return err
 	}
@@ -101,6 +111,13 @@ func resolveSenderAuthKey(flagValue string) string {
 		return trimmed
 	}
 	return strings.TrimSpace(os.Getenv("SENDER_AUTH_KEY"))
+}
+
+func resolveTargetAgentBotMap(flagValue string) string {
+	if trimmed := strings.TrimSpace(flagValue); trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(os.Getenv(targetAgentBotMapEnvName))
 }
 
 func parseOptionalInt64(raw string, name string) (*int64, error) {

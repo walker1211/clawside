@@ -35,3 +35,82 @@ func TestResolveBotForTargetAgentUnknownFailsImmediately(t *testing.T) {
 		t.Fatalf("expected unknown target_agent to fail")
 	}
 }
+
+func TestNewTargetAgentBotResolverUsesBuiltInFallback(t *testing.T) {
+	resolver, err := NewTargetAgentBotResolver("")
+	if err != nil {
+		t.Fatalf("NewTargetAgentBotResolver: %v", err)
+	}
+
+	got, err := resolver.ResolveBotForTargetAgent(" Planner ")
+	if err != nil {
+		t.Fatalf("expected built-in mapping, got error: %v", err)
+	}
+	if got != "planner" {
+		t.Fatalf("expected bot planner, got %q", got)
+	}
+}
+
+func TestNewTargetAgentBotResolverAddsConfiguredMapping(t *testing.T) {
+	resolver, err := NewTargetAgentBotResolver("qa=guardian")
+	if err != nil {
+		t.Fatalf("NewTargetAgentBotResolver: %v", err)
+	}
+
+	got, err := resolver.ResolveBotForTargetAgent("qa")
+	if err != nil {
+		t.Fatalf("expected configured mapping, got error: %v", err)
+	}
+	if got != "guardian" {
+		t.Fatalf("expected bot guardian, got %q", got)
+	}
+}
+
+func TestNewTargetAgentBotResolverOverridesBuiltInMapping(t *testing.T) {
+	resolver, err := NewTargetAgentBotResolver("planner=guardian")
+	if err != nil {
+		t.Fatalf("NewTargetAgentBotResolver: %v", err)
+	}
+
+	got, err := resolver.ResolveBotForTargetAgent("planner")
+	if err != nil {
+		t.Fatalf("expected configured override, got error: %v", err)
+	}
+	if got != "guardian" {
+		t.Fatalf("expected bot guardian, got %q", got)
+	}
+}
+
+func TestNewTargetAgentBotResolverRejectsInvalidPairs(t *testing.T) {
+	for _, raw := range []string{"qa", "qa=guardian=extra"} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := NewTargetAgentBotResolver(raw)
+			if err == nil {
+				t.Fatalf("expected invalid mapping %q to fail", raw)
+			}
+		})
+	}
+}
+
+func TestNewTargetAgentBotResolverRejectsBlankSides(t *testing.T) {
+	for _, raw := range []string{"=guardian", "qa= ", " =guardian"} {
+		t.Run(raw, func(t *testing.T) {
+			_, err := NewTargetAgentBotResolver(raw)
+			if err == nil {
+				t.Fatalf("expected blank-sided mapping %q to fail", raw)
+			}
+		})
+	}
+}
+
+func TestConfiguredTargetAgentBotResolverRejectsUnknownTarget(t *testing.T) {
+	resolver, err := NewTargetAgentBotResolver("qa=guardian")
+	if err != nil {
+		t.Fatalf("NewTargetAgentBotResolver: %v", err)
+	}
+
+	_, err = resolver.ResolveBotForTargetAgent("unknown")
+	if err == nil {
+		t.Fatalf("expected unknown target_agent to fail")
+	}
+}

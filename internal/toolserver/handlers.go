@@ -11,9 +11,10 @@ import (
 )
 
 type Handlers struct {
-	svc          *orchestrator.Service
-	store        *orchestrator.Store
-	senderClient *a2adelivery.SenderClient
+	svc                    *orchestrator.Service
+	store                  *orchestrator.Store
+	senderClient           *a2adelivery.SenderClient
+	targetAgentBotResolver *a2adelivery.TargetAgentBotResolver
 }
 
 type ActorRefInput struct {
@@ -178,7 +179,11 @@ type A2ADeliverInput struct {
 }
 
 func NewHandlers(svc *orchestrator.Service, store *orchestrator.Store, senderClient *a2adelivery.SenderClient) *Handlers {
-	return &Handlers{svc: svc, store: store, senderClient: senderClient}
+	return NewHandlersWithTargetAgentBotResolver(svc, store, senderClient, nil)
+}
+
+func NewHandlersWithTargetAgentBotResolver(svc *orchestrator.Service, store *orchestrator.Store, senderClient *a2adelivery.SenderClient, resolver *a2adelivery.TargetAgentBotResolver) *Handlers {
+	return &Handlers{svc: svc, store: store, senderClient: senderClient, targetAgentBotResolver: resolver}
 }
 
 func (h *Handlers) HandleHandoffCreate(ctx context.Context, input HandoffCreateInput) (HandoffCreateOutput, error) {
@@ -429,7 +434,7 @@ func (h *Handlers) HandleA2ADeliver(ctx context.Context, input A2ADeliverInput) 
 	if h.senderClient == nil {
 		return a2adelivery.DeliveryResult{}, fmt.Errorf("sender client is required")
 	}
-	return a2adelivery.RunA2ADeliveryBridge(ctx, h.senderClient, a2adelivery.SkillInput{
+	return a2adelivery.RunA2ADeliveryBridgeWithResolver(ctx, h.senderClient, a2adelivery.SkillInput{
 		TargetAgent:    strings.TrimSpace(input.TargetAgent),
 		Text:           input.Text,
 		ChatID:         input.ChatID,
@@ -438,7 +443,7 @@ func (h *Handlers) HandleA2ADeliver(ctx context.Context, input A2ADeliverInput) 
 		DeliveryContextTo:       input.DeliveryContextTo,
 		DirectSessionPeerChatID: input.DirectSessionPeerChatID,
 		InboundSenderChatID:     input.InboundSenderChatID,
-	})
+	}, h.targetAgentBotResolver)
 }
 
 func toActorRef(input ActorRefInput) (orchestrator.ActorRef, error) {

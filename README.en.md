@@ -168,7 +168,8 @@ Start the stdio MCP server:
 go run ./cmd/clawside-mcp \
   --db ./sender.db \
   --sender-base-url http://127.0.0.1:8787 \
-  --sender-auth-key "$SENDER_AUTH_KEY"
+  --sender-auth-key "$SENDER_AUTH_KEY" \
+  --target-agent-map "qa=guardian"
 ```
 
 The more stable local entrypoint is:
@@ -176,6 +177,8 @@ The more stable local entrypoint is:
 ```bash
 ./scripts/start_mcp.sh --db ./sender.db
 ```
+
+`--target-agent-map` and `CLAWSIDE_TARGET_AGENT_BOT_MAP` accept comma-separated `target_agent=bot` pairs. `a2a_deliver` callers still provide `target_agent`; they do not pass arbitrary sender bot overrides.
 
 Current v1 tools:
 
@@ -215,7 +218,7 @@ Recommended reading:
 - `repair_reopen_handoff`: reopens a terminal handoff and replays truth.
 - `repair_candidate_list`: lists repair candidates for a handoff.
 - `divergence_list`: lists observer divergence hints for a handoff.
-- `a2a_deliver`: performs real outward delivery through the existing sender bridge.
+- `a2a_deliver`: performs real outward delivery through the existing sender bridge after resolving `target_agent` through built-in or configured mapping.
 
 Boundaries:
 

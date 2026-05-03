@@ -40,7 +40,7 @@ Optional:
 
 - `target_agent`
     - must be non-empty
-    - must exist in the static mapping
+    - must resolve through built-in or configured mapping
 - `text`
     - must be non-empty after trimming
     - must be <= 4096 chars
@@ -57,9 +57,9 @@ Use **context-first resolution with optional explicit override**:
 2. Otherwise resolve target user from current session context.
 3. If unresolved or conflicting, fail before calling sender.
 
-## Static mapping
+## Target-agent mapping
 
-Use explicit static `target_agent -> bot` mapping:
+Use explicit `target_agent -> bot` mapping. Built-in defaults are:
 
 - `planner -> planner`
 - `engineer -> engineer`
@@ -67,6 +67,8 @@ Use explicit static `target_agent -> bot` mapping:
 - `archivist -> archivist`
 - `guardian -> guardian`
 - `closer -> closer`
+
+Local startup may add or override mappings with `target_agent=bot` pairs through `--target-agent-map` or `CLAWSIDE_TARGET_AGENT_BOT_MAP`. Skill requests still provide `target_agent`; do not pass or invent a raw bot override per message.
 
 Unknown `target_agent` must fail immediately.
 
@@ -83,7 +85,8 @@ go run ./cmd/a2a-delivery \
   [--delivery-context-to <chat_id>] \
   [--direct-session-peer-chat-id <chat_id>] \
   [--inbound-sender-chat-id <chat_id>] \
-  [--sender-auth-key <sender_auth_key>]
+  [--sender-auth-key <sender_auth_key>] \
+  [--target-agent-map <target_agent=bot[,target_agent=bot...]>]
 ```
 
 The command prints machine-readable JSON with the fixed delivery result contract.
@@ -92,7 +95,7 @@ The command prints machine-readable JSON with the fixed delivery result contract
 
 1. Validate input.
 2. Resolve `chat_id` (override first, then context).
-3. Resolve `target_agent -> bot` via static mapping.
+3. Resolve `target_agent -> bot` via built-in or configured mapping.
 4. Call sender `POST /send`.
 5. Poll sender `GET /jobs/{job_id}`.
 6. Return structured delivery result.

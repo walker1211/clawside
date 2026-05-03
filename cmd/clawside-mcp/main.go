@@ -32,9 +32,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var dbPath string
 	var senderBaseURL string
 	var senderAuthKey string
+	var targetAgentMap string
 	fs.StringVar(&dbPath, "db", "", "sqlite db path")
 	fs.StringVar(&senderBaseURL, "sender-base-url", defaultSenderBaseURL, "sender base url")
 	fs.StringVar(&senderAuthKey, "sender-auth-key", "", "sender auth key")
+	fs.StringVar(&targetAgentMap, "target-agent-map", "", "comma-separated target_agent=bot mappings")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -52,19 +54,34 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	senderAuthKey = resolveSenderAuthKey(senderAuthKey)
+	targetAgentMap = resolveTargetAgentBotMap(targetAgentMap)
+	resolver, err := a2adelivery.NewTargetAgentBotResolver(targetAgentMap)
+	if err != nil {
+		return err
+	}
 	senderClient := a2adelivery.NewSenderClient(senderBaseURL, senderAuthKey, nil)
-	handlers := toolserver.NewHandlers(orchestrator.NewService(store, nil), store, senderClient)
+	handlers := toolserver.NewHandlersWithTargetAgentBotResolver(orchestrator.NewService(store, nil), store, senderClient, resolver)
 	s := newServer(handlers)
 	return server.ServeStdio(s)
 }
 
-const defaultSenderBaseURL = "http://127.0.0.1:8787"
+const (
+	defaultSenderBaseURL     = "http://127.0.0.1:8787"
+	targetAgentBotMapEnvName = "CLAWSIDE_TARGET_AGENT_BOT_MAP"
+)
 
 func resolveSenderAuthKey(flagValue string) string {
 	if trimmed := strings.TrimSpace(flagValue); trimmed != "" {
 		return trimmed
 	}
 	return strings.TrimSpace(os.Getenv("SENDER_AUTH_KEY"))
+}
+
+func resolveTargetAgentBotMap(flagValue string) string {
+	if trimmed := strings.TrimSpace(flagValue); trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(os.Getenv(targetAgentBotMapEnvName))
 }
 
 func newServer(handlers *toolserver.Handlers) *server.MCPServer {

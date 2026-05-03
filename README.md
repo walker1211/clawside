@@ -30,6 +30,8 @@ For the MCP server:
 ./scripts/start_mcp.sh --db ./sender.db
 ```
 
+Optional A2A routing overrides use `target_agent=bot` pairs, for example `CLAWSIDE_TARGET_AGENT_BOT_MAP='qa=guardian' ./scripts/start_mcp.sh --db ./sender.db`. Delivery calls still provide `target_agent`; callers do not pass arbitrary bot names.
+
 ## Configuration
 
 Recommended local setup:

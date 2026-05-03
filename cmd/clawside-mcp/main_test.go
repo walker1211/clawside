@@ -18,9 +18,9 @@ import (
 var documentedV1ToolGroups = map[string][]string{
 	"handoff lifecycle": {"handoff_create", "handoff_get", "handoff_dispatch", "handoff_progress"},
 	"workflow query":    {"workflow_status", "workflow_list"},
-	"watch ownership":  {"watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update"},
+	"watch ownership":   {"watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update"},
 	"repair divergence": {"repair_list", "repair_invalidate_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_list"},
-	"a2a delivery":     {"a2a_deliver"},
+	"a2a delivery":      {"a2a_deliver"},
 }
 
 var documentedNoInputV1Tools = []string{"workflow_list"}
@@ -42,6 +42,26 @@ func TestResolveSenderAuthKeyFallsBackToEnvironment(t *testing.T) {
 
 	if got != "env-secret" {
 		t.Fatalf("expected environment sender auth key, got %q", got)
+	}
+}
+
+func TestResolveTargetAgentBotMapPrefersExplicitFlag(t *testing.T) {
+	t.Setenv("CLAWSIDE_TARGET_AGENT_BOT_MAP", "env=guardian")
+
+	got := resolveTargetAgentBotMap(" flag=planner ")
+
+	if got != "flag=planner" {
+		t.Fatalf("expected explicit target agent bot map, got %q", got)
+	}
+}
+
+func TestResolveTargetAgentBotMapFallsBackToEnvironment(t *testing.T) {
+	t.Setenv("CLAWSIDE_TARGET_AGENT_BOT_MAP", " env=guardian ")
+
+	got := resolveTargetAgentBotMap(" ")
+
+	if got != "env=guardian" {
+		t.Fatalf("expected environment target agent bot map, got %q", got)
 	}
 }
 
@@ -713,6 +733,107 @@ func TestServerCallA2ADeliverSucceeds(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("expected a2a_deliver success, got error result")
+	}
+}
+
+func TestServerCallA2ADeliverUsesConfiguredTargetAgentMapping(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			var payload struct {
+				Bot string `json:"bot"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode /send payload: %v", err)
+			}
+			if payload.Bot != "guardian" {
+				t.Fatalf("expected mapped bot guardian, got %q", payload.Bot)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"job_id":203,"status":"sent"}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath, "--sender-base-url", server.URL, "--target-agent-map", "qa=guardian")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "a2a_deliver", Arguments: map[string]any{
+		"target_agent": "qa",
+		"text":         "hello",
+		"chat_id":      700008,
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(a2a_deliver): %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected a2a_deliver success, got error result")
+	}
+	assertStructuredObject(t, result, "status")
+}
+
+func TestServerCallA2ADeliverUsesTargetAgentMappingEnvironmentFallback(t *testing.T) {
+	t.Setenv("CLAWSIDE_TARGET_AGENT_BOT_MAP", "qa=guardian")
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			var payload struct {
+				Bot string `json:"bot"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode /send payload: %v", err)
+			}
+			if payload.Bot != "guardian" {
+				t.Fatalf("expected mapped bot guardian, got %q", payload.Bot)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"job_id":204,"status":"sent"}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath, "--sender-base-url", server.URL)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "a2a_deliver", Arguments: map[string]any{
+		"target_agent": "qa",
+		"text":         "hello",
+		"chat_id":      700009,
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(a2a_deliver): %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected a2a_deliver success, got error result")
+	}
+	assertStructuredObject(t, result, "status")
+}
+
+func TestRunRejectsInvalidTargetAgentMapping(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	var stderr strings.Builder
+
+	err := run([]string{"--db", dbPath, "--target-agent-map", "qa"}, nil, &stderr)
+	if err == nil {
+		t.Fatalf("expected invalid target-agent-map to fail")
+	}
+	if !strings.Contains(err.Error(), "target_agent mapping") {
+		t.Fatalf("expected target_agent mapping error, got %v", err)
 	}
 }
 

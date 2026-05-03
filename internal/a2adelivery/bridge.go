@@ -13,6 +13,18 @@ import (
 )
 
 func RunA2ADeliveryBridge(ctx context.Context, client *SenderClient, input SkillInput, runtimeContext any) (DeliveryResult, error) {
+	return RunA2ADeliveryBridgeWithResolver(ctx, client, input, runtimeContext, nil)
+}
+
+func RunA2ADeliveryBridgeWithResolver(ctx context.Context, client *SenderClient, input SkillInput, runtimeContext any, resolver *TargetAgentBotResolver) (DeliveryResult, error) {
+	if resolver == nil {
+		var err error
+		resolver, err = NewTargetAgentBotResolver("")
+		if err != nil {
+			return DeliveryResult{}, err
+		}
+	}
+
 	targetAgent := strings.TrimSpace(input.TargetAgent)
 	if targetAgent == "" {
 		return DeliveryResult{}, fmt.Errorf("target_agent is required")
@@ -51,7 +63,7 @@ func RunA2ADeliveryBridge(ctx context.Context, client *SenderClient, input Skill
 		return DeliveryResult{}, err
 	}
 
-	bot, err := ResolveBotForTargetAgent(targetAgent)
+	bot, err := resolver.ResolveBotForTargetAgent(targetAgent)
 	if err != nil {
 		return DeliveryResult{}, err
 	}

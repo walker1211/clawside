@@ -94,6 +94,55 @@ func TestA2ADeliveryBridgeReturnsSentWithoutPollingWhenSendIsTerminalSent(t *tes
 	}
 }
 
+func TestA2ADeliveryBridgeUsesConfiguredTargetAgentResolver(t *testing.T) {
+	t.Parallel()
+
+	const (
+		targetAgent = "qa"
+		mappedBot   = "guardian"
+		text        = "qa update"
+		chatID      = int64(700099)
+		jobID       = int64(91099)
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			var payload struct {
+				Bot string `json:"bot"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode /send payload: %v", err)
+			}
+			if payload.Bot != mappedBot {
+				t.Fatalf("expected bot %q, got %q", mappedBot, payload.Bot)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"sent"}`, jobID)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	resolver, err := NewTargetAgentBotResolver(targetAgent + "=" + mappedBot)
+	if err != nil {
+		t.Fatalf("NewTargetAgentBotResolver: %v", err)
+	}
+	client := NewSenderClient(server.URL, "", server.Client())
+	input := SkillInput{TargetAgent: targetAgent, Text: text}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(chatID)}
+
+	result, err := RunA2ADeliveryBridgeWithResolver(context.Background(), client, input, runtimeContext, resolver)
+	if err != nil {
+		t.Fatalf("expected bridge call success, got error: %v", err)
+	}
+	if result.Bot != mappedBot {
+		t.Fatalf("expected result bot %q, got %q", mappedBot, result.Bot)
+	}
+}
+
 func TestA2ADeliveryBridgeReturnsFailedWithoutPollingWhenSendIsTerminalFailed(t *testing.T) {
 	t.Parallel()
 
