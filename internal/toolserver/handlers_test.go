@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -771,6 +773,152 @@ func TestHandleA2ADeliverReturnsStructuredResult(t *testing.T) {
 	}
 	if result.TargetAgent != "planner" {
 		t.Fatalf("expected planner target, got %s", result.TargetAgent)
+	}
+}
+
+func TestHandleSenderObservabilityDelegatesToSenderClient(t *testing.T) {
+	const expectedAuthKey = "local-sender-key"
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer "+expectedAuthKey {
+			t.Fatalf("expected Authorization header %q, got %q", "Bearer "+expectedAuthKey, got)
+		}
+		if r.Method != http.MethodGet {
+			t.Fatalf("expected method GET, got %s", r.Method)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/healthz", "/readyz":
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case "/stats":
+			_, _ = w.Write([]byte(`{"pending_count":2,"retry_count":1,"sending_count":3,"failed_count":4,"sent_count":5,"worker_running":true}`))
+		case "/jobs":
+			if got := r.URL.Query().Get("status"); got != "failed" {
+				t.Fatalf("expected status failed, got %q", got)
+			}
+			if got := r.URL.Query().Get("limit"); got != "2" {
+				t.Fatalf("expected limit 2, got %q", got)
+			}
+			_, _ = w.Write([]byte(`{"jobs":[{"job_id":44,"bot":"guardian","chat_id":7098285098,"status":"failed","attempt_count":2,"max_attempts":3,"last_error":"telegram unavailable","created_at":"2026-05-03T11:59:00Z","updated_at":"2026-05-03T12:00:00Z","sent_at":null}]}`))
+		case "/jobs/55":
+			_, _ = w.Write([]byte(`{"job_id":55,"status":"sent","attempt_count":1,"last_error":"","created_at":"2026-05-03T11:58:00Z","updated_at":"2026-05-03T12:00:04Z","sent_at":"2026-05-03T12:00:04Z"}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	h := newTestHandlers(t, a2adelivery.NewSenderClient(server.URL, expectedAuthKey, server.Client()))
+
+	health, err := h.HandleSenderHealth(context.Background())
+	if err != nil {
+		t.Fatalf("HandleSenderHealth: %v", err)
+	}
+	if health.Status != "ok" {
+		t.Fatalf("expected health ok, got %+v", health)
+	}
+
+	ready, err := h.HandleSenderReady(context.Background())
+	if err != nil {
+		t.Fatalf("HandleSenderReady: %v", err)
+	}
+	if ready.Status != "ok" {
+		t.Fatalf("expected ready ok, got %+v", ready)
+	}
+
+	stats, err := h.HandleSenderStats(context.Background())
+	if err != nil {
+		t.Fatalf("HandleSenderStats: %v", err)
+	}
+	if stats.PendingCount != 2 || stats.RetryCount != 1 || stats.SendingCount != 3 || stats.FailedCount != 4 || stats.SentCount != 5 || !stats.WorkerRunning {
+		t.Fatalf("unexpected stats: %+v", stats)
+	}
+
+	list, err := h.HandleSenderJobList(context.Background(), SenderJobListInput{Status: "failed", Limit: 2})
+	if err != nil {
+		t.Fatalf("HandleSenderJobList: %v", err)
+	}
+	if len(list.Jobs) != 1 || list.Jobs[0].JobID != 44 || list.Jobs[0].Bot != "guardian" || list.Jobs[0].Status != "failed" {
+		t.Fatalf("unexpected job list: %+v", list)
+	}
+
+	job, err := h.HandleSenderJobGet(context.Background(), SenderJobGetInput{JobID: 55})
+	if err != nil {
+		t.Fatalf("HandleSenderJobGet: %v", err)
+	}
+	if job.JobID != 55 || job.Status != "sent" || job.SentAt == nil {
+		t.Fatalf("unexpected job: %+v", job)
+	}
+}
+
+func TestHandleSenderObservabilityRedactsTelegramBotTokenFromLastError(t *testing.T) {
+	const token = "123456:ABC_secret-token"
+	lastError := `telegram api error: Post "https://api.telegram.org/bot` + token + `/sendMessage": dial tcp: i/o timeout`
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/jobs":
+			_, _ = w.Write([]byte(`{"jobs":[{"job_id":44,"bot":"guardian","chat_id":7098285098,"status":"failed","attempt_count":2,"max_attempts":3,"last_error":` + strconv.Quote(lastError) + `,"created_at":"2026-05-03T11:59:00Z","updated_at":"2026-05-03T12:00:00Z","sent_at":null}]}`))
+		case "/jobs/55":
+			_, _ = w.Write([]byte(`{"job_id":55,"status":"failed","attempt_count":2,"last_error":` + strconv.Quote(lastError) + `,"created_at":"2026-05-03T11:58:00Z","updated_at":"2026-05-03T12:00:04Z","sent_at":null}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	h := newTestHandlers(t, a2adelivery.NewSenderClient(server.URL, "", server.Client()))
+
+	list, err := h.HandleSenderJobList(context.Background(), SenderJobListInput{Status: "failed", Limit: 2})
+	if err != nil {
+		t.Fatalf("HandleSenderJobList: %v", err)
+	}
+	if len(list.Jobs) != 1 {
+		t.Fatalf("expected one job, got %d", len(list.Jobs))
+	}
+	if strings.Contains(list.Jobs[0].LastError, token) {
+		t.Fatalf("expected job list error not to expose bot token, got %q", list.Jobs[0].LastError)
+	}
+	if !strings.Contains(list.Jobs[0].LastError, "i/o timeout") {
+		t.Fatalf("expected job list error to keep diagnostic detail, got %q", list.Jobs[0].LastError)
+	}
+
+	job, err := h.HandleSenderJobGet(context.Background(), SenderJobGetInput{JobID: 55})
+	if err != nil {
+		t.Fatalf("HandleSenderJobGet: %v", err)
+	}
+	if strings.Contains(job.LastError, token) {
+		t.Fatalf("expected job error not to expose bot token, got %q", job.LastError)
+	}
+	if !strings.Contains(job.LastError, "i/o timeout") {
+		t.Fatalf("expected job error to keep diagnostic detail, got %q", job.LastError)
+	}
+}
+
+func TestHandleSenderJobListRejectsInvalidFilterBeforeCallingSender(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		t.Fatalf("sender should not be called for invalid MCP filter")
+	}))
+	defer server.Close()
+
+	h := newTestHandlers(t, a2adelivery.NewSenderClient(server.URL, "", server.Client()))
+
+	if _, err := h.HandleSenderJobList(context.Background(), SenderJobListInput{Status: "unknown", Limit: 2}); err == nil {
+		t.Fatalf("expected invalid status error")
+	}
+	if called {
+		t.Fatalf("sender was called for invalid status")
+	}
+
+	if _, err := h.HandleSenderJobList(context.Background(), SenderJobListInput{Status: "failed", Limit: 101}); err == nil {
+		t.Fatalf("expected invalid limit error")
+	}
+	if called {
+		t.Fatalf("sender was called for invalid limit")
 	}
 }
 

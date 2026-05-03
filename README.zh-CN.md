@@ -198,6 +198,11 @@ go run ./cmd/clawside-mcp \
 - `repair_reopen_handoff`
 - `repair_candidate_list`
 - `divergence_list`
+- `sender_health`
+- `sender_ready`
+- `sender_stats`
+- `sender_job_list`
+- `sender_job_get`
 - `a2a_deliver`
 
 推荐理解：
@@ -218,13 +223,19 @@ go run ./cmd/clawside-mcp \
 - `repair_reopen_handoff`：重新打开 terminal handoff 并重放 truth
 - `repair_candidate_list`：列出单个 handoff 的 repair candidates
 - `divergence_list`：列出单个 handoff 的 observer divergence hints
+- `sender_health`：检查 sender 进程健康状态
+- `sender_ready`：检查 sender 是否已准备好处理投递工作
+- `sender_stats`：返回 sender 队列计数和 worker 时间字段
+- `sender_job_list`：按状态和有界 limit 列出 sender jobs
+- `sender_job_get`：返回单个 sender job 状态
 - `a2a_deliver`：通过内置或配置的 mapping 把 `target_agent` 解析成 bot 后，经现有 sender bridge 做真实 outward delivery
 
 边界：
 
 - 这是一个最小可用 v1 tool surface，不是完整 truth-plane MCP 产品面
 - repair backfill 和更深层 truth-plane 操作仍不属于 v1 MCP surface
-- `a2a_deliver` 依赖本地 sender sidecar 正常运行
+- `a2a_deliver` 和 `sender_*` observability tools 依赖本地 sender sidecar 正常运行
+- `sender_*` observability tools 只读，不暴露原始消息文本、raw idempotency key 或 Telegram bot token
 - `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
 
 如果要在 OpenClaw 中注册，核心是把它作为一个 stdio MCP server 注册，并让 OpenClaw 通过该 server 调用上述 tools。`command` 建议指向当前仓库的 `scripts/start_mcp.sh`。

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +13,8 @@ const (
 	DefaultJobListLimit = 20
 	MaxJobListLimit     = 100
 )
+
+var telegramBotTokenInErrorPattern = regexp.MustCompile(`bot[0-9]+:[A-Za-z0-9_-]+`)
 
 type JobQueryService struct {
 	store              *Store
@@ -214,7 +217,7 @@ func mapJobListItem(job Job) JobListItem {
 		Status:       job.Status,
 		AttemptCount: job.AttemptCount,
 		MaxAttempts:  job.MaxAttempts,
-		LastError:    job.LastError,
+		LastError:    sanitizeObservabilityLastError(job.LastError),
 		CreatedAt:    formatTimestamp(job.CreatedAt),
 		UpdatedAt:    formatTimestamp(job.UpdatedAt),
 		SentAt:       sentAt,
@@ -227,4 +230,11 @@ func formatOptionalTimestamp(ts time.Time) *string {
 	}
 	formatted := formatTimestamp(ts)
 	return &formatted
+}
+
+func sanitizeObservabilityLastError(lastError string) string {
+	if strings.TrimSpace(lastError) == "" {
+		return ""
+	}
+	return telegramBotTokenInErrorPattern.ReplaceAllString(lastError, "bot[redacted]")
 }

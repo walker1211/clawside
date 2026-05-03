@@ -198,6 +198,11 @@ Current v1 tools:
 - `repair_reopen_handoff`
 - `repair_candidate_list`
 - `divergence_list`
+- `sender_health`
+- `sender_ready`
+- `sender_stats`
+- `sender_job_list`
+- `sender_job_get`
 - `a2a_deliver`
 
 Recommended reading:
@@ -218,13 +223,19 @@ Recommended reading:
 - `repair_reopen_handoff`: reopens a terminal handoff and replays truth.
 - `repair_candidate_list`: lists repair candidates for a handoff.
 - `divergence_list`: lists observer divergence hints for a handoff.
+- `sender_health`: checks sender process health.
+- `sender_ready`: checks whether the sender is ready to process delivery work.
+- `sender_stats`: returns sender queue counts and worker timing fields.
+- `sender_job_list`: lists sender jobs by status with a bounded limit.
+- `sender_job_get`: returns a single sender job status.
 - `a2a_deliver`: performs real outward delivery through the existing sender bridge after resolving `target_agent` through built-in or configured mapping.
 
 Boundaries:
 
 - This is a minimal v1 tool surface, not the full truth-plane MCP product surface.
 - Lower-level repair backfill and deeper truth-plane operations still live outside the v1 MCP surface.
-- `a2a_deliver` depends on the local sender sidecar.
+- `a2a_deliver` and `sender_*` observability tools depend on the local sender sidecar.
+- `sender_*` observability tools are read-only and do not expose raw message text, raw idempotency keys, or Telegram bot tokens.
 - `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` depend on `--db` pointing to the same sqlite truth store.
 
 To register with OpenClaw, configure it as a stdio MCP server and point `command` to this repository's `scripts/start_mcp.sh`.

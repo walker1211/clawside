@@ -1094,6 +1094,83 @@ func TestHandleGetJobReturnsJobDetails(t *testing.T) {
 	}
 }
 
+func TestHandleGetJobRedactsTelegramBotTokenFromLastError(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	handler := NewHTTPHandler(store, TelegramRuntimeConfig{Bots: map[string]BotRuntimeConfig{"guardian": {Enabled: true, Token: "secret", AllowUserIDs: []int64{7098285098}}}, GlobalAllowUserIDs: []int64{7098285098}}, 3, testSenderAuthKey, nil)
+
+	job, err := store.Enqueue(ctx, CreateJob{BotName: "guardian", ChatID: 7098285098, Text: "secret message", MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("enqueue job: %v", err)
+	}
+	failedAt := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET status = ?, lease_expires_at = ? WHERE id = ?`, StatusSending, formatTimestamp(failedAt.Add(time.Second)), job.ID); err != nil {
+		t.Fatalf("prepare failed job: %v", err)
+	}
+	const token = "123456:ABC_secret-token"
+	lastError := `telegram api error: Post "https://api.telegram.org/bot` + token + `/sendMessage": dial tcp: i/o timeout`
+	if err := store.MarkFailed(ctx, job.ID, 1, lastError, failedAt); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs/"+strconv.FormatInt(job.ID, 10), nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.Code)
+	}
+	if strings.Contains(resp.Body.String(), token) {
+		t.Fatalf("expected response not to expose bot token, got %s", resp.Body.String())
+	}
+	var body jobResponse
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !strings.Contains(body.LastError, "i/o timeout") {
+		t.Fatalf("expected sanitized error to keep diagnostic detail, got %q", body.LastError)
+	}
+}
+
+func TestHandleListJobsRedactsTelegramBotTokenFromLastError(t *testing.T) {
+	store := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	state := NewRuntimeState()
+	handler := newQueryHandler(t, store, state, now)
+
+	job, err := store.Enqueue(ctx, CreateJob{BotName: "guardian", ChatID: 7098285098, Text: "secret message", MaxAttempts: 3})
+	if err != nil {
+		t.Fatalf("enqueue job: %v", err)
+	}
+	if _, err := store.db.ExecContext(ctx, `UPDATE jobs SET status = ?, lease_expires_at = ? WHERE id = ?`, StatusSending, formatTimestamp(now.Add(time.Second)), job.ID); err != nil {
+		t.Fatalf("prepare failed job: %v", err)
+	}
+	const token = "123456:ABC_secret-token"
+	lastError := `telegram api error: Post "https://api.telegram.org/bot` + token + `/sendMessage": dial tcp: i/o timeout`
+	if err := store.MarkFailed(ctx, job.ID, 1, lastError, now); err != nil {
+		t.Fatalf("mark failed: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/jobs?status=failed&limit=20", nil)
+	resp := httptest.NewRecorder()
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.Code)
+	}
+	if strings.Contains(resp.Body.String(), token) {
+		t.Fatalf("expected response not to expose bot token, got %s", resp.Body.String())
+	}
+	body := decodeJobListResponse(t, resp.Body.Bytes())
+	if len(body.Jobs) != 1 {
+		t.Fatalf("expected one job, got %d", len(body.Jobs))
+	}
+	if !strings.Contains(body.Jobs[0].LastError, "i/o timeout") {
+		t.Fatalf("expected sanitized error to keep diagnostic detail, got %q", body.Jobs[0].LastError)
+	}
+}
+
 func TestHandleGetJobReturnsNotFound(t *testing.T) {
 	store := openTestStore(t)
 	handler := NewHTTPHandler(store, TelegramRuntimeConfig{}, 3, testSenderAuthKey, nil)

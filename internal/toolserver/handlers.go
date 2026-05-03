@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/walker1211/clawside/internal/a2adelivery"
+	"github.com/walker1211/clawside/internal/deliveryrules"
 	"github.com/walker1211/clawside/internal/orchestrator"
 )
 
@@ -166,6 +167,21 @@ func (h *Handlers) HandleWorkflowList(ctx context.Context) ([]orchestrator.Workf
 		views = append(views, view)
 	}
 	return views, nil
+}
+
+const maxSenderJobListLimit = 100
+
+type SenderJobListInput struct {
+	Status string `json:"status"`
+	Limit  int    `json:"limit"`
+}
+
+type SenderJobListOutput struct {
+	Jobs []a2adelivery.SenderJobListItem `json:"jobs"`
+}
+
+type SenderJobGetInput struct {
+	JobID int64 `json:"job_id"`
 }
 
 type A2ADeliverInput struct {
@@ -430,6 +446,55 @@ func (h *Handlers) HandleDivergenceList(ctx context.Context, input DivergenceLis
 	return h.store.ListDivergences(ctx, handoffID)
 }
 
+func (h *Handlers) HandleSenderHealth(ctx context.Context) (a2adelivery.SenderHealth, error) {
+	if h.senderClient == nil {
+		return a2adelivery.SenderHealth{}, fmt.Errorf("sender client is required")
+	}
+	return h.senderClient.Health(ctx)
+}
+
+func (h *Handlers) HandleSenderReady(ctx context.Context) (a2adelivery.SenderHealth, error) {
+	if h.senderClient == nil {
+		return a2adelivery.SenderHealth{}, fmt.Errorf("sender client is required")
+	}
+	return h.senderClient.Readiness(ctx)
+}
+
+func (h *Handlers) HandleSenderStats(ctx context.Context) (a2adelivery.SenderStats, error) {
+	if h.senderClient == nil {
+		return a2adelivery.SenderStats{}, fmt.Errorf("sender client is required")
+	}
+	return h.senderClient.GetStats(ctx)
+}
+
+func (h *Handlers) HandleSenderJobList(ctx context.Context, input SenderJobListInput) (SenderJobListOutput, error) {
+	if h.senderClient == nil {
+		return SenderJobListOutput{}, fmt.Errorf("sender client is required")
+	}
+	status := strings.ToLower(strings.TrimSpace(input.Status))
+	if !isSenderJobStatus(status) {
+		return SenderJobListOutput{}, fmt.Errorf("invalid status")
+	}
+	if input.Limit <= 0 || input.Limit > maxSenderJobListLimit {
+		return SenderJobListOutput{}, fmt.Errorf("invalid limit")
+	}
+	jobs, err := h.senderClient.ListJobs(ctx, status, input.Limit)
+	if err != nil {
+		return SenderJobListOutput{}, err
+	}
+	return SenderJobListOutput{Jobs: jobs}, nil
+}
+
+func (h *Handlers) HandleSenderJobGet(ctx context.Context, input SenderJobGetInput) (a2adelivery.SenderJob, error) {
+	if h.senderClient == nil {
+		return a2adelivery.SenderJob{}, fmt.Errorf("sender client is required")
+	}
+	if input.JobID <= 0 {
+		return a2adelivery.SenderJob{}, fmt.Errorf("job_id is required")
+	}
+	return h.senderClient.GetJob(ctx, input.JobID)
+}
+
 func (h *Handlers) HandleA2ADeliver(ctx context.Context, input A2ADeliverInput) (a2adelivery.DeliveryResult, error) {
 	if h.senderClient == nil {
 		return a2adelivery.DeliveryResult{}, fmt.Errorf("sender client is required")
@@ -460,6 +525,19 @@ func toActorRef(input ActorRefInput) (orchestrator.ActorRef, error) {
 func isValidWatchStatus(status string) bool {
 	switch status {
 	case "active", "disabled":
+		return true
+	default:
+		return false
+	}
+}
+
+func isSenderJobStatus(status string) bool {
+	switch status {
+	case deliveryrules.SenderJobStatusPending,
+		deliveryrules.SenderJobStatusSending,
+		deliveryrules.SenderJobStatusRetry,
+		deliveryrules.SenderJobStatusSent,
+		deliveryrules.SenderJobStatusFailed:
 		return true
 	default:
 		return false

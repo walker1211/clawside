@@ -201,7 +201,7 @@ func (h *HTTPHandler) handleGetJob(w http.ResponseWriter, r *http.Request) {
 		JobID:        job.ID,
 		Status:       job.Status,
 		AttemptCount: job.AttemptCount,
-		LastError:    job.LastError,
+		LastError:    sanitizeObservabilityLastError(job.LastError),
 		CreatedAt:    formatTimestamp(job.CreatedAt),
 		UpdatedAt:    formatTimestamp(job.UpdatedAt),
 		SentAt:       sentAt,

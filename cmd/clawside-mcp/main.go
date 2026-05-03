@@ -250,6 +250,68 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return mcp.NewToolResultStructured(toolserver.DivergenceListOutput{Divergences: divergences}, "Listed divergences"), nil
 	}))
 
+	senderHealthTool := mcp.NewTool("sender_health",
+		mcp.WithDescription("Check sender process health"),
+		mcp.WithOutputSchema[a2adelivery.SenderHealth](),
+	)
+	s.AddTool(senderHealthTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, error) {
+		health, err := handlers.HandleSenderHealth(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(health, "Checked sender health"), nil
+	}))
+
+	senderReadyTool := mcp.NewTool("sender_ready",
+		mcp.WithDescription("Check sender delivery readiness"),
+		mcp.WithOutputSchema[a2adelivery.SenderHealth](),
+	)
+	s.AddTool(senderReadyTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, error) {
+		ready, err := handlers.HandleSenderReady(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(ready, "Checked sender readiness"), nil
+	}))
+
+	senderStatsTool := mcp.NewTool("sender_stats",
+		mcp.WithDescription("Get sender aggregate job statistics"),
+		mcp.WithOutputSchema[a2adelivery.SenderStats](),
+	)
+	s.AddTool(senderStatsTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, error) {
+		stats, err := handlers.HandleSenderStats(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(stats, "Fetched sender stats"), nil
+	}))
+
+	senderJobListTool := mcp.NewTool("sender_job_list",
+		mcp.WithDescription("List sender jobs by status"),
+		mcp.WithInputSchema[toolserver.SenderJobListInput](),
+		mcp.WithOutputSchema[toolserver.SenderJobListOutput](),
+	)
+	s.AddTool(senderJobListTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.SenderJobListInput) (*mcp.CallToolResult, error) {
+		jobs, err := handlers.HandleSenderJobList(ctx, args)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(jobs, "Listed sender jobs"), nil
+	}))
+
+	senderJobGetTool := mcp.NewTool("sender_job_get",
+		mcp.WithDescription("Get sender job status"),
+		mcp.WithInputSchema[toolserver.SenderJobGetInput](),
+		mcp.WithOutputSchema[a2adelivery.SenderJob](),
+	)
+	s.AddTool(senderJobGetTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.SenderJobGetInput) (*mcp.CallToolResult, error) {
+		job, err := handlers.HandleSenderJobGet(ctx, args)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(job, "Fetched sender job"), nil
+	}))
+
 	a2aDeliverTool := mcp.NewTool("a2a_deliver",
 		mcp.WithDescription("Deliver an A2A message through the sender bridge"),
 		mcp.WithInputSchema[toolserver.A2ADeliverInput](),

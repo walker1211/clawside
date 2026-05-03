@@ -16,14 +16,15 @@ import (
 )
 
 var documentedV1ToolGroups = map[string][]string{
-	"handoff lifecycle": {"handoff_create", "handoff_get", "handoff_dispatch", "handoff_progress"},
-	"workflow query":    {"workflow_status", "workflow_list"},
-	"watch ownership":   {"watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update"},
-	"repair divergence": {"repair_list", "repair_invalidate_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_list"},
-	"a2a delivery":      {"a2a_deliver"},
+	"handoff lifecycle":    {"handoff_create", "handoff_get", "handoff_dispatch", "handoff_progress"},
+	"workflow query":       {"workflow_status", "workflow_list"},
+	"watch ownership":      {"watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update"},
+	"repair divergence":    {"repair_list", "repair_invalidate_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_list"},
+	"sender observability": {"sender_health", "sender_ready", "sender_stats", "sender_job_list", "sender_job_get"},
+	"a2a delivery":         {"a2a_deliver"},
 }
 
-var documentedNoInputV1Tools = []string{"workflow_list"}
+var documentedNoInputV1Tools = []string{"workflow_list", "sender_health", "sender_ready", "sender_stats"}
 
 func TestResolveSenderAuthKeyPrefersExplicitFlag(t *testing.T) {
 	t.Setenv("SENDER_AUTH_KEY", "env-secret")
@@ -733,6 +734,112 @@ func TestServerCallA2ADeliverSucceeds(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("expected a2a_deliver success, got error result")
+	}
+}
+
+func TestServerCallSenderObservabilityTools(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer local-sender-key" {
+			t.Fatalf("expected sender auth header, got %q", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/healthz":
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/readyz":
+			_, _ = w.Write([]byte(`{"status":"ok"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/stats":
+			_, _ = w.Write([]byte(`{"pending_count":2,"retry_count":1,"sending_count":0,"failed_count":1,"sent_count":5,"worker_running":true}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/jobs":
+			if got := r.URL.Query().Get("status"); got != "failed" {
+				t.Fatalf("expected status failed, got %q", got)
+			}
+			if got := r.URL.Query().Get("limit"); got != "2" {
+				t.Fatalf("expected limit 2, got %q", got)
+			}
+			_, _ = w.Write([]byte(`{"jobs":[{"job_id":44,"bot":"guardian","chat_id":7098285098,"status":"failed","attempt_count":2,"max_attempts":3,"last_error":"telegram unavailable","created_at":"2026-05-03T11:59:00Z","updated_at":"2026-05-03T12:00:00Z","sent_at":null}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/jobs/55":
+			_, _ = w.Write([]byte(`{"job_id":55,"status":"sent","attempt_count":1,"last_error":"","created_at":"2026-05-03T11:58:00Z","updated_at":"2026-05-03T12:00:04Z","sent_at":"2026-05-03T12:00:04Z"}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath, "--sender-base-url", server.URL, "--sender-auth-key", "local-sender-key")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	for toolName, key := range map[string]string{"sender_health": "status", "sender_ready": "status", "sender_stats": "pending_count"} {
+		result, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: toolName, Arguments: map[string]any{}}})
+		if err != nil {
+			t.Fatalf("CallTool(%s): %v", toolName, err)
+		}
+		if result.IsError {
+			t.Fatalf("expected %s success, got error result", toolName)
+		}
+		assertStructuredObject(t, result, key)
+	}
+
+	list, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "sender_job_list", Arguments: map[string]any{"status": "failed", "limit": 2}}})
+	if err != nil {
+		t.Fatalf("CallTool(sender_job_list): %v", err)
+	}
+	if list.IsError {
+		t.Fatalf("expected sender_job_list success, got error result")
+	}
+	assertStructuredObject(t, list, "jobs")
+
+	job, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "sender_job_get", Arguments: map[string]any{"job_id": 55}}})
+	if err != nil {
+		t.Fatalf("CallTool(sender_job_get): %v", err)
+	}
+	if job.IsError {
+		t.Fatalf("expected sender_job_get success, got error result")
+	}
+	assertStructuredObject(t, job, "job_id")
+}
+
+func TestServerCallSenderObservabilityToolsSurfaceSenderErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/readyz":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":"worker loop is stale"}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/jobs/404":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":"not found"}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.String())
+		}
+	}))
+	defer server.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath, "--sender-base-url", server.URL)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	ready, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "sender_ready", Arguments: map[string]any{}}})
+	if err != nil {
+		t.Fatalf("CallTool(sender_ready): %v", err)
+	}
+	if !ready.IsError {
+		t.Fatalf("expected sender_ready error result")
+	}
+
+	job, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "sender_job_get", Arguments: map[string]any{"job_id": 404}}})
+	if err != nil {
+		t.Fatalf("CallTool(sender_job_get): %v", err)
+	}
+	if !job.IsError {
+		t.Fatalf("expected sender_job_get error result")
 	}
 }
 
