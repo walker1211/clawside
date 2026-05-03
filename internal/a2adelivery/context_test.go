@@ -15,6 +15,10 @@ func int64Ptr(v int64) *int64 {
 	return &v
 }
 
+func stringPtr(v string) *string {
+	return &v
+}
+
 func TestAdaptTargetUserContextNilReturnsZeroValue(t *testing.T) {
 	got, err := AdaptTargetUserContext(nil)
 	if err != nil {

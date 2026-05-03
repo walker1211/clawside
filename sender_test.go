@@ -5,12 +5,14 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -566,7 +568,142 @@ func TestHandleSendReusedIdempotencyKeyReturnsExistingJob(t *testing.T) {
 	}
 }
 
-func TestHandleSendReusedIdempotencyKeyWithDifferentPayloadReturnsExistingJobAndLogsConflict(t *testing.T) {
+func TestSendServiceConcurrentMatchingIdempotencyKeySubmissionsCollapseToOneJob(t *testing.T) {
+	store := openTestStore(t)
+	service := NewSendService(store, TelegramRuntimeConfig{
+		Bots: map[string]BotRuntimeConfig{
+			"guardian": {Enabled: true, Token: "secret", AllowUserIDs: []int64{7098285098}},
+		},
+		GlobalAllowUserIDs: []int64{7098285098},
+	}, 3)
+
+	type submitResult struct {
+		job Job
+		err error
+	}
+	const submissionCount = 8
+	start := make(chan struct{})
+	results := make(chan submitResult, submissionCount)
+
+	var wg sync.WaitGroup
+	for range submissionCount {
+		wg.Go(func() {
+			<-start
+			job, err := service.Submit(context.Background(), SendCommand{
+				Bot:            "guardian",
+				ChatID:         7098285098,
+				Text:           "hello",
+				IdempotencyKey: "idem-concurrent",
+			})
+			results <- submitResult{job: job, err: err}
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	var firstJobID int64
+	for result := range results {
+		if result.err != nil {
+			t.Fatalf("expected concurrent submit success, got %v", result.err)
+		}
+		if result.job.ID == 0 {
+			t.Fatalf("expected job id")
+		}
+		if firstJobID == 0 {
+			firstJobID = result.job.ID
+		}
+		if result.job.ID != firstJobID {
+			t.Fatalf("expected all submissions to collapse to job %d, got %d", firstJobID, result.job.ID)
+		}
+	}
+	if mustJobCount(t, store) != 1 {
+		t.Fatalf("expected one stored job after concurrent idempotent submissions")
+	}
+}
+
+func TestSendServiceConcurrentConflictingIdempotencyKeySubmissionsRejectMismatchedPayloads(t *testing.T) {
+	store := openTestStore(t)
+	service := NewSendService(store, TelegramRuntimeConfig{
+		Bots: map[string]BotRuntimeConfig{
+			"guardian": {Enabled: true, Token: "secret", AllowUserIDs: []int64{7098285098}},
+		},
+		GlobalAllowUserIDs: []int64{7098285098},
+	}, 3)
+
+	type submitResult struct {
+		text string
+		job  Job
+		err  error
+	}
+	const submissionCount = 32
+	start := make(chan struct{})
+	results := make(chan submitResult, submissionCount)
+
+	var logs bytes.Buffer
+	oldWriter := log.Writer()
+	log.SetOutput(&logs)
+	defer log.SetOutput(oldWriter)
+
+	var wg sync.WaitGroup
+	for i := range submissionCount {
+		text := "secret original text"
+		if i%2 == 1 {
+			text = "secret changed text"
+		}
+		wg.Go(func() {
+			<-start
+			job, err := service.Submit(context.Background(), SendCommand{
+				Bot:            "guardian",
+				ChatID:         7098285098,
+				Text:           text,
+				IdempotencyKey: "idem-concurrent-conflict",
+			})
+			results <- submitResult{text: text, job: job, err: err}
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+
+	stored, err := store.GetByIdempotencyKey(context.Background(), "idem-concurrent-conflict")
+	if err != nil {
+		t.Fatalf("get stored job: %v", err)
+	}
+	if stored == nil {
+		t.Fatalf("expected stored job")
+	}
+
+	var conflictCount int
+	for result := range results {
+		if result.err != nil {
+			if !errors.Is(result.err, ErrIdempotencyKeyConflict) {
+				t.Fatalf("expected only idempotency conflicts after winner, got %v", result.err)
+			}
+			conflictCount++
+			continue
+		}
+		if result.job.ID != stored.ID {
+			t.Fatalf("expected successful submit to return stored job %d, got %d", stored.ID, result.job.ID)
+		}
+		if result.job.Text != result.text {
+			t.Fatalf("successful submit with text %q returned stored payload %q", result.text, result.job.Text)
+		}
+	}
+	if conflictCount == 0 {
+		t.Fatalf("expected at least one conflicting concurrent submission")
+	}
+	if mustJobCount(t, store) != 1 {
+		t.Fatalf("expected one stored job after concurrent conflicting submissions")
+	}
+	for _, secret := range []string{"idem-concurrent-conflict", "secret original text", "secret changed text"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatalf("expected conflict log to avoid %q, got %q", secret, logs.String())
+		}
+	}
+}
+
+func TestHandleSendReusedIdempotencyKeyWithDifferentPayloadReturnsConflictAndDoesNotEnqueue(t *testing.T) {
 	store := openTestStore(t)
 	handler := newTestSendHandler(t, store)
 
@@ -575,36 +712,37 @@ func TestHandleSendReusedIdempotencyKeyWithDifferentPayloadReturnsExistingJobAnd
 	log.SetOutput(&logs)
 	defer log.SetOutput(oldWriter)
 
-	firstReq := newSendRequest(`{"bot":"guardian","chat_id":1,"text":"hello","idempotency_key":"idem-phase1"}`)
+	firstReq := newSendRequest(`{"bot":"guardian","chat_id":1,"text":"secret original text","idempotency_key":"idem-phase1"}`)
 	firstResp := httptest.NewRecorder()
 	handler.ServeHTTP(firstResp, firstReq)
 	if firstResp.Code != http.StatusAccepted {
 		t.Fatalf("expected first status %d, got %d", http.StatusAccepted, firstResp.Code)
 	}
-	firstBody := decodeSendResponse(t, firstResp.Body.Bytes())
 
-	secondReq := newSendRequest(`{"bot":"guardian","chat_id":1,"text":"changed","idempotency_key":"idem-phase1"}`)
+	secondReq := newSendRequest(`{"bot":"guardian","chat_id":1,"text":"secret changed text","idempotency_key":"idem-phase1"}`)
 	secondResp := httptest.NewRecorder()
 	handler.ServeHTTP(secondResp, secondReq)
-	if secondResp.Code != http.StatusAccepted {
-		t.Fatalf("expected second status %d, got %d", http.StatusAccepted, secondResp.Code)
+	if secondResp.Code != http.StatusConflict {
+		t.Fatalf("expected second status %d, got %d", http.StatusConflict, secondResp.Code)
 	}
-	secondBody := decodeSendResponse(t, secondResp.Body.Bytes())
-	if secondBody.JobID != firstBody.JobID {
-		t.Fatalf("expected conflicting idempotency key to return existing job %d, got %d", firstBody.JobID, secondBody.JobID)
+	errorBody := decodeErrorResponse(t, secondResp.Body.Bytes())
+	if !strings.Contains(strings.ToLower(errorBody.Error), "conflict") {
+		t.Fatalf("expected conflict error, got %q", errorBody.Error)
 	}
 	if !strings.Contains(logs.String(), "idempotency payload conflict") {
 		t.Fatalf("expected conflict log, got %q", logs.String())
 	}
-	if strings.Contains(logs.String(), "idem-phase1") {
-		t.Fatalf("expected conflict log to avoid raw idempotency key, got %q", logs.String())
+	for _, secret := range []string{"idem-phase1", "secret original text", "secret changed text"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Fatalf("expected conflict log to avoid %q, got %q", secret, logs.String())
+		}
 	}
 	if mustJobCount(t, store) != 1 {
-		t.Fatalf("expected one job after phase-1 conflict reuse")
+		t.Fatalf("expected one job after conflicting idempotency reuse")
 	}
 }
 
-func TestHandleSendReusedIdempotencyKeyTreatsNilAndZeroReplyToAsDifferentPayload(t *testing.T) {
+func TestHandleSendReusedIdempotencyKeyTreatsNilAndZeroReplyToAsConflict(t *testing.T) {
 	store := openTestStore(t)
 	handler := newTestSendHandler(t, store)
 
@@ -619,20 +757,18 @@ func TestHandleSendReusedIdempotencyKeyTreatsNilAndZeroReplyToAsDifferentPayload
 	if firstResp.Code != http.StatusAccepted {
 		t.Fatalf("expected first status %d, got %d", http.StatusAccepted, firstResp.Code)
 	}
-	firstBody := decodeSendResponse(t, firstResp.Body.Bytes())
 
 	secondReq := newSendRequest(`{"bot":"guardian","chat_id":1,"text":"hello","idempotency_key":"idem-reply-to","reply_to_message_id":0}`)
 	secondResp := httptest.NewRecorder()
 	handler.ServeHTTP(secondResp, secondReq)
-	if secondResp.Code != http.StatusAccepted {
-		t.Fatalf("expected second status %d, got %d", http.StatusAccepted, secondResp.Code)
-	}
-	secondBody := decodeSendResponse(t, secondResp.Body.Bytes())
-	if secondBody.JobID != firstBody.JobID {
-		t.Fatalf("expected conflicting idempotency key to return existing job %d, got %d", firstBody.JobID, secondBody.JobID)
+	if secondResp.Code != http.StatusConflict {
+		t.Fatalf("expected second status %d, got %d", http.StatusConflict, secondResp.Code)
 	}
 	if !strings.Contains(logs.String(), "idempotency payload conflict") {
 		t.Fatalf("expected conflict log, got %q", logs.String())
+	}
+	if strings.Contains(logs.String(), "idem-reply-to") || strings.Contains(logs.String(), "hello") {
+		t.Fatalf("expected conflict log to avoid raw key and text, got %q", logs.String())
 	}
 	if mustJobCount(t, store) != 1 {
 		t.Fatalf("expected one job after nil/zero reply_to conflict reuse")

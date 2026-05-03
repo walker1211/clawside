@@ -84,12 +84,13 @@ func (s *SendService) Submit(ctx context.Context, req SendCommand) (Job, error) 
 		if existing != nil {
 			if !sameSendPayload(*existing, req) {
 				log.Printf("sender idempotency payload conflict existing_job_id=%d", existing.ID)
+				return Job{}, ErrIdempotencyKeyConflict
 			}
 			return *existing, nil
 		}
 	}
 
-	return s.store.Enqueue(ctx, CreateJob{
+	job, err := s.store.Enqueue(ctx, CreateJob{
 		BotName:             req.Bot,
 		ChatID:              req.ChatID,
 		Text:                req.Text,
@@ -98,6 +99,14 @@ func (s *SendService) Submit(ctx context.Context, req SendCommand) (Job, error) 
 		ReplyToMessageID:    req.ReplyToMessageID,
 		DisableNotification: req.DisableNotification,
 	})
+	if err != nil {
+		return Job{}, err
+	}
+	if req.IdempotencyKey != "" && !sameSendPayload(job, req) {
+		log.Printf("sender idempotency payload conflict existing_job_id=%d", job.ID)
+		return Job{}, ErrIdempotencyKeyConflict
+	}
+	return job, nil
 }
 
 func sameSendPayload(job Job, req SendCommand) bool {

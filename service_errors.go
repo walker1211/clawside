@@ -9,15 +9,16 @@ func (e serviceError) Error() string {
 }
 
 var (
-	ErrBotRequired        = serviceError("bot is required")
-	ErrUnknownBot         = serviceError("unknown bot")
-	ErrBotDisabled        = serviceError("bot is disabled")
-	ErrBotUnavailable     = serviceError("bot is unavailable")
-	ErrChatIDRequired     = serviceError("chat_id is required")
-	ErrChatIDNotAllowed   = serviceError("chat_id is not allowed")
-	ErrTextRequired       = serviceError("text is required")
-	ErrTextExceedsLimit   = serviceError("text exceeds telegram limit")
-	ErrMaxAttemptsInvalid = serviceError("max_attempts must be between 1 and 5")
+	ErrBotRequired            = serviceError("bot is required")
+	ErrUnknownBot             = serviceError("unknown bot")
+	ErrBotDisabled            = serviceError("bot is disabled")
+	ErrBotUnavailable         = serviceError("bot is unavailable")
+	ErrChatIDRequired         = serviceError("chat_id is required")
+	ErrChatIDNotAllowed       = serviceError("chat_id is not allowed")
+	ErrTextRequired           = serviceError("text is required")
+	ErrTextExceedsLimit       = serviceError("text exceeds telegram limit")
+	ErrMaxAttemptsInvalid     = serviceError("max_attempts must be between 1 and 5")
+	ErrIdempotencyKeyConflict = serviceError("idempotency key conflict")
 )
 
 func sendErrorResponse(err error) (int, errorResponse) {
@@ -33,6 +34,8 @@ func sendErrorResponse(err error) (int, errorResponse) {
 		errors.Is(err, ErrBotUnavailable),
 		errors.Is(err, ErrChatIDNotAllowed):
 		return 403, errorResponse{Error: err.Error()}
+	case errors.Is(err, ErrIdempotencyKeyConflict):
+		return 409, errorResponse{Error: err.Error()}
 	default:
 		return 500, errorResponse{Error: "failed to enqueue job"}
 	}

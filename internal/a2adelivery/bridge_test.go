@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -140,6 +141,163 @@ func TestA2ADeliveryBridgeUsesConfiguredTargetAgentResolver(t *testing.T) {
 	}
 	if result.Bot != mappedBot {
 		t.Fatalf("expected result bot %q, got %q", mappedBot, result.Bot)
+	}
+}
+
+func TestA2ADeliveryBridgeForwardsExplicitIdempotencyKey(t *testing.T) {
+	t.Parallel()
+
+	const (
+		targetAgent            = "planner"
+		text                   = "planner explicit retry"
+		chatID                 = int64(700120)
+		jobID                  = int64(91120)
+		explicitIdempotencyKey = "explicit-a2a-key-001"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			var payload struct {
+				IdempotencyKey string `json:"idempotency_key"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode /send payload: %v", err)
+			}
+			if payload.IdempotencyKey != explicitIdempotencyKey {
+				t.Fatalf("expected explicit idempotency key %q, got %q", explicitIdempotencyKey, payload.IdempotencyKey)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"sent"}`, jobID)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSenderClient(server.URL, "", server.Client())
+	input := SkillInput{TargetAgent: targetAgent, Text: text, IdempotencyKey: stringPtr(explicitIdempotencyKey)}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(chatID)}
+
+	result, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
+	if err != nil {
+		t.Fatalf("expected bridge call success, got error: %v", err)
+	}
+	if result.Status != "sent" {
+		t.Fatalf("expected status sent, got %q", result.Status)
+	}
+}
+
+func TestA2ADeliveryBridgeDefaultIdempotencyKeysAreNonceBased(t *testing.T) {
+	t.Parallel()
+
+	const (
+		targetAgent = "planner"
+		text        = "planner implicit retry"
+		chatID      = int64(700121)
+		jobID       = int64(91121)
+	)
+
+	var (
+		mu   sync.Mutex
+		keys []string
+	)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			var payload struct {
+				IdempotencyKey string `json:"idempotency_key"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode /send payload: %v", err)
+			}
+			mu.Lock()
+			keys = append(keys, payload.IdempotencyKey)
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"sent"}`, jobID)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSenderClient(server.URL, "", server.Client())
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(chatID)}
+	for range 2 {
+		input := SkillInput{TargetAgent: targetAgent, Text: text}
+		if _, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext); err != nil {
+			t.Fatalf("expected bridge call success, got error: %v", err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(keys) != 2 {
+		t.Fatalf("expected two generated keys, got %d", len(keys))
+	}
+	if strings.TrimSpace(keys[0]) == "" || strings.TrimSpace(keys[1]) == "" {
+		t.Fatalf("expected non-empty generated keys, got %q and %q", keys[0], keys[1])
+	}
+	if keys[0] == keys[1] {
+		t.Fatalf("expected nonce-based generated keys to differ, got %q", keys[0])
+	}
+}
+
+func TestA2ADeliveryBridgeReturnsStructuredFailureOnSenderConflict(t *testing.T) {
+	t.Parallel()
+
+	const (
+		targetAgent            = "planner"
+		text                   = "planner conflicting retry"
+		chatID                 = int64(700122)
+		explicitIdempotencyKey = "explicit-a2a-conflict"
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			var payload struct {
+				IdempotencyKey string `json:"idempotency_key"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode /send payload: %v", err)
+			}
+			if payload.IdempotencyKey != explicitIdempotencyKey {
+				t.Fatalf("expected explicit idempotency key %q, got %q", explicitIdempotencyKey, payload.IdempotencyKey)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":"idempotency key conflict"}`))
+		case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/jobs/"):
+			t.Fatalf("unexpected poll request after sender conflict: %s", r.URL.Path)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client := NewSenderClient(server.URL, "", server.Client())
+	input := SkillInput{TargetAgent: targetAgent, Text: text, IdempotencyKey: stringPtr(explicitIdempotencyKey)}
+	runtimeContext := TargetUserContext{DeliveryContextTo: int64Ptr(chatID)}
+
+	result, err := RunA2ADeliveryBridge(context.Background(), client, input, runtimeContext)
+	if err != nil {
+		t.Fatalf("expected sender conflict to return structured failed result, got error: %v", err)
+	}
+	if result.Status != "failed" {
+		t.Fatalf("expected status failed, got %q", result.Status)
+	}
+	if result.JobID != 0 {
+		t.Fatalf("expected no job_id for rejected sender conflict, got %d", result.JobID)
+	}
+	if result.TargetAgent != targetAgent || result.Bot != targetAgent || result.ChatID != chatID {
+		t.Fatalf("unexpected result routing fields: %+v", result)
+	}
+	if result.LastError != "sender idempotency key conflict" {
+		t.Fatalf("expected safe sender conflict in last_error, got %q", result.LastError)
 	}
 }
 

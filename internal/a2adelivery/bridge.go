@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -80,6 +81,16 @@ func RunA2ADeliveryBridgeWithResolver(ctx context.Context, client *SenderClient,
 
 	jobID, sendStatus, err := client.Send(ctx, bot, chatID, input.Text, idempotencyKey)
 	if err != nil {
+		var apiErr *senderAPIError
+		if AsSenderAPIError(err, &apiErr) && apiErr.StatusCode == http.StatusConflict {
+			return DeliveryResult{
+				Status:      "failed",
+				TargetAgent: targetAgent,
+				Bot:         bot,
+				ChatID:      chatID,
+				LastError:   "sender idempotency key conflict",
+			}, nil
+		}
 		return DeliveryResult{}, err
 	}
 

@@ -48,6 +48,8 @@ Optional:
     - if provided, must be int64 > 0
 - `idempotency_key`
     - if provided, must be non-empty after trimming
+    - provide a stable explicit key for semantic retry idempotency
+    - if omitted, the bridge generates a unique nonce-based key for that delivery attempt
 
 ## Target user resolution
 
