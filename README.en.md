@@ -27,6 +27,7 @@ This version now productizes the minimal v1 into an installable, registerable, a
 - `cmd/config-builder/`: Go CLI that generates the derived sender config.
 - `cmd/orchestrator/`: low-level orchestrator debug / operation entrypoint.
 - `cmd/clawside-mcp/`: stdio MCP server entrypoint.
+- `cmd/openclaw-mcp-smoke/`: local smoke verifier for OpenClaw consuming the clawside MCP v1 surface.
 - `cmd/a2a-delivery/`: A2A delivery bridge CLI.
 - `internal/configbuilder/`: extracts the minimal sender config from OpenClaw source config.
 - `internal/orchestrator/`: handoff, workflow, event, watch, repair, and adapter foundations.
@@ -241,6 +242,36 @@ Boundaries:
 - `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` depend on `--db` pointing to the same sqlite truth store.
 
 To register with OpenClaw, configure it as a stdio MCP server and point `command` to this repository's `scripts/start_mcp.sh`.
+
+## OpenClaw MCP smoke verifier
+
+`openclaw-mcp-smoke` is a local, repeatable smoke verifier for OpenClaw consuming the clawside MCP v1 surface. It checks local config, sender `healthz` / `readyz` / `stats`, the MCP tool list, and optional real `target_agent=main` delivery through MCP `a2a_deliver`.
+
+By default, it never modifies OpenClaw / Claude config, never calls Telegram directly, and never performs real delivery. It only prints read-only MCP registration guidance. Prefer passing secrets through the `SENDER_AUTH_KEY` environment variable, and do not paste secrets into shared logs.
+
+Basic check:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh
+```
+
+For machine-readable output:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
+```
+
+To verify real delivery, explicitly pass `--deliver-main` and `--chat-id`; delivery goes through the configured sender/main bot path:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --deliver-main --chat-id <telegram_chat_id>
+```
+
+The wrapper defaults to `configs/config.toml`, `sender.db`, `http://127.0.0.1:8787`, and `scripts/start_mcp.sh`. To customize the MCP startup command, use:
+
+```bash
+./scripts/verify_openclaw_mcp.sh --mcp-command ./scripts/start_mcp.sh
+```
 
 ## A2A delivery bridge CLI
 

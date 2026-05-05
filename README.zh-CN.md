@@ -27,6 +27,7 @@
 - `cmd/config-builder/`：生成 sender 派生配置的 Go CLI
 - `cmd/orchestrator/`：低层 orchestrator 调试 / 操作入口
 - `cmd/clawside-mcp/`：stdio MCP server 入口
+- `cmd/openclaw-mcp-smoke/`：OpenClaw 消费 clawside MCP v1 surface 的本地 smoke verifier
 - `cmd/a2a-delivery/`：A2A delivery bridge CLI
 - `internal/configbuilder/`：从 OpenClaw 源配置提取 sender 所需最小配置
 - `internal/orchestrator/`：handoff、workflow、event、watch、repair、adapter 基础实现
@@ -241,6 +242,36 @@ go run ./cmd/clawside-mcp \
 - `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
 
 如果要在 OpenClaw 中注册，核心是把它作为一个 stdio MCP server 注册，并让 OpenClaw 通过该 server 调用上述 tools。`command` 建议指向当前仓库的 `scripts/start_mcp.sh`。
+
+## OpenClaw MCP smoke verifier
+
+`openclaw-mcp-smoke` 是一个本地、可重复执行的 smoke verifier，用来验证 OpenClaw 消费 clawside MCP v1 surface 的基础链路。它会检查本地配置、sender `healthz` / `readyz` / `stats`、MCP tool list，并可选通过 MCP `a2a_deliver` 走一次真实的 `target_agent=main` 投递。
+
+默认情况下它不会修改 OpenClaw / Claude 配置，不会直接调用 Telegram，也不会执行真实投递；它只会打印只读的 MCP 注册指引。敏感信息建议通过 `SENDER_AUTH_KEY` 环境变量传入，不要把 secret 粘贴到共享日志里。
+
+基础检查：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh
+```
+
+如需机器可读输出：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
+```
+
+如需验证真实投递，必须显式传 `--deliver-main` 和 `--chat-id`，投递会经已配置的 sender/main bot 路径完成：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --deliver-main --chat-id <telegram_chat_id>
+```
+
+包装脚本默认使用 `configs/config.toml`、`sender.db`、`http://127.0.0.1:8787` 和 `scripts/start_mcp.sh`。如需自定义 MCP 启动命令，可使用：
+
+```bash
+./scripts/verify_openclaw_mcp.sh --mcp-command ./scripts/start_mcp.sh
+```
 
 ## A2A delivery bridge CLI
 

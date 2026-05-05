@@ -65,3 +65,59 @@ func TestConfigBuilderScriptAvoidsEmptyBashArrayExpansion(t *testing.T) {
 		t.Fatalf("expected config_builder.sh to pass --input only when INPUT_PATH is set")
 	}
 }
+
+func TestStartMCPScriptPassesSenderAuthKeyViaEnv(t *testing.T) {
+	content := readTextFile(t, "scripts/start_mcp.sh")
+	if !strings.Contains(content, "export SENDER_AUTH_KEY") {
+		t.Fatalf("expected start_mcp.sh to export SENDER_AUTH_KEY for child process env")
+	}
+	if strings.Contains(content, "--sender-auth-key \"$SENDER_AUTH_KEY\"") {
+		t.Fatalf("start_mcp.sh should not pass SENDER_AUTH_KEY through child process argv")
+	}
+}
+
+func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
+	path := "scripts/verify_openclaw_mcp.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	if !strings.Contains(content, "go run -C \"$ROOT_DIR\" ./cmd/openclaw-mcp-smoke") {
+		t.Fatalf("expected %s to invoke openclaw-mcp-smoke with go run -C", path)
+	}
+	for _, helpToken := range []string{"help", "--help", "-h"} {
+		if !strings.Contains(content, helpToken) {
+			t.Fatalf("expected %s to support help token %q", path, helpToken)
+		}
+	}
+	if !strings.Contains(content, "if [[ $# -eq 1 ]]; then") || !strings.Contains(content, "usage") || !strings.Contains(content, "exit 0") {
+		t.Fatalf("expected %s to handle help before validation or execution", path)
+	}
+	if !strings.Contains(content, "DELIVER_MAIN=\"false\"") {
+		t.Fatalf("expected delivery to be disabled by default")
+	}
+	if !strings.Contains(content, "--deliver-main)") || !strings.Contains(content, "DELIVER_MAIN=\"true\"") {
+		t.Fatalf("expected --deliver-main to opt in to real delivery")
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") {
+		t.Fatalf("%s should avoid Bash arrays for Bash 3.2 with set -u", path)
+	}
+	if !strings.Contains(content, "SENDER_AUTH_KEY") {
+		t.Fatalf("expected %s to reference SENDER_AUTH_KEY", path)
+	}
+	if strings.Contains(content, "SENDER_AUTH_KEY_VALUE") || strings.Contains(content, "--sender-auth-key \"$") {
+		t.Fatalf("%s should rely on inherited SENDER_AUTH_KEY env instead of forwarding it through argv", path)
+	}
+	for line := range strings.SplitSeq(content, "\n") {
+		if strings.Contains(line, "SENDER_AUTH_KEY") && strings.Contains(line, "$SENDER_AUTH_KEY") {
+			if strings.Contains(line, "printf ") || strings.Contains(line, "echo ") {
+				t.Fatalf("%s should not print SENDER_AUTH_KEY values", path)
+			}
+		}
+	}
+}

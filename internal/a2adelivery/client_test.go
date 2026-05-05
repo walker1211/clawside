@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -203,6 +204,13 @@ func TestSenderClientReadsObservabilityEndpoints(t *testing.T) {
 	}
 	if job.JobID != 55 || job.Status != "sent" || job.SentAt == nil {
 		t.Fatalf("unexpected job: %+v", job)
+	}
+}
+
+func TestSanitizeForSmokeReportRedactsTelegramBotToken(t *testing.T) {
+	got := SanitizeForSmokeReport("telegram api error for bot123456:SECRET_TOKEN")
+	if strings.Contains(got, "SECRET_TOKEN") || strings.Contains(got, "bot123456:") {
+		t.Fatalf("expected token to be redacted, got %q", got)
 	}
 }
 

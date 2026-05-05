@@ -1,0 +1,195 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+CONFIG_PATH="$ROOT_DIR/configs/config.toml"
+DB_PATH="$ROOT_DIR/sender.db"
+SENDER_BASE_URL_VALUE="${SENDER_BASE_URL:-http://127.0.0.1:8787}"
+MCP_COMMAND="$ROOT_DIR/scripts/start_mcp.sh"
+DELIVER_MAIN="false"
+CHAT_ID=""
+TEXT_VALUE="OpenClaw MCP smoke test"
+JSON_OUTPUT="false"
+
+usage() {
+  printf 'usage: %s [options]\n' "$0"
+  printf '\n'
+  printf 'Verify the OpenClaw MCP smoke path without modifying OpenClaw or Claude config.\n'
+  printf 'Real delivery is disabled by default; use --deliver-main to opt in.\n'
+  printf '\n'
+  printf 'Environment:\n'
+  printf '  SENDER_BASE_URL   Sender service URL (default: http://127.0.0.1:8787)\n'
+  printf '  SENDER_AUTH_KEY   Sender auth key forwarded to the smoke verifier when set\n'
+  printf '\n'
+  printf 'Options:\n'
+  printf '  --config PATH              Config path (default: ROOT_DIR/configs/config.toml)\n'
+  printf '  --db PATH                  Sender DB path (default: ROOT_DIR/sender.db)\n'
+  printf '  --sender-base-url URL      Sender service URL\n'
+  printf '  --mcp-command PATH_OR_COMMAND\n'
+  printf '                             MCP command to launch (default: ROOT_DIR/scripts/start_mcp.sh)\n'
+  printf '  --deliver-main             Perform real delivery through the main sender path\n'
+  printf '  --chat-id ID               Chat ID used when delivery is enabled\n'
+  printf '  --text TEXT                Smoke message text (default: OpenClaw MCP smoke test)\n'
+  printf '  --json                     Emit JSON output\n'
+  printf '  help, --help, -h           Show this help\n'
+}
+
+if [[ $# -eq 1 ]]; then
+  case "$1" in
+    help|--help|-h)
+      usage
+      exit 0
+      ;;
+  esac
+fi
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --config)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      CONFIG_PATH="$2"
+      shift 2
+      ;;
+    --db)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      DB_PATH="$2"
+      shift 2
+      ;;
+    --sender-base-url)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      SENDER_BASE_URL_VALUE="$2"
+      shift 2
+      ;;
+    --mcp-command)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      MCP_COMMAND="$2"
+      shift 2
+      ;;
+    --deliver-main)
+      DELIVER_MAIN="true"
+      shift
+      ;;
+    --chat-id)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      CHAT_ID="$2"
+      shift 2
+      ;;
+    --text)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      TEXT_VALUE="$2"
+      shift 2
+      ;;
+    --json)
+      JSON_OUTPUT="true"
+      shift
+      ;;
+    help|--help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
+done
+
+if [[ "$DELIVER_MAIN" == "true" ]]; then
+  if [[ -n "$CHAT_ID" ]]; then
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+      go run -C "$ROOT_DIR" ./cmd/openclaw-mcp-smoke \
+        --config "$CONFIG_PATH" \
+        --db "$DB_PATH" \
+        --sender-base-url "$SENDER_BASE_URL_VALUE" \
+        --mcp-command "$MCP_COMMAND" \
+        --deliver-main \
+        --chat-id "$CHAT_ID" \
+        --text "$TEXT_VALUE" \
+        --json
+    else
+      go run -C "$ROOT_DIR" ./cmd/openclaw-mcp-smoke \
+        --config "$CONFIG_PATH" \
+        --db "$DB_PATH" \
+        --sender-base-url "$SENDER_BASE_URL_VALUE" \
+        --mcp-command "$MCP_COMMAND" \
+        --deliver-main \
+        --chat-id "$CHAT_ID" \
+        --text "$TEXT_VALUE"
+    fi
+  else
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+      go run -C "$ROOT_DIR" ./cmd/openclaw-mcp-smoke \
+        --config "$CONFIG_PATH" \
+        --db "$DB_PATH" \
+        --sender-base-url "$SENDER_BASE_URL_VALUE" \
+        --mcp-command "$MCP_COMMAND" \
+        --deliver-main \
+        --text "$TEXT_VALUE" \
+        --json
+    else
+      go run -C "$ROOT_DIR" ./cmd/openclaw-mcp-smoke \
+        --config "$CONFIG_PATH" \
+        --db "$DB_PATH" \
+        --sender-base-url "$SENDER_BASE_URL_VALUE" \
+        --mcp-command "$MCP_COMMAND" \
+        --deliver-main \
+        --text "$TEXT_VALUE"
+    fi
+  fi
+else
+  if [[ -n "$CHAT_ID" ]]; then
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+      go run -C "$ROOT_DIR" ./cmd/openclaw-mcp-smoke \
+        --config "$CONFIG_PATH" \
+        --db "$DB_PATH" \
+        --sender-base-url "$SENDER_BASE_URL_VALUE" \
+        --mcp-command "$MCP_COMMAND" \
+        --chat-id "$CHAT_ID" \
+        --text "$TEXT_VALUE" \
+        --json
+    else
+      go run -C "$ROOT_DIR" ./cmd/openclaw-mcp-smoke \
+        --config "$CONFIG_PATH" \
+        --db "$DB_PATH" \
+        --sender-base-url "$SENDER_BASE_URL_VALUE" \
+        --mcp-command "$MCP_COMMAND" \
+        --chat-id "$CHAT_ID" \
+        --text "$TEXT_VALUE"
+    fi
+  else
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+      go run -C "$ROOT_DIR" ./cmd/openclaw-mcp-smoke \
+        --config "$CONFIG_PATH" \
+        --db "$DB_PATH" \
+        --sender-base-url "$SENDER_BASE_URL_VALUE" \
+        --mcp-command "$MCP_COMMAND" \
+        --text "$TEXT_VALUE" \
+        --json
+    else
+      go run -C "$ROOT_DIR" ./cmd/openclaw-mcp-smoke \
+        --config "$CONFIG_PATH" \
+        --db "$DB_PATH" \
+        --sender-base-url "$SENDER_BASE_URL_VALUE" \
+        --mcp-command "$MCP_COMMAND" \
+        --text "$TEXT_VALUE"
+    fi
+  fi
+fi

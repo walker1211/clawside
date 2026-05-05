@@ -62,8 +62,8 @@ if [[ -z "$DB_PATH" ]]; then
 fi
 
 cd "$ROOT_DIR"
+export SENDER_AUTH_KEY
 exec go run ./cmd/clawside-mcp \
   --db "$DB_PATH" \
   --sender-base-url "$SENDER_BASE_URL" \
-  --sender-auth-key "$SENDER_AUTH_KEY" \
   --target-agent-map "$TARGET_AGENT_BOT_MAP"

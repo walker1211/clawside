@@ -240,6 +240,10 @@ func sanitizeSenderLastError(lastError string) string {
 	return telegramBotTokenInSenderErrorPattern.ReplaceAllString(lastError, "bot[redacted]")
 }
 
+func SanitizeForSmokeReport(detail string) string {
+	return sanitizeSenderLastError(detail)
+}
+
 func IsRetryablePollError(err error) bool {
 	if err == nil {
 		return false
