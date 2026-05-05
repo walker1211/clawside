@@ -27,17 +27,18 @@ const (
 )
 
 type Options struct {
-	ConfigPath             string
-	DBPath                 string
-	SenderBaseURL          string
-	SenderAuthKey          string
-	MCPCommand             string
-	MCPArgs                []string
-	RegistrationConfigPath string
-	SkipRegistrationCheck  bool
-	DeliverMain            bool
-	ChatID                 int64
-	Text                   string
+	ConfigPath                       string
+	DBPath                           string
+	SenderBaseURL                    string
+	SenderAuthKey                    string
+	MCPCommand                       string
+	MCPArgs                          []string
+	RegistrationConfigPath           string
+	SkipRegistrationCheck            bool
+	DeliverMain                      bool
+	IncludeOpenClawToolCallChecklist bool
+	ChatID                           int64
+	Text                             string
 }
 
 var expectedV1Tools = []string{
@@ -66,11 +67,12 @@ var expectedV1Tools = []string{
 }
 
 type Report struct {
-	Status         string                      `json:"status"`
-	Checks         []CheckResult               `json:"checks"`
-	Tools          []string                    `json:"tools"`
-	DeliveryResult *a2adelivery.DeliveryResult `json:"delivery_result,omitempty"`
-	Registration   RegistrationGuidance        `json:"registration"`
+	Status                    string                           `json:"status"`
+	Checks                    []CheckResult                    `json:"checks"`
+	Tools                     []string                         `json:"tools"`
+	DeliveryResult            *a2adelivery.DeliveryResult      `json:"delivery_result,omitempty"`
+	OpenClawToolCallChecklist []OpenClawToolCallChecklistEntry `json:"openclaw_tool_call_checklist,omitempty"`
+	Registration              RegistrationGuidance             `json:"registration"`
 }
 
 func (r *Report) addCheck(check CheckResult) {
@@ -98,6 +100,9 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 		Status:       reportStatusOK,
 		Tools:        []string{},
 		Registration: buildRegistrationGuidanceForOptions(opts),
+	}
+	if opts.IncludeOpenClawToolCallChecklist {
+		report.OpenClawToolCallChecklist = buildOpenClawToolCallChecklist()
 	}
 	report.addCheck(checkConfig(opts.ConfigPath))
 
