@@ -110,6 +110,18 @@ func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
 	if !strings.Contains(content, "if [[ -n \"$REGISTRATION_CONFIG_PATH\" ]]; then") || !strings.Contains(content, "set -- \"$@\" --registration-config \"$REGISTRATION_CONFIG_PATH\"") {
 		t.Fatalf("expected %s to forward --registration-config only when set", path)
 	}
+	if !strings.Contains(content, "--openclaw-tool-call-checklist") {
+		t.Fatalf("expected %s help to list --openclaw-tool-call-checklist", path)
+	}
+	if !strings.Contains(content, "OPENCLAW_TOOL_CALL_CHECKLIST=\"false\"") {
+		t.Fatalf("expected %s to default OpenClaw tool call checklist output to false", path)
+	}
+	if !strings.Contains(content, "--openclaw-tool-call-checklist)") || !strings.Contains(content, "OPENCLAW_TOOL_CALL_CHECKLIST=\"true\"") {
+		t.Fatalf("expected %s to parse --openclaw-tool-call-checklist", path)
+	}
+	if !strings.Contains(content, "if [[ \"$OPENCLAW_TOOL_CALL_CHECKLIST\" == \"true\" ]]; then") || !strings.Contains(content, "set -- \"$@\" --openclaw-tool-call-checklist") {
+		t.Fatalf("expected %s to forward --openclaw-tool-call-checklist only when set", path)
+	}
 	if !strings.Contains(content, "DELIVER_MAIN=\"false\"") {
 		t.Fatalf("expected delivery to be disabled by default")
 	}

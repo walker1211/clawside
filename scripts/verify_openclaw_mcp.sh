@@ -7,6 +7,7 @@ DB_PATH="$ROOT_DIR/sender.db"
 SENDER_BASE_URL_VALUE="${SENDER_BASE_URL:-http://127.0.0.1:8787}"
 MCP_COMMAND="$ROOT_DIR/scripts/start_mcp.sh"
 REGISTRATION_CONFIG_PATH=""
+OPENCLAW_TOOL_CALL_CHECKLIST="false"
 DELIVER_MAIN="false"
 CHAT_ID=""
 TEXT_VALUE="OpenClaw MCP smoke test"
@@ -29,6 +30,8 @@ usage() {
   printf '  --mcp-command PATH_OR_COMMAND\n'
   printf '                             MCP command to launch (default: ROOT_DIR/scripts/start_mcp.sh)\n'
   printf '  --registration-config PATH  Read-only JSON MCP registration config to inspect\n'
+  printf '  --openclaw-tool-call-checklist\n'
+  printf '                             Include OpenClaw-side read-only tool call checklist\n'
   printf '  --deliver-main             Perform real delivery through the main sender path\n'
   printf '  --chat-id ID               Chat ID used when delivery is enabled\n'
   printf '  --text TEXT                Smoke message text (default: OpenClaw MCP smoke test)\n'
@@ -87,6 +90,10 @@ while [[ $# -gt 0 ]]; do
       REGISTRATION_CONFIG_PATH="$2"
       shift 2
       ;;
+    --openclaw-tool-call-checklist)
+      OPENCLAW_TOOL_CALL_CHECKLIST="true"
+      shift
+      ;;
     --deliver-main)
       DELIVER_MAIN="true"
       shift
@@ -132,6 +139,9 @@ run_smoke() {
 
   if [[ -n "$REGISTRATION_CONFIG_PATH" ]]; then
     set -- "$@" --registration-config "$REGISTRATION_CONFIG_PATH"
+  fi
+  if [[ "$OPENCLAW_TOOL_CALL_CHECKLIST" == "true" ]]; then
+    set -- "$@" --openclaw-tool-call-checklist
   fi
   if [[ "$DELIVER_MAIN" == "true" ]]; then
     set -- "$@" --deliver-main
