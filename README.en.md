@@ -261,6 +261,12 @@ For machine-readable output:
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 ```
 
+To include an OpenClaw-side read-only tool call checklist, pass `--openclaw-tool-call-checklist`. It only describes manual calls OpenClaw should make from its runtime / session for `sender_health`, `sender_ready`, and `sender_stats`, plus how to judge the returned results; it does not execute or fake OpenClaw calls:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --openclaw-tool-call-checklist
+```
+
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
 
 ```bash

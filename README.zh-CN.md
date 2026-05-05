@@ -261,6 +261,12 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 ```
 
+如需让输出附带 OpenClaw 侧只读 tool call checklist，可传入 `--openclaw-tool-call-checklist`。它只说明应该在 OpenClaw runtime / session 中手动调用 `sender_health`、`sender_ready`、`sender_stats`，以及如何判断返回结果；不会代替 OpenClaw 执行或伪造这些调用：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --openclaw-tool-call-checklist
+```
+
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
 
 ```bash
