@@ -261,6 +261,12 @@ For machine-readable output:
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 ```
 
+To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --registration-config /path/to/mcp.json
+```
+
 To verify real delivery, explicitly pass `--deliver-main` and `--chat-id`; delivery goes through the configured sender/main bot path:
 
 ```bash

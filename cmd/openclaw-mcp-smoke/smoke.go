@@ -27,15 +27,17 @@ const (
 )
 
 type Options struct {
-	ConfigPath    string
-	DBPath        string
-	SenderBaseURL string
-	SenderAuthKey string
-	MCPCommand    string
-	MCPArgs       []string
-	DeliverMain   bool
-	ChatID        int64
-	Text          string
+	ConfigPath             string
+	DBPath                 string
+	SenderBaseURL          string
+	SenderAuthKey          string
+	MCPCommand             string
+	MCPArgs                []string
+	RegistrationConfigPath string
+	SkipRegistrationCheck  bool
+	DeliverMain            bool
+	ChatID                 int64
+	Text                   string
 }
 
 var expectedV1Tools = []string{
@@ -123,6 +125,7 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 			report.addCheck(checkMCPTools(ctx, mcpClient, &report, opts.SenderAuthKey))
 		}
 	}
+	report.addCheck(checkMCPRegistration(opts, report.Registration))
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
 	} else {

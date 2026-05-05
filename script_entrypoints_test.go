@@ -98,6 +98,18 @@ func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
 	if !strings.Contains(content, "if [[ $# -eq 1 ]]; then") || !strings.Contains(content, "usage") || !strings.Contains(content, "exit 0") {
 		t.Fatalf("expected %s to handle help before validation or execution", path)
 	}
+	if !strings.Contains(content, "--registration-config PATH") {
+		t.Fatalf("expected %s help to list --registration-config", path)
+	}
+	if !strings.Contains(content, "REGISTRATION_CONFIG_PATH=\"\"") {
+		t.Fatalf("expected %s to default registration config path to empty", path)
+	}
+	if !strings.Contains(content, "--registration-config)") || !strings.Contains(content, "REGISTRATION_CONFIG_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --registration-config PATH", path)
+	}
+	if !strings.Contains(content, "if [[ -n \"$REGISTRATION_CONFIG_PATH\" ]]; then") || !strings.Contains(content, "set -- \"$@\" --registration-config \"$REGISTRATION_CONFIG_PATH\"") {
+		t.Fatalf("expected %s to forward --registration-config only when set", path)
+	}
 	if !strings.Contains(content, "DELIVER_MAIN=\"false\"") {
 		t.Fatalf("expected delivery to be disabled by default")
 	}

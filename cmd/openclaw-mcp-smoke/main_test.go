@@ -187,10 +187,10 @@ func TestCheckRunSmokeReportContract(t *testing.T) {
 	if !strings.Contains(text, `"registration"`) || strings.Contains(text, "registration_guidance") {
 		t.Fatalf("unexpected registration JSON contract: %s", text)
 	}
-	if len(report.Checks) != 6 {
-		t.Fatalf("expected 6 checks, got %+v", report.Checks)
+	if len(report.Checks) != 7 {
+		t.Fatalf("expected 7 checks, got %+v", report.Checks)
 	}
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -339,6 +339,49 @@ func TestRunChecksSenderAndMCPToolList(t *testing.T) {
 	if strings.Contains(stdout.String(), "super-secret-sender-key") {
 		t.Fatalf("stdout leaked sender auth key: %s", stdout.String())
 	}
+}
+
+func TestRunReportsMCPRegistrationFromConfig(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+	server := newHealthySenderServer(t)
+	defer server.Close()
+
+	registrationConfigPath := filepath.Join(dir, "mcp.json")
+	writeJSONForRegistrationTest(t, registrationConfigPath, map[string]any{
+		"mcpServers": map[string]any{
+			"clawside": map[string]any{"command": "go"},
+		},
+	})
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{
+		"--config", configPath,
+		"--db", filepath.Join(dir, "clawside.db"),
+		"--sender-base-url", server.URL,
+		"--sender-auth-key", "super-secret-sender-key",
+		"--mcp-command", "go",
+		"--mcp-arg", "run",
+		"--mcp-arg", "../clawside-mcp",
+		"--registration-config", registrationConfigPath,
+		"--json",
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run smoke: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
+	}
+
+	var report Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
+	}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "a2a_main_delivery"}
+	for i, want := range wantNames {
+		if report.Checks[i].Name != want {
+			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
+		}
+	}
+	assertCheck(t, report, "mcp_registration", checkStatusOK)
 }
 
 func TestRunDeliverMainCallsA2ADeliverThroughMCP(t *testing.T) {

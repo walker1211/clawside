@@ -261,6 +261,12 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 ```
 
+如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --registration-config /path/to/mcp.json
+```
+
 如需验证真实投递，必须显式传 `--deliver-main` 和 `--chat-id`，投递会经已配置的 sender/main bot 路径完成：
 
 ```bash
