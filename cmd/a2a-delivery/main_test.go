@@ -160,6 +160,52 @@ func TestRunRejectsUnknownTargetAgent(t *testing.T) {
 	}
 }
 
+func TestRunUsesMainBuiltInTargetAgentMapping(t *testing.T) {
+	const (
+		jobID  = int64(106)
+		chatID = int64(700010)
+	)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			var payload struct {
+				Bot string `json:"bot"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode /send payload: %v", err)
+			}
+			if payload.Bot != "main" {
+				t.Fatalf("expected built-in main bot, got %q", payload.Bot)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = fmt.Fprintf(w, `{"job_id":%d,"status":"sent"}`, jobID)
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{
+		"--sender-base-url", server.URL,
+		"--target-agent", "main",
+		"--text", "hello from main",
+		"--chat-id", "700010",
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run main built-in mapping delivery: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"bot": "main"`) {
+		t.Fatalf("expected main bot in output, got %s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), fmt.Sprintf(`"chat_id": %d`, chatID)) {
+		t.Fatalf("expected chat id in output, got %s", stdout.String())
+	}
+}
+
 func TestRunUsesConfiguredTargetAgentMapping(t *testing.T) {
 	const (
 		jobID  = int64(104)

@@ -8,6 +8,7 @@ func TestResolveBotForTargetAgentKnownMappings(t *testing.T) {
 		targetAgent string
 		wantBot     string
 	}{
+		{name: "main maps 1:1", targetAgent: "main", wantBot: "main"},
 		{name: "planner maps 1:1", targetAgent: "planner", wantBot: "planner"},
 		{name: "engineer maps 1:1", targetAgent: "engineer", wantBot: "engineer"},
 		{name: "researcher maps 1:1", targetAgent: "researcher", wantBot: "researcher"},

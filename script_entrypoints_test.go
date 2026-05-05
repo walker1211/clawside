@@ -52,3 +52,16 @@ func readTextFile(t *testing.T, path string) string {
 	}
 	return string(content)
 }
+
+func TestConfigBuilderScriptAvoidsEmptyBashArrayExpansion(t *testing.T) {
+	content := readTextFile(t, "scripts/config_builder.sh")
+	if strings.Contains(content, "INPUT_ARGS=()") || strings.Contains(content, "${INPUT_ARGS[@]}") {
+		t.Fatalf("config_builder.sh should avoid empty array expansion for Bash 3.2 with set -u")
+	}
+	if !strings.Contains(content, "INPUT_PATH=\"\"") {
+		t.Fatalf("expected config_builder.sh to use scalar INPUT_PATH")
+	}
+	if !strings.Contains(content, "--input \"$INPUT_PATH\"") {
+		t.Fatalf("expected config_builder.sh to pass --input only when INPUT_PATH is set")
+	}
+}

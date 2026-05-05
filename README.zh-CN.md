@@ -180,6 +180,8 @@ go run ./cmd/clawside-mcp \
 
 `--target-agent-map` 和 `CLAWSIDE_TARGET_AGENT_BOT_MAP` 接受逗号分隔的 `target_agent=bot` 映射。`a2a_deliver` 调用方仍只传 `target_agent`，不能在请求里绕过路由策略直接指定任意 bot。语义化 A2A 重试幂等需要显式传稳定的 `idempotency_key`；省略时 bridge 会为每次投递生成唯一的 nonce-based key。
 
+内置默认 target agent 映射包括 `main -> main`、`planner -> planner`、`engineer -> engineer`、`researcher -> researcher`、`archivist -> archivist`、`guardian -> guardian`、`closer -> closer`。其中 `main` 用于 OpenClaw router / main agent 场景；如果 `~/.openclaw/openclaw.json` 中配置了 `main -> default` Telegram route，config builder 会生成 `[telegram.bots.main]`，之后 `a2a_deliver` 可直接使用 `target_agent=main`。
+
 当前 v1 暴露的 tools：
 
 - `handoff_create`

@@ -843,6 +843,49 @@ func TestServerCallSenderObservabilityToolsSurfaceSenderErrors(t *testing.T) {
 	}
 }
 
+func TestServerCallA2ADeliverUsesMainBuiltInTargetAgentMapping(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/send":
+			var payload struct {
+				Bot string `json:"bot"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Fatalf("decode /send payload: %v", err)
+			}
+			if payload.Bot != "main" {
+				t.Fatalf("expected built-in main bot, got %q", payload.Bot)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusAccepted)
+			_, _ = w.Write([]byte(`{"job_id":205,"status":"sent"}`))
+		default:
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath, "--sender-base-url", server.URL)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "a2a_deliver", Arguments: map[string]any{
+		"target_agent": "main",
+		"text":         "hello from main",
+		"chat_id":      700010,
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(a2a_deliver): %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected a2a_deliver success, got error result")
+	}
+	assertStructuredObject(t, result, "status")
+}
+
 func TestServerCallA2ADeliverUsesConfiguredTargetAgentMapping(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {

@@ -8,11 +8,11 @@ usage() {
   printf 'usage: %s [--input PATH]\n' "$0" >&2
 }
 
-INPUT_ARGS=()
+INPUT_PATH=""
 if [[ $# -eq 0 ]]; then
   :
 elif [[ $# -eq 2 && "$1" == "--input" ]]; then
-  INPUT_ARGS=(--input "$2")
+  INPUT_PATH="$2"
 else
   usage
   exit 1
@@ -20,4 +20,8 @@ fi
 
 umask 077
 
-go run -C "$ROOT_DIR" ./cmd/config-builder "${INPUT_ARGS[@]}" --output "$OUTPUT_PATH"
+if [[ -n "$INPUT_PATH" ]]; then
+  go run -C "$ROOT_DIR" ./cmd/config-builder --input "$INPUT_PATH" --output "$OUTPUT_PATH"
+else
+  go run -C "$ROOT_DIR" ./cmd/config-builder --output "$OUTPUT_PATH"
+fi

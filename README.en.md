@@ -180,6 +180,8 @@ The more stable local entrypoint is:
 
 `--target-agent-map` and `CLAWSIDE_TARGET_AGENT_BOT_MAP` accept comma-separated `target_agent=bot` pairs. `a2a_deliver` callers still provide `target_agent`; they do not pass arbitrary sender bot overrides. Semantic A2A retry idempotency requires an explicit stable `idempotency_key`; omitted keys are generated as unique nonce-based delivery attempts.
 
+Built-in target agent mappings include `main -> main`, `planner -> planner`, `engineer -> engineer`, `researcher -> researcher`, `archivist -> archivist`, `guardian -> guardian`, and `closer -> closer`. `main` is intended for the OpenClaw router / main agent path. If `~/.openclaw/openclaw.json` defines a `main -> default` Telegram route, the config builder generates `[telegram.bots.main]`, and `a2a_deliver` can use `target_agent=main` directly.
+
 Current v1 tools:
 
 - `handoff_create`

@@ -9,6 +9,7 @@ import (
 )
 
 var firstVersionTargetAgentToBot = map[string]string{
+	"main":       "main",
 	"planner":    "planner",
 	"engineer":   "engineer",
 	"researcher": "researcher",
