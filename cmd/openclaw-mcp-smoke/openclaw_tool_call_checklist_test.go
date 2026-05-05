@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"path/filepath"
@@ -80,6 +81,63 @@ func TestRunSmokeIncludesOpenClawToolCallChecklistWhenRequested(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("expected JSON report to contain %s: %s", want, text)
+		}
+	}
+}
+
+func TestRunJSONIncludesOpenClawToolCallChecklistFlag(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{
+		"--config", configPath,
+		"--db", filepath.Join(dir, "sender.db"),
+		"--sender-base-url", "",
+		"--mcp-command", "",
+		"--openclaw-tool-call-checklist",
+		"--json",
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run smoke: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
+	}
+
+	var report Report
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
+	}
+	if len(report.OpenClawToolCallChecklist) != 3 {
+		t.Fatalf("expected checklist from CLI flag, got %+v", report.OpenClawToolCallChecklist)
+	}
+}
+
+func TestRunTextOutputIncludesOpenClawToolCallChecklist(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{
+		"--config", configPath,
+		"--db", filepath.Join(dir, "sender.db"),
+		"--sender-base-url", "",
+		"--mcp-command", "",
+		"--openclaw-tool-call-checklist",
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run smoke: %v\nstdout=%s\nstderr=%s", err, stdout.String(), stderr.String())
+	}
+
+	text := stdout.String()
+	for _, want := range []string{
+		"OpenClaw read-only tool call checklist:",
+		"- sender_health: call with {}; expect status=ok",
+		"- sender_ready: call with {}; expect status=ok",
+		"- sender_stats: call with {}; expect worker_running=true and queue counters",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected text output to contain %q:\n%s", want, text)
 		}
 	}
 }

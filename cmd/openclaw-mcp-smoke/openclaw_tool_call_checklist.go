@@ -33,3 +33,29 @@ func buildOpenClawToolCallChecklist() []OpenClawToolCallChecklistEntry {
 		},
 	}
 }
+
+func writeOpenClawToolCallChecklist(w interface{ Write([]byte) (int, error) }, checklist []OpenClawToolCallChecklistEntry) error {
+	if len(checklist) == 0 {
+		return nil
+	}
+	if err := writeLine(w, "OpenClaw read-only tool call checklist:"); err != nil {
+		return err
+	}
+	for _, entry := range checklist {
+		if err := writeLine(w, "- %s: call with {}; expect %s", entry.Tool, openClawChecklistTextExpected(entry)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func openClawChecklistTextExpected(entry OpenClawToolCallChecklistEntry) string {
+	switch entry.Tool {
+	case "sender_health", "sender_ready":
+		return "status=ok"
+	case "sender_stats":
+		return "worker_running=true and queue counters"
+	default:
+		return entry.Expected
+	}
+}

@@ -448,7 +448,10 @@ func writeTextSummary(report Report, w interface{ Write([]byte) (int, error) }) 
 	if err := writeLine(w, "Registration command: %s", report.Registration.Command); err != nil {
 		return err
 	}
-	return writeLine(w, "Registration args: %s", strings.Join(report.Registration.Args, " "))
+	if err := writeLine(w, "Registration args: %s", strings.Join(report.Registration.Args, " ")); err != nil {
+		return err
+	}
+	return writeOpenClawToolCallChecklist(w, report.OpenClawToolCallChecklist)
 }
 
 func writeJSONReport(report Report, w interface{ Write([]byte) (int, error) }) error {
