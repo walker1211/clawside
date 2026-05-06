@@ -202,6 +202,48 @@ func TestOpenClawTruthPlaneProgressionExtractScriptEntrypoint(t *testing.T) {
 	}
 }
 
+func TestOpenClawTruthPlaneMutationExtractScriptEntrypoint(t *testing.T) {
+	path := "scripts/extract_openclaw_truth_plane_mutation_results.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	if !strings.Contains(content, "go run -C \"$ROOT_DIR\" ./cmd/openclaw-truth-plane-mutation-extract") {
+		t.Fatalf("expected %s to invoke openclaw-truth-plane-mutation-extract with go run -C", path)
+	}
+	for _, helpToken := range []string{"help", "--help", "-h"} {
+		if !strings.Contains(content, helpToken) {
+			t.Fatalf("expected %s to support help token %q", path, helpToken)
+		}
+	}
+	if !strings.Contains(content, "EVENTS_PATH=\"\"") {
+		t.Fatalf("expected %s to default events path to empty", path)
+	}
+	if !strings.Contains(content, "--events PATH") {
+		t.Fatalf("expected %s help to list --events", path)
+	}
+	if !strings.Contains(content, "--events)") || !strings.Contains(content, "EVENTS_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --events PATH", path)
+	}
+	if !strings.Contains(content, "OUTPUT_PATH=\"\"") {
+		t.Fatalf("expected %s to default output path to empty", path)
+	}
+	if !strings.Contains(content, "--output)") || !strings.Contains(content, "OUTPUT_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --output PATH", path)
+	}
+	if !strings.Contains(content, "if [[ -n \"$OUTPUT_PATH\" ]]; then") || !strings.Contains(content, "set -- \"$@\" --output \"$OUTPUT_PATH\"") {
+		t.Fatalf("expected %s to forward --output only when set", path)
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") {
+		t.Fatalf("%s should avoid Bash arrays for Bash 3.2 with set -u", path)
+	}
+}
+
 func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
 	path := "scripts/verify_openclaw_mcp.sh"
 	info, err := os.Stat(path)
