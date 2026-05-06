@@ -113,6 +113,33 @@ func TestCheckOpenClawTruthPlaneProgressionResultsFailures(t *testing.T) {
 			want: "truth-plane progression actions are out of order",
 		},
 		{
+			name: "unknown progression action",
+			value: validOpenClawTruthPlaneProgressionResultsValueForTest(
+				[]any{
+					map[string]any{"action": "receive", "state": "received"},
+					map[string]any{"action": "claim", "state": "claimed"},
+					map[string]any{"action": "start", "state": "started"},
+					map[string]any{"action": "checkpoint", "state": "checkpointed"},
+					map[string]any{"action": "resume", "state": "resumed"},
+				},
+			),
+			want: "unknown truth-plane progression action",
+		},
+		{
+			name: "extra progression action",
+			value: validOpenClawTruthPlaneProgressionResultsValueForTest(
+				[]any{
+					map[string]any{"action": "receive", "state": "received"},
+					map[string]any{"action": "claim", "state": "claimed"},
+					map[string]any{"action": "start", "state": "started"},
+					map[string]any{"action": "checkpoint", "state": "checkpointed"},
+					map[string]any{"action": "complete", "state": "completed"},
+					map[string]any{"action": "complete", "state": "completed"},
+				},
+			),
+			want: "extra truth-plane progression action",
+		},
+		{
 			name: "wrong state where start is in_progress",
 			value: validOpenClawTruthPlaneProgressionResultsValueForTest(
 				[]any{
@@ -161,6 +188,18 @@ func TestCheckOpenClawTruthPlaneProgressionResultsFailures(t *testing.T) {
 			}},
 			want:           "unknown truth-plane progression tool",
 			mustNotContain: []string{secret, "unknown " + secret},
+		},
+		{
+			name: "missing required tool",
+			value: map[string]any{"truth_plane_progression": map[string]any{
+				"handoff_id":            "hf-123",
+				"workflow_id":           "wf-123",
+				"progressions":          validOpenClawTruthPlaneProgressionsForTest(),
+				"final_handoff_state":   "completed",
+				"final_workflow_status": "completed",
+				"tools":                 []any{"handoff_create", "handoff_progress", "handoff_get"},
+			}},
+			want: "missing truth-plane progression tool workflow_status",
 		},
 	}
 
