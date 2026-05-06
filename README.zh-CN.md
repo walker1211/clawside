@@ -31,6 +31,7 @@
 - `cmd/openclaw-tool-results-extract/`：从 OpenClaw trajectory 提取 clawside tool structured result 的本地只读 CLI
 - `cmd/openclaw-truth-plane-extract/`：从 OpenClaw trajectory 提取最小 truth-plane handoff/workflow/watch/ownership 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-progression-extract/`：从 OpenClaw trajectory 提取完整 handoff progression 验收结果的本地只读 CLI
+- `cmd/openclaw-truth-plane-mutation-extract/`：从 OpenClaw trajectory 提取 watch / ownership mutation 验收结果的本地只读 CLI
 - `cmd/a2a-delivery/`：A2A delivery bridge CLI
 - `internal/configbuilder/`：从 OpenClaw 源配置提取 sender 所需最小配置
 - `internal/orchestrator/`：handoff、workflow、event、watch、repair、adapter 基础实现
@@ -103,6 +104,7 @@ cp configs/config.example.toml configs/config.toml
 ./scripts/extract_openclaw_tool_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_progression_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
+./scripts/extract_openclaw_truth_plane_mutation_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
 说明：
@@ -116,6 +118,7 @@ cp configs/config.example.toml configs/config.toml
 - `./scripts/extract_openclaw_tool_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 clawside sender tool structured result
 - `./scripts/extract_openclaw_truth_plane_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取最小 truth-plane 验收结果
 - `./scripts/extract_openclaw_truth_plane_progression_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取完整 progression 验收结果
+- `./scripts/extract_openclaw_truth_plane_mutation_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 watch / ownership mutation 验收结果
 
 `./start.sh` / `./stop.sh` / `./restart.sh` 只管理自己写入的 pidfile。如果你是手动前台运行 `./scripts/start.sh`，请手动停止该进程。
 
@@ -369,6 +372,59 @@ openclaw sessions export-trajectory --agent main --session-key '<session-key>' -
 
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json
+```
+
+如需验收 OpenClaw 真实 mutation watch / ownership 状态，可让 main agent 创建 handoff 后更新 watch 与 ownership，再从 trajectory 提取并验收结果：
+
+```text
+请通过已注册的 clawside MCP tools 创建一条测试 handoff，然后对同一个 handoff 的 watch 和 ownership 做 mutation，并查询最终结果。
+
+请按顺序调用：
+1. handoff_create
+2. watch_list
+3. watch_update
+4. ownership_update
+5. watch_list
+6. ownership_get
+
+创建参数请使用：
+workflow_kind=manual_openclaw_truth_plane_mutation_smoke
+sender=agent:main
+receiver=agent:planner
+task_kind=truth_plane_mutation_smoke
+intent=verify OpenClaw can mutate clawside truth-plane watch and ownership state
+
+第一次 watch_list 请使用创建得到的 handoff_id。
+
+watch_update 请使用第一次 watch_list 返回的第一个 watch id，并设置：
+status=disabled
+deadline_at=2026-05-07T12:30:00Z
+escalation_policy=manual-smoke-escalation
+
+ownership_update 请使用创建得到的 handoff_id，并设置：
+current_owner=agent:operator
+lease_holder=agent:operator
+reviewer_actor=agent:reviewer
+escalation_owner=user:ops
+fallback_owner=agent:planner
+leased_at=2026-05-07T12:00:00Z
+lease_expires_at=2026-05-07T12:30:00Z
+
+第二次 watch_list 请再次使用同一个 handoff_id。
+ownership_get 请使用同一个 handoff_id。
+
+调用完成后，请输出 handoff_id、workflow_id、更新后的 watch_id、watch status、watch deadline_at、watch escalation_policy、current_owner、lease_holder、reviewer_actor、escalation_owner、fallback_owner、leased_at、lease_expires_at。
+```
+
+```bash
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_truth_plane_mutation_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-truth-plane-mutation-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json
 ```
 
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：

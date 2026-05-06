@@ -31,6 +31,7 @@ This version now productizes the minimal v1 into an installable, registerable, a
 - `cmd/openclaw-tool-results-extract/`: local read-only CLI for extracting clawside tool structured results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-extract/`: local read-only CLI for extracting minimal truth-plane handoff/workflow/watch/ownership validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-progression-extract/`: local read-only CLI for extracting completed handoff progression validation results from OpenClaw trajectory.
+- `cmd/openclaw-truth-plane-mutation-extract/`: local read-only CLI for extracting watch / ownership mutation validation results from OpenClaw trajectory.
 - `cmd/a2a-delivery/`: A2A delivery bridge CLI.
 - `internal/configbuilder/`: extracts the minimal sender config from OpenClaw source config.
 - `internal/orchestrator/`: handoff, workflow, event, watch, repair, and adapter foundations.
@@ -103,6 +104,7 @@ Then fill in:
 ./scripts/extract_openclaw_tool_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_progression_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
+./scripts/extract_openclaw_truth_plane_mutation_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
 Notes:
@@ -116,6 +118,7 @@ Notes:
 - `./scripts/extract_openclaw_tool_results.sh`: extracts clawside sender tool structured results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_results.sh`: extracts minimal truth-plane validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_progression_results.sh`: extracts completed progression validation results from OpenClaw trajectory `events.jsonl`.
+- `./scripts/extract_openclaw_truth_plane_mutation_results.sh`: extracts watch / ownership mutation validation results from OpenClaw trajectory `events.jsonl`.
 
 `./start.sh` / `./stop.sh` / `./restart.sh` only manage the pidfile they write. If you started `./scripts/start.sh` manually in the foreground, stop that process manually.
 
@@ -369,6 +372,59 @@ openclaw sessions export-trajectory --agent main --session-key '<session-key>' -
 
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json
+```
+
+To validate that OpenClaw really mutates watch and ownership state, ask the main agent to create a handoff, update watch and ownership fields, then extract and validate the trajectory result:
+
+```text
+Please create one test handoff through the registered clawside MCP tools, mutate watch and ownership state for the same handoff, then query the final results.
+
+Call these tools in order:
+1. handoff_create
+2. watch_list
+3. watch_update
+4. ownership_update
+5. watch_list
+6. ownership_get
+
+Use these creation parameters:
+workflow_kind=manual_openclaw_truth_plane_mutation_smoke
+sender=agent:main
+receiver=agent:planner
+task_kind=truth_plane_mutation_smoke
+intent=verify OpenClaw can mutate clawside truth-plane watch and ownership state
+
+Use the created handoff_id for the first watch_list call.
+
+For watch_update, use the first watch id returned by the first watch_list call and set:
+status=disabled
+deadline_at=2026-05-07T12:30:00Z
+escalation_policy=manual-smoke-escalation
+
+For ownership_update, use the created handoff_id and set:
+current_owner=agent:operator
+lease_holder=agent:operator
+reviewer_actor=agent:reviewer
+escalation_owner=user:ops
+fallback_owner=agent:planner
+leased_at=2026-05-07T12:00:00Z
+lease_expires_at=2026-05-07T12:30:00Z
+
+Call watch_list again with the same handoff_id.
+Call ownership_get with the same handoff_id.
+
+After the calls complete, output handoff_id, workflow_id, updated watch_id, watch status, watch deadline_at, watch escalation_policy, current_owner, lease_holder, reviewer_actor, escalation_owner, fallback_owner, leased_at, and lease_expires_at.
+```
+
+```bash
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_truth_plane_mutation_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-truth-plane-mutation-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json
 ```
 
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
