@@ -32,6 +32,7 @@ This version now productizes the minimal v1 into an installable, registerable, a
 - `cmd/openclaw-truth-plane-extract/`: local read-only CLI for extracting minimal truth-plane handoff/workflow/watch/ownership validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-progression-extract/`: local read-only CLI for extracting completed handoff progression validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-mutation-extract/`: local read-only CLI for extracting watch / ownership mutation validation results from OpenClaw trajectory.
+- `cmd/openclaw-truth-plane-repair-extract/`: local read-only CLI for extracting repair invalidate-event replay validation results from OpenClaw trajectory.
 - `cmd/a2a-delivery/`: A2A delivery bridge CLI.
 - `internal/configbuilder/`: extracts the minimal sender config from OpenClaw source config.
 - `internal/orchestrator/`: handoff, workflow, event, watch, repair, and adapter foundations.
@@ -105,6 +106,7 @@ Then fill in:
 ./scripts/extract_openclaw_truth_plane_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_progression_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_mutation_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
+./scripts/extract_openclaw_truth_plane_repair_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
 Notes:
@@ -119,6 +121,7 @@ Notes:
 - `./scripts/extract_openclaw_truth_plane_results.sh`: extracts minimal truth-plane validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_progression_results.sh`: extracts completed progression validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_mutation_results.sh`: extracts watch / ownership mutation validation results from OpenClaw trajectory `events.jsonl`.
+- `./scripts/extract_openclaw_truth_plane_repair_results.sh`: extracts repair invalidate-event replay validation results from OpenClaw trajectory `events.jsonl`.
 
 `./start.sh` / `./stop.sh` / `./restart.sh` only manage the pidfile they write. If you started `./scripts/start.sh` manually in the foreground, stop that process manually.
 
@@ -427,6 +430,60 @@ openclaw sessions export-trajectory --agent main --session-key '<session-key>' -
 
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json
+```
+
+### Stage 3 truth-plane repair validation
+
+To validate that OpenClaw really performs repair replay, ask the main agent to create a handoff, dispatch it, receive it, invalidate that accepted receive event, then extract and validate the repair record plus final replayed truth from the trajectory:
+
+```text
+Please create one test handoff through the registered clawside MCP tools, dispatch it, run receive, then invalidate the event from that receive call and query repair plus final handoff truth.
+
+Call these tools in order:
+1. handoff_create
+2. handoff_dispatch
+3. handoff_progress action=receive
+4. repair_invalidate_event
+5. repair_list
+6. handoff_get
+
+Use these creation parameters:
+workflow_kind=manual_openclaw_truth_plane_repair_smoke
+sender=agent:main
+receiver=agent:planner
+task_kind=truth_plane_repair_smoke
+intent=verify OpenClaw can invalidate a clawside handoff event and observe replayed truth
+
+Use these dispatch parameters:
+handoff_id=<created handoff_id>
+adapter=manual
+target=agent:planner
+
+Use these handoff_progress parameters:
+action=receive
+handoff_id=<created handoff_id>
+actor=agent:planner
+
+For repair_invalidate_event, use the event id returned by handoff_progress(receive) and set:
+event_id=<receive event id>
+reason=manual repair smoke invalidate receive event
+actor=agent:main
+
+Call repair_list with the same handoff_id.
+Call handoff_get with the same handoff_id.
+
+After the calls complete, output handoff_id, workflow_id, invalidated event_id, repair_id, repair action, and final handoff state.
+```
+
+```bash
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_truth_plane_repair_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-truth-plane-repair-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json
 ```
 
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
