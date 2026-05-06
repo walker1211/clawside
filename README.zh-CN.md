@@ -30,6 +30,7 @@
 - `cmd/openclaw-mcp-smoke/`：OpenClaw 消费 clawside MCP v1 surface 的本地 smoke verifier
 - `cmd/openclaw-tool-results-extract/`：从 OpenClaw trajectory 提取 clawside tool structured result 的本地只读 CLI
 - `cmd/openclaw-truth-plane-extract/`：从 OpenClaw trajectory 提取最小 truth-plane handoff/workflow/watch/ownership 验收结果的本地只读 CLI
+- `cmd/openclaw-truth-plane-progression-extract/`：从 OpenClaw trajectory 提取完整 handoff progression 验收结果的本地只读 CLI
 - `cmd/a2a-delivery/`：A2A delivery bridge CLI
 - `internal/configbuilder/`：从 OpenClaw 源配置提取 sender 所需最小配置
 - `internal/orchestrator/`：handoff、workflow、event、watch、repair、adapter 基础实现
@@ -101,6 +102,7 @@ cp configs/config.example.toml configs/config.toml
 ./scripts/start_mcp.sh --db ./sender.db
 ./scripts/extract_openclaw_tool_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
+./scripts/extract_openclaw_truth_plane_progression_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
 说明：
@@ -113,6 +115,7 @@ cp configs/config.example.toml configs/config.toml
 - `./scripts/start_mcp.sh`：启动 stdio MCP server，供 OpenClaw 注册使用
 - `./scripts/extract_openclaw_tool_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 clawside sender tool structured result
 - `./scripts/extract_openclaw_truth_plane_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取最小 truth-plane 验收结果
+- `./scripts/extract_openclaw_truth_plane_progression_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取完整 progression 验收结果
 
 `./start.sh` / `./stop.sh` / `./restart.sh` 只管理自己写入的 pidfile。如果你是手动前台运行 `./scripts/start.sh`，请手动停止该进程。
 
@@ -321,6 +324,44 @@ openclaw sessions export-trajectory --agent main --session-key '<session-key>' -
 
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json
+```
+
+如需验收 OpenClaw 真实推进 handoff 状态，可让 main agent 创建 handoff 并按协议推进到 `completed`，再从 trajectory 提取并验收结果：
+
+```text
+请通过已注册的 clawside MCP tools 创建一条测试 handoff，并将它完整推进到 completed，然后查询最终 handoff truth 和 workflow status。
+
+请按顺序调用：
+1. handoff_create
+2. handoff_progress action=receive
+3. handoff_progress action=claim
+4. handoff_progress action=start
+5. handoff_progress action=checkpoint
+6. handoff_progress action=complete
+7. handoff_get
+8. workflow_status
+
+创建参数请使用：
+workflow_kind=manual_openclaw_truth_plane_progression_smoke
+sender=agent:main
+receiver=agent:planner
+task_kind=truth_plane_progression_smoke
+intent=verify OpenClaw can progress clawside truth-plane handoff state
+
+progress actor 请使用 receiver：agent:planner。
+
+调用完成后，请输出 handoff_id、workflow_id、最终 handoff state 和最终 workflow status。
+```
+
+```bash
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_truth_plane_progression_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-truth-plane-progression-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json
 ```
 
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：

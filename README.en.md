@@ -30,6 +30,7 @@ This version now productizes the minimal v1 into an installable, registerable, a
 - `cmd/openclaw-mcp-smoke/`: local smoke verifier for OpenClaw consuming the clawside MCP v1 surface.
 - `cmd/openclaw-tool-results-extract/`: local read-only CLI for extracting clawside tool structured results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-extract/`: local read-only CLI for extracting minimal truth-plane handoff/workflow/watch/ownership validation results from OpenClaw trajectory.
+- `cmd/openclaw-truth-plane-progression-extract/`: local read-only CLI for extracting completed handoff progression validation results from OpenClaw trajectory.
 - `cmd/a2a-delivery/`: A2A delivery bridge CLI.
 - `internal/configbuilder/`: extracts the minimal sender config from OpenClaw source config.
 - `internal/orchestrator/`: handoff, workflow, event, watch, repair, and adapter foundations.
@@ -101,6 +102,7 @@ Then fill in:
 ./scripts/start_mcp.sh --db ./sender.db
 ./scripts/extract_openclaw_tool_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
+./scripts/extract_openclaw_truth_plane_progression_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
 Notes:
@@ -113,6 +115,7 @@ Notes:
 - `./scripts/start_mcp.sh`: starts the stdio MCP server for OpenClaw registration.
 - `./scripts/extract_openclaw_tool_results.sh`: extracts clawside sender tool structured results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_results.sh`: extracts minimal truth-plane validation results from OpenClaw trajectory `events.jsonl`.
+- `./scripts/extract_openclaw_truth_plane_progression_results.sh`: extracts completed progression validation results from OpenClaw trajectory `events.jsonl`.
 
 `./start.sh` / `./stop.sh` / `./restart.sh` only manage the pidfile they write. If you started `./scripts/start.sh` manually in the foreground, stop that process manually.
 
@@ -321,6 +324,44 @@ openclaw sessions export-trajectory --agent main --session-key '<session-key>' -
 
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json
+```
+
+To validate that OpenClaw really progresses a handoff state, ask the main agent to create a handoff and progress it to `completed`, then extract and validate the trajectory result:
+
+```text
+Please create one test handoff through the registered clawside MCP tools, progress it all the way to completed, then query the final handoff truth and workflow status.
+
+Call these tools in order:
+1. handoff_create
+2. handoff_progress action=receive
+3. handoff_progress action=claim
+4. handoff_progress action=start
+5. handoff_progress action=checkpoint
+6. handoff_progress action=complete
+7. handoff_get
+8. workflow_status
+
+Use these creation parameters:
+workflow_kind=manual_openclaw_truth_plane_progression_smoke
+sender=agent:main
+receiver=agent:planner
+task_kind=truth_plane_progression_smoke
+intent=verify OpenClaw can progress clawside truth-plane handoff state
+
+Use the receiver as the progress actor: agent:planner.
+
+After the calls complete, output handoff_id, workflow_id, final handoff state, and final workflow status.
+```
+
+```bash
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_truth_plane_progression_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-truth-plane-progression-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json
 ```
 
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
