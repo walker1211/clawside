@@ -11,6 +11,7 @@ configs/config.toml
 # Local runtime data
 sender.db
 *.db
+.openclaw/
 __pycache__/
 *.pyc
 

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -259,7 +260,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultStructured(health, "Checked sender health"), nil
+		return newToolResultStructuredJSON(health)
 	}))
 
 	senderReadyTool := mcp.NewTool("sender_ready",
@@ -271,7 +272,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultStructured(ready, "Checked sender readiness"), nil
+		return newToolResultStructuredJSON(ready)
 	}))
 
 	senderStatsTool := mcp.NewTool("sender_stats",
@@ -283,7 +284,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultStructured(stats, "Fetched sender stats"), nil
+		return newToolResultStructuredJSON(stats)
 	}))
 
 	senderJobListTool := mcp.NewTool("sender_job_list",
@@ -322,4 +323,12 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	}))
 
 	return s
+}
+
+func newToolResultStructuredJSON(value any) (*mcp.CallToolResult, error) {
+	text, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	return mcp.NewToolResultStructured(value, string(text)), nil
 }

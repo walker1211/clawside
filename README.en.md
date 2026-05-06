@@ -28,6 +28,7 @@ This version now productizes the minimal v1 into an installable, registerable, a
 - `cmd/orchestrator/`: low-level orchestrator debug / operation entrypoint.
 - `cmd/clawside-mcp/`: stdio MCP server entrypoint.
 - `cmd/openclaw-mcp-smoke/`: local smoke verifier for OpenClaw consuming the clawside MCP v1 surface.
+- `cmd/openclaw-tool-results-extract/`: local read-only CLI for extracting clawside tool structured results from OpenClaw trajectory.
 - `cmd/a2a-delivery/`: A2A delivery bridge CLI.
 - `internal/configbuilder/`: extracts the minimal sender config from OpenClaw source config.
 - `internal/orchestrator/`: handoff, workflow, event, watch, repair, and adapter foundations.
@@ -97,6 +98,7 @@ Then fill in:
 ./stop.sh
 ./restart.sh
 ./scripts/start_mcp.sh --db ./sender.db
+./scripts/extract_openclaw_tool_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
 Notes:
@@ -107,6 +109,7 @@ Notes:
 - `./restart.sh`: runs `./stop.sh` and then `./start.sh`.
 - `./scripts/start.sh`: starts the sender in the foreground through `go run .`, useful for debugging or avoiding a binary build.
 - `./scripts/start_mcp.sh`: starts the stdio MCP server for OpenClaw registration.
+- `./scripts/extract_openclaw_tool_results.sh`: extracts clawside sender tool structured results from OpenClaw trajectory `events.jsonl`.
 
 `./start.sh` / `./stop.sh` / `./restart.sh` only manage the pidfile they write. If you started `./scripts/start.sh` manually in the foreground, stop that process manually.
 
@@ -267,10 +270,17 @@ To include an OpenClaw-side read-only tool call checklist, pass `--openclaw-tool
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --openclaw-tool-call-checklist
 ```
 
-After manually calling the three tools from the OpenClaw runtime / session according to the checklist, save the returned results as JSON and pass `--openclaw-tool-results` for read-only validation. The check only reads the user-supplied JSON file; it does not execute or fake OpenClaw calls:
+After manually calling the three tools from the OpenClaw runtime / session according to the checklist, prefer extracting the original `structuredContent` from OpenClaw trajectory `events.jsonl`, then pass it to `--openclaw-tool-results` for read-only validation. This path does not execute or fake OpenClaw calls, and it does not depend on whether the final TG / dashboard reply exposes the raw structured result:
 
 ```bash
-SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --openclaw-tool-results /path/to/openclaw-tool-results.json
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_tool_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-tool-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-tool-results /tmp/openclaw-tool-results.json
 ```
 
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:

@@ -28,6 +28,7 @@
 - `cmd/orchestrator/`：低层 orchestrator 调试 / 操作入口
 - `cmd/clawside-mcp/`：stdio MCP server 入口
 - `cmd/openclaw-mcp-smoke/`：OpenClaw 消费 clawside MCP v1 surface 的本地 smoke verifier
+- `cmd/openclaw-tool-results-extract/`：从 OpenClaw trajectory 提取 clawside tool structured result 的本地只读 CLI
 - `cmd/a2a-delivery/`：A2A delivery bridge CLI
 - `internal/configbuilder/`：从 OpenClaw 源配置提取 sender 所需最小配置
 - `internal/orchestrator/`：handoff、workflow、event、watch、repair、adapter 基础实现
@@ -97,6 +98,7 @@ cp configs/config.example.toml configs/config.toml
 ./stop.sh
 ./restart.sh
 ./scripts/start_mcp.sh --db ./sender.db
+./scripts/extract_openclaw_tool_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
 说明：
@@ -107,6 +109,7 @@ cp configs/config.example.toml configs/config.toml
 - `./restart.sh`：依次执行 `./stop.sh` 和 `./start.sh`
 - `./scripts/start.sh`：前台 `go run .` 启动，适合调试或不想构建二进制时使用
 - `./scripts/start_mcp.sh`：启动 stdio MCP server，供 OpenClaw 注册使用
+- `./scripts/extract_openclaw_tool_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 clawside sender tool structured result
 
 `./start.sh` / `./stop.sh` / `./restart.sh` 只管理自己写入的 pidfile。如果你是手动前台运行 `./scripts/start.sh`，请手动停止该进程。
 
@@ -267,10 +270,17 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --openclaw-tool-call-checklist
 ```
 
-在 OpenClaw runtime / session 中按 checklist 手动调用三个 tools 后，可把返回结果整理成 JSON 文件，并用 `--openclaw-tool-results` 做只读验收。该检查只读取用户提供的 JSON 文件，不会执行或伪造 OpenClaw 调用：
+在 OpenClaw runtime / session 中按 checklist 手动调用三个 tools 后，推荐从 OpenClaw trajectory 导出的 `events.jsonl` 提取原始 `structuredContent`，再用 `--openclaw-tool-results` 做只读验收。该路径不会执行或伪造 OpenClaw 调用，也不依赖 TG / dashboard 最终回复是否暴露原始 structured result：
 
 ```bash
-SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --openclaw-tool-results /path/to/openclaw-tool-results.json
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_tool_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-tool-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-tool-results /tmp/openclaw-tool-results.json
 ```
 
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：

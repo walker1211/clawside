@@ -782,6 +782,7 @@ func TestServerCallSenderObservabilityTools(t *testing.T) {
 			t.Fatalf("expected %s success, got error result", toolName)
 		}
 		assertStructuredObject(t, result, key)
+		assertTextContentObject(t, result, key)
 	}
 
 	list, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "sender_job_list", Arguments: map[string]any{"status": "failed", "limit": 2}}})
@@ -1122,6 +1123,24 @@ func assertStructuredObject(t *testing.T, result *mcp.CallToolResult, key string
 	}
 	if _, ok := payload[key]; !ok {
 		t.Fatalf("expected structured content key %q in %+v", key, payload)
+	}
+}
+
+func assertTextContentObject(t *testing.T, result *mcp.CallToolResult, key string) {
+	t.Helper()
+	if len(result.Content) == 0 {
+		t.Fatalf("expected text content")
+	}
+	textContent, ok := result.Content[0].(mcp.TextContent)
+	if !ok {
+		t.Fatalf("expected first content to be text, got %T", result.Content[0])
+	}
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(textContent.Text), &payload); err != nil {
+		t.Fatalf("expected text content to be JSON object, got %q: %v", textContent.Text, err)
+	}
+	if _, ok := payload[key]; !ok {
+		t.Fatalf("expected text content key %q in %+v", key, payload)
 	}
 }
 
