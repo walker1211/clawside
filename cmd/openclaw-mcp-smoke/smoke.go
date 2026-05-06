@@ -27,20 +27,21 @@ const (
 )
 
 type Options struct {
-	ConfigPath                       string
-	DBPath                           string
-	SenderBaseURL                    string
-	SenderAuthKey                    string
-	MCPCommand                       string
-	MCPArgs                          []string
-	RegistrationConfigPath           string
-	SkipRegistrationCheck            bool
-	DeliverMain                      bool
-	IncludeOpenClawToolCallChecklist bool
-	OpenClawToolResultsPath          string
-	OpenClawTruthPlaneResultsPath    string
-	ChatID                           int64
-	Text                             string
+	ConfigPath                               string
+	DBPath                                   string
+	SenderBaseURL                            string
+	SenderAuthKey                            string
+	MCPCommand                               string
+	MCPArgs                                  []string
+	RegistrationConfigPath                   string
+	SkipRegistrationCheck                    bool
+	DeliverMain                              bool
+	IncludeOpenClawToolCallChecklist         bool
+	OpenClawToolResultsPath                  string
+	OpenClawTruthPlaneResultsPath            string
+	OpenClawTruthPlaneProgressionResultsPath string
+	ChatID                                   int64
+	Text                                     string
 }
 
 var expectedV1Tools = []string{
@@ -135,6 +136,7 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	report.addCheck(checkMCPRegistration(opts, report.Registration))
 	report.addCheck(checkOpenClawToolResults(opts))
 	report.addCheck(checkOpenClawTruthPlaneResults(opts))
+	report.addCheck(checkOpenClawTruthPlaneProgressionResults(opts))
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
 	} else {

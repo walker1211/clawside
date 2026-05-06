@@ -10,6 +10,7 @@ REGISTRATION_CONFIG_PATH=""
 OPENCLAW_TOOL_CALL_CHECKLIST="false"
 OPENCLAW_TOOL_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_RESULTS_PATH=""
+OPENCLAW_TRUTH_PLANE_PROGRESSION_RESULTS_PATH=""
 DELIVER_MAIN="false"
 CHAT_ID=""
 TEXT_VALUE="OpenClaw MCP smoke test"
@@ -38,6 +39,8 @@ usage() {
   printf '                             Read-only JSON file with OpenClaw-side tool results to validate\n'
   printf '  --openclaw-truth-plane-results PATH\n'
   printf '                             Read-only JSON file with OpenClaw-side truth-plane results to validate\n'
+  printf '  --openclaw-truth-plane-progression-results PATH\n'
+  printf '                             Read-only JSON file with OpenClaw truth-plane progression results to validate\n'
   printf '  --deliver-main             Perform real delivery through the main sender path\n'
   printf '  --chat-id ID               Chat ID used when delivery is enabled\n'
   printf '  --text TEXT                Smoke message text (default: OpenClaw MCP smoke test)\n'
@@ -116,6 +119,14 @@ while [[ $# -gt 0 ]]; do
       OPENCLAW_TRUTH_PLANE_RESULTS_PATH="$2"
       shift 2
       ;;
+    --openclaw-truth-plane-progression-results)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      OPENCLAW_TRUTH_PLANE_PROGRESSION_RESULTS_PATH="$2"
+      shift 2
+      ;;
     --deliver-main)
       DELIVER_MAIN="true"
       shift
@@ -170,6 +181,9 @@ run_smoke() {
   fi
   if [[ -n "$OPENCLAW_TRUTH_PLANE_RESULTS_PATH" ]]; then
     set -- "$@" --openclaw-truth-plane-results "$OPENCLAW_TRUTH_PLANE_RESULTS_PATH"
+  fi
+  if [[ -n "$OPENCLAW_TRUTH_PLANE_PROGRESSION_RESULTS_PATH" ]]; then
+    set -- "$@" --openclaw-truth-plane-progression-results "$OPENCLAW_TRUTH_PLANE_PROGRESSION_RESULTS_PATH"
   fi
   if [[ "$DELIVER_MAIN" == "true" ]]; then
     set -- "$@" --deliver-main
