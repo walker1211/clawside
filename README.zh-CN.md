@@ -347,6 +347,7 @@ workflow_kind=manual_openclaw_truth_plane_progression_smoke
 sender=agent:main
 receiver=agent:planner
 task_kind=truth_plane_progression_smoke
+required_for_workflow_completion=true
 intent=verify OpenClaw can progress clawside truth-plane handoff state
 
 dispatch 参数请使用：

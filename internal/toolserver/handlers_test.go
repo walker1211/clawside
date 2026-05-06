@@ -40,6 +40,25 @@ func TestHandleHandoffCreateCreatesWorkflowAndHandoff(t *testing.T) {
 	}
 }
 
+func TestHandleHandoffCreateCanRequireWorkflowCompletion(t *testing.T) {
+	h := newTestHandlers(t, nil)
+
+	result, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind:                  "generic",
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "draft chapter",
+		RequiredForWorkflowCompletion: true,
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if !result.Handoff.RequiredForWorkflowCompletion {
+		t.Fatalf("expected handoff to be required for workflow completion")
+	}
+}
+
 func TestHandleHandoffGetReturnsTimeline(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
@@ -134,6 +153,46 @@ func TestHandleWorkflowStatusReturnsProjectedWorkflow(t *testing.T) {
 	}
 	if len(result.Handoffs) != 1 {
 		t.Fatalf("expected 1 handoff, got %d", len(result.Handoffs))
+	}
+}
+
+func TestHandleWorkflowStatusCompletesRequiredHandoff(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind:                  "generic",
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "draft chapter",
+		RequiredForWorkflowCompletion: true,
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if _, err := h.HandleHandoffDispatch(context.Background(), HandoffDispatchInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("HandleHandoffDispatch: %v", err)
+	}
+	for _, action := range []string{"receive", "claim", "start", "checkpoint", "complete"} {
+		if _, err := h.HandleHandoffProgress(context.Background(), HandoffProgressInput{
+			Action:     action,
+			WorkflowID: created.Workflow.ID,
+			HandoffID:  created.Handoff.ID,
+			Actor:      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		}); err != nil {
+			t.Fatalf("HandleHandoffProgress(%s): %v", action, err)
+		}
+	}
+
+	result, err := h.HandleWorkflowStatus(context.Background(), WorkflowStatusInput{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("HandleWorkflowStatus: %v", err)
+	}
+	if result.Workflow.Status != orchestrator.WorkflowCompleted {
+		t.Fatalf("expected completed workflow status, got %s", result.Workflow.Status)
 	}
 }
 

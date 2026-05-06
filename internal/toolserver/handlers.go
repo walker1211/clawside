@@ -25,14 +25,15 @@ type ActorRefInput struct {
 }
 
 type HandoffCreateInput struct {
-	WorkflowKind   string               `json:"workflow_kind"`
-	Sender         ActorRefInput        `json:"sender"`
-	Receiver       ActorRefInput        `json:"receiver"`
-	Reviewer       *ActorRefInput       `json:"reviewer,omitempty"`
-	TaskKind       string               `json:"task_kind"`
-	Intent         string               `json:"intent"`
-	NeedsReview    bool                 `json:"needs_review,omitempty"`
-	ArtifactPolicy *ArtifactPolicyInput `json:"artifact_policy,omitempty"`
+	WorkflowKind                  string               `json:"workflow_kind"`
+	Sender                        ActorRefInput        `json:"sender"`
+	Receiver                      ActorRefInput        `json:"receiver"`
+	Reviewer                      *ActorRefInput       `json:"reviewer,omitempty"`
+	TaskKind                      string               `json:"task_kind"`
+	Intent                        string               `json:"intent"`
+	RequiredForWorkflowCompletion bool                 `json:"required_for_workflow_completion,omitempty"`
+	NeedsReview                   bool                 `json:"needs_review,omitempty"`
+	ArtifactPolicy                *ArtifactPolicyInput `json:"artifact_policy,omitempty"`
 }
 
 type ArtifactPolicyInput struct {
@@ -219,14 +220,15 @@ func (h *Handlers) HandleHandoffCreate(ctx context.Context, input HandoffCreateI
 		}
 	}
 	result, err := h.svc.CreateHandoff(ctx, orchestrator.CreateHandoffInput{
-		WorkflowKind:   strings.TrimSpace(input.WorkflowKind),
-		Sender:         sender,
-		Receiver:       receiver,
-		Reviewer:       reviewer,
-		TaskKind:       orchestrator.TaskKind(strings.TrimSpace(input.TaskKind)),
-		Intent:         strings.TrimSpace(input.Intent),
-		NeedsReview:    input.NeedsReview,
-		ArtifactPolicy: toArtifactPolicy(input.ArtifactPolicy),
+		WorkflowKind:                  strings.TrimSpace(input.WorkflowKind),
+		Sender:                        sender,
+		Receiver:                      receiver,
+		Reviewer:                      reviewer,
+		TaskKind:                      orchestrator.TaskKind(strings.TrimSpace(input.TaskKind)),
+		Intent:                        strings.TrimSpace(input.Intent),
+		RequiredForWorkflowCompletion: input.RequiredForWorkflowCompletion,
+		NeedsReview:                   input.NeedsReview,
+		ArtifactPolicy:                toArtifactPolicy(input.ArtifactPolicy),
 	})
 	if err != nil {
 		return HandoffCreateOutput{}, err
