@@ -333,13 +333,14 @@ Please create one test handoff through the registered clawside MCP tools, progre
 
 Call these tools in order:
 1. handoff_create
-2. handoff_progress action=receive
-3. handoff_progress action=claim
-4. handoff_progress action=start
-5. handoff_progress action=checkpoint
-6. handoff_progress action=complete
-7. handoff_get
-8. workflow_status
+2. handoff_dispatch
+3. handoff_progress action=receive
+4. handoff_progress action=claim
+5. handoff_progress action=start
+6. handoff_progress action=checkpoint
+7. handoff_progress action=complete
+8. handoff_get
+9. workflow_status
 
 Use these creation parameters:
 workflow_kind=manual_openclaw_truth_plane_progression_smoke
@@ -347,6 +348,11 @@ sender=agent:main
 receiver=agent:planner
 task_kind=truth_plane_progression_smoke
 intent=verify OpenClaw can progress clawside truth-plane handoff state
+
+Use these dispatch parameters:
+handoff_id=<created handoff_id>
+adapter=manual
+target=agent:planner
 
 Use the receiver as the progress actor: agent:planner.
 

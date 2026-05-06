@@ -16,6 +16,7 @@ func TestRunExtractsProgressionSummary(t *testing.T) {
 	writeProgressionEvents(t, eventsPath,
 		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-stale"},"handoff":{"id":"hf-stale","workflow_id":"wf-stale"}}`, false),
 		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-123", "wf-123", true), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.claim", "claimed", true, "hf-123", "wf-123"), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.start", "started", true, "hf-123", "wf-123"), false),
@@ -53,6 +54,16 @@ func TestRunExtractsProgressionSummary(t *testing.T) {
 	if payload.TruthPlaneProgression.FinalWorkflowStatus != "completed" {
 		t.Fatalf("expected completed final workflow status, got %q", payload.TruthPlaneProgression.FinalWorkflowStatus)
 	}
+	wantTools := []string{"handoff_create", "handoff_dispatch", "handoff_progress", "handoff_get", "workflow_status"}
+	if got := payload.TruthPlaneProgression.Tools; len(got) != len(wantTools) {
+		t.Fatalf("expected tools %+v, got %+v", wantTools, got)
+	} else {
+		for i, want := range wantTools {
+			if got[i] != want {
+				t.Fatalf("tool[%d] = %q, want %q", i, got[i], want)
+			}
+		}
+	}
 }
 
 func TestRunWritesProgressionSummaryToStdout(t *testing.T) {
@@ -81,11 +92,43 @@ func TestRunRequiresEventsPath(t *testing.T) {
 	}
 }
 
+func TestRunFailsWhenDispatchIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeProgressionEvents(t, eventsPath,
+		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err == nil || err.Error() != "handoff_progress appeared before handoff_dispatch" {
+		t.Fatalf("expected missing dispatch error, got %v", err)
+	}
+}
+
+func TestRunFailsOnMismatchedDispatchHandoffID(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeProgressionEvents(t, eventsPath,
+		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-other", "wf-123", true), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err == nil || err.Error() != "handoff_dispatch handoff id does not match handoff_create" {
+		t.Fatalf("expected mismatched dispatch handoff error, got %v", err)
+	}
+}
+
 func TestRunFailsWhenCheckpointActionMissing(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")
 	writeProgressionEvents(t, eventsPath,
 		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-123", "wf-123", true), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.claim", "claimed", true, "hf-123", "wf-123"), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.start", "started", true, "hf-123", "wf-123"), false),
@@ -105,6 +148,7 @@ func TestRunFailsWhenProgressionActionsAreOutOfOrder(t *testing.T) {
 	eventsPath := filepath.Join(dir, "events.jsonl")
 	writeProgressionEvents(t, eventsPath,
 		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-123", "wf-123", true), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.start", "started", true, "hf-123", "wf-123"), false),
 	)
@@ -121,6 +165,7 @@ func TestRunFailsOnMismatchedProgressionHandoffID(t *testing.T) {
 	eventsPath := filepath.Join(dir, "events.jsonl")
 	writeProgressionEvents(t, eventsPath,
 		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-123", "wf-123", true), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-other", "wf-123"), false),
 	)
 
@@ -136,6 +181,7 @@ func TestRunFailsOnMismatchedProgressionWorkflowID(t *testing.T) {
 	eventsPath := filepath.Join(dir, "events.jsonl")
 	writeProgressionEvents(t, eventsPath,
 		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-123", "wf-123", true), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-123", "wf-other"), false),
 	)
 
@@ -151,6 +197,7 @@ func TestRunFailsOnRejectedProgressionDecision(t *testing.T) {
 	eventsPath := filepath.Join(dir, "events.jsonl")
 	writeProgressionEvents(t, eventsPath,
 		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-123", "wf-123", true), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "created", false, "hf-123", "wf-123"), false),
 	)
 
@@ -166,6 +213,7 @@ func TestRunFailsWhenExtraProgressionIsPresent(t *testing.T) {
 	eventsPath := filepath.Join(dir, "events.jsonl")
 	writeProgressionEvents(t, eventsPath,
 		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-123", "wf-123", true), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.claim", "claimed", true, "hf-123", "wf-123"), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.start", "started", true, "hf-123", "wf-123"), false),
@@ -249,6 +297,7 @@ func writeValidProgressionEventsWithFinals(t *testing.T, path string, finalHando
 	t.Helper()
 	writeProgressionEvents(t, path,
 		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-123", "wf-123", true), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.claim", "claimed", true, "hf-123", "wf-123"), false),
 		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.start", "started", true, "hf-123", "wf-123"), false),
@@ -269,6 +318,10 @@ func writeProgressionEvents(t *testing.T, path string, lines ...string) {
 
 func progressionToolResultEvent(tool string, structured string, isError bool) string {
 	return `{"type":"tool.result","data":{"message":{"toolName":"clawside__` + tool + `","details":{"mcpServer":"clawside","mcpTool":"` + tool + `","structuredContent":` + structured + `},"isError":` + boolJSON(isError) + `}}}`
+}
+
+func progressionDispatchResultJSON(handoffID string, workflowID string, accepted bool) string {
+	return `{"attempt":{"handoff_id":"` + handoffID + `"},"events":[{"handoff_id":"` + handoffID + `","workflow_id":"` + workflowID + `","type":"transport_requested","accepted":` + boolJSON(accepted) + `}]}`
 }
 
 func progressionResultJSON(action string, state string, accepted bool, handoffID string, workflowID string) string {

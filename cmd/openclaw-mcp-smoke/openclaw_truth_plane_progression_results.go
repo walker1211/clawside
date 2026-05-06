@@ -11,6 +11,7 @@ const openClawTruthPlaneProgressionResultsCheckName = "openclaw_truth_plane_prog
 
 var requiredOpenClawTruthPlaneProgressionTools = []string{
 	"handoff_create",
+	"handoff_dispatch",
 	"handoff_progress",
 	"handoff_get",
 	"workflow_status",

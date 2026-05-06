@@ -333,13 +333,14 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
 
 请按顺序调用：
 1. handoff_create
-2. handoff_progress action=receive
-3. handoff_progress action=claim
-4. handoff_progress action=start
-5. handoff_progress action=checkpoint
-6. handoff_progress action=complete
-7. handoff_get
-8. workflow_status
+2. handoff_dispatch
+3. handoff_progress action=receive
+4. handoff_progress action=claim
+5. handoff_progress action=start
+6. handoff_progress action=checkpoint
+7. handoff_progress action=complete
+8. handoff_get
+9. workflow_status
 
 创建参数请使用：
 workflow_kind=manual_openclaw_truth_plane_progression_smoke
@@ -347,6 +348,11 @@ sender=agent:main
 receiver=agent:planner
 task_kind=truth_plane_progression_smoke
 intent=verify OpenClaw can progress clawside truth-plane handoff state
+
+dispatch 参数请使用：
+handoff_id=<created handoff_id>
+adapter=manual
+target=agent:planner
 
 progress actor 请使用 receiver：agent:planner。
 

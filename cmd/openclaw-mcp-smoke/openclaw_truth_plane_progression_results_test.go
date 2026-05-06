@@ -197,7 +197,7 @@ func TestCheckOpenClawTruthPlaneProgressionResultsFailures(t *testing.T) {
 				"progressions":          validOpenClawTruthPlaneProgressionsForTest(),
 				"final_handoff_state":   "completed",
 				"final_workflow_status": "completed",
-				"tools":                 []any{"handoff_create", "handoff_progress", "handoff_get"},
+				"tools":                 []any{"handoff_create", "handoff_dispatch", "handoff_progress", "handoff_get"},
 			}},
 			want: "missing truth-plane progression tool workflow_status",
 		},
@@ -283,7 +283,7 @@ func validOpenClawTruthPlaneProgressionsForTest() []any {
 }
 
 func requiredOpenClawTruthPlaneProgressionToolsForTest() []any {
-	return []any{"handoff_create", "handoff_progress", "handoff_get", "workflow_status"}
+	return []any{"handoff_create", "handoff_dispatch", "handoff_progress", "handoff_get", "workflow_status"}
 }
 
 func writeOpenClawTruthPlaneProgressionResultsTestJSON(t *testing.T, path string, value any) {

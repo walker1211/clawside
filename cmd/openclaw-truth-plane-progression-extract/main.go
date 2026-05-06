@@ -14,7 +14,7 @@ import (
 
 const clawsideMCPServerName = "clawside"
 
-var progressionTools = []string{"handoff_create", "handoff_progress", "handoff_get", "workflow_status"}
+var progressionTools = []string{"handoff_create", "handoff_dispatch", "handoff_progress", "handoff_get", "workflow_status"}
 
 var requiredProgressions = []progressionStep{
 	{Action: "receive", State: "received"},
@@ -196,6 +196,7 @@ func isProgressionTool(tool string) bool {
 func summarizeProgressionResults(results []progressionToolResult) (extractedProgressionResults, error) {
 	var payload extractedProgressionResults
 	var handoffCreate map[string]any
+	var handoffDispatch map[string]any
 	var progressions []map[string]any
 	var finalHandoffGet map[string]any
 	var finalWorkflowStatus map[string]any
@@ -203,10 +204,20 @@ func summarizeProgressionResults(results []progressionToolResult) (extractedProg
 	for _, result := range results {
 		switch result.Tool {
 		case "handoff_create":
-			if len(progressions) == 0 {
+			if handoffDispatch == nil && len(progressions) == 0 {
 				handoffCreate = result.StructuredContent
 			}
+		case "handoff_dispatch":
+			if handoffCreate == nil {
+				continue
+			}
+			if len(progressions) == 0 {
+				handoffDispatch = result.StructuredContent
+			}
 		case "handoff_progress":
+			if handoffDispatch == nil {
+				return payload, errors.New("handoff_progress appeared before handoff_dispatch")
+			}
 			progressions = append(progressions, result.StructuredContent)
 		case "handoff_get":
 			if len(progressions) >= len(requiredProgressions) {
@@ -224,6 +235,9 @@ func summarizeProgressionResults(results []progressionToolResult) (extractedProg
 	}
 	handoffID, workflowID, err := handoffCreateIDs(handoffCreate)
 	if err != nil {
+		return payload, err
+	}
+	if err := validateDispatch(handoffDispatch, handoffID, workflowID); err != nil {
 		return payload, err
 	}
 
@@ -263,6 +277,62 @@ func handoffCreateIDs(content map[string]any) (string, string, error) {
 		return "", "", errors.New("handoff_create workflow id is required")
 	}
 	return handoffID, workflowID, nil
+}
+
+func validateDispatch(content map[string]any, handoffID, workflowID string) error {
+	if content == nil {
+		return errors.New("missing tool handoff_dispatch in OpenClaw trajectory events")
+	}
+	dispatchHandoffID, dispatchWorkflowID := dispatchIDs(content)
+	if dispatchHandoffID != handoffID {
+		return errors.New("handoff_dispatch handoff id does not match handoff_create")
+	}
+	if dispatchWorkflowID != workflowID {
+		return errors.New("handoff_dispatch workflow id does not match handoff_create")
+	}
+	if !dispatchAccepted(content) {
+		return errors.New("handoff_dispatch transport request was not accepted")
+	}
+	return nil
+}
+
+func dispatchIDs(content map[string]any) (string, string) {
+	handoffID, _ := nestedString(content, "attempt", "handoff_id")
+	workflowID := ""
+	if event, ok := firstDispatchEvent(content); ok {
+		if handoffID == "" {
+			handoffID = stringField(event, "handoff_id")
+		}
+		workflowID = stringField(event, "workflow_id")
+	}
+	return handoffID, workflowID
+}
+
+func dispatchAccepted(content map[string]any) bool {
+	events, ok := content["events"].([]any)
+	if !ok {
+		return false
+	}
+	for _, eventValue := range events {
+		event, ok := eventValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		if stringField(event, "type") == "transport_requested" {
+			accepted, _ := event["accepted"].(bool)
+			return accepted
+		}
+	}
+	return false
+}
+
+func firstDispatchEvent(content map[string]any) (map[string]any, bool) {
+	events, ok := content["events"].([]any)
+	if !ok || len(events) == 0 {
+		return nil, false
+	}
+	event, ok := events[0].(map[string]any)
+	return event, ok
 }
 
 func validateProgressions(progressions []map[string]any, handoffID, workflowID string) ([]progressionStep, error) {
