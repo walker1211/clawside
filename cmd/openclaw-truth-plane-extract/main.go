@@ -34,11 +34,12 @@ type trajectoryEvent struct {
 }
 
 type trajectoryMessage struct {
-	IsError bool `json:"isError"`
-	Details struct {
-		MCPServer         string         `json:"mcpServer"`
-		MCPTool           string         `json:"mcpTool"`
-		StructuredContent map[string]any `json:"structuredContent"`
+	IsError  bool   `json:"isError"`
+	ToolName string `json:"toolName"`
+	Details  struct {
+		MCPServer         string `json:"mcpServer"`
+		MCPTool           string `json:"mcpTool"`
+		StructuredContent any    `json:"structuredContent"`
 	} `json:"details"`
 }
 
@@ -69,7 +70,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("unexpected positional argument")
 	}
 	if *eventsPath == "" {
-		return errors.New("--events is required")
+		return errors.New("events path is required")
 	}
 
 	results, err := extractTruthPlaneResults(*eventsPath)
@@ -95,7 +96,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 }
 
 func writeUsage(w io.Writer) error {
-	_, err := fmt.Fprintln(w, "Usage: openclaw-truth-plane-extract --events <events.jsonl> [--output <summary.json>]")
+	_, err := fmt.Fprintln(w, "Usage: openclaw-truth-plane-extract --events PATH [--output PATH]")
 	return err
 }
 
@@ -106,7 +107,7 @@ func isHelpArg(arg string) bool {
 func extractTruthPlaneResults(eventsPath string) (extractedTruthPlaneResults, error) {
 	file, err := os.Open(eventsPath)
 	if err != nil {
-		return nil, fmt.Errorf("open events file: %w", err)
+		return nil, errors.New("cannot read OpenClaw trajectory events file")
 	}
 	defer file.Close()
 
@@ -129,29 +130,37 @@ func extractTruthPlaneResults(eventsPath string) (extractedTruthPlaneResults, er
 			continue
 		}
 
-		toolName, ok := normalizeClawsideToolName(event.Data.Message.Details.MCPServer, event.Data.Message.Details.MCPTool)
+		toolName, ok := normalizeClawsideToolName(event.Data.Message.Details.MCPServer, event.Data.Message.Details.MCPTool, event.Data.Message.ToolName)
 		if !ok || !isRequiredTruthPlaneTool(toolName) {
 			continue
 		}
-		if event.Data.Message.Details.StructuredContent == nil {
-			return nil, fmt.Errorf("%s structuredContent must be an object", toolName)
+		structuredContent, ok := event.Data.Message.Details.StructuredContent.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("tool %s structuredContent must be an object", toolName)
 		}
-		results[toolName] = event.Data.Message.Details.StructuredContent
+		results[toolName] = structuredContent
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("read events file: %w", err)
+		return nil, errors.New("cannot read OpenClaw trajectory events file")
 	}
 	return results, nil
 }
 
-func normalizeClawsideToolName(server, tool string) (string, bool) {
-	if server == clawsideMCPServerName {
+func normalizeClawsideToolName(server, mcpTool, toolName string) (string, bool) {
+	if server != "" {
+		if server != clawsideMCPServerName {
+			return "", false
+		}
+		tool := mcpTool
+		if tool == "" {
+			tool = toolName
+		}
 		return strings.TrimPrefix(tool, clawsideMCPServerName+"__"), true
 	}
-	if strings.HasPrefix(tool, clawsideMCPServerName+"__") {
-		return strings.TrimPrefix(tool, clawsideMCPServerName+"__"), true
+	if !strings.HasPrefix(toolName, clawsideMCPServerName+"__") {
+		return "", false
 	}
-	return "", false
+	return strings.TrimPrefix(toolName, clawsideMCPServerName+"__"), true
 }
 
 func isRequiredTruthPlaneTool(tool string) bool {

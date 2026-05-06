@@ -86,8 +86,8 @@ func TestRunRequiresEventsPath(t *testing.T) {
 	if err == nil {
 		t.Fatal("run() error = nil, want error")
 	}
-	if !strings.Contains(err.Error(), "--events is required") {
-		t.Fatalf("error = %q, want --events is required", err.Error())
+	if err.Error() != "events path is required" {
+		t.Fatalf("error = %q, want events path is required", err.Error())
 	}
 	if stdout.Len() != 0 {
 		t.Fatalf("stdout = %q, want empty", stdout.String())
@@ -177,13 +177,85 @@ func TestRunHelpDoesNotRequireEventsPath(t *testing.T) {
 			if err := run([]string{arg}, &stdout, &stderr); err != nil {
 				t.Fatalf("run(%q) error = %v", arg, err)
 			}
-			if !strings.Contains(stdout.String(), "Usage:") {
-				t.Fatalf("stdout = %q, want usage", stdout.String())
+			usage := stdout.String()
+			if !strings.Contains(usage, "Usage:") {
+				t.Fatalf("stdout = %q, want usage", usage)
+			}
+			if !strings.Contains(usage, "--events PATH") || !strings.Contains(usage, "--output PATH") {
+				t.Fatalf("stdout = %q, want --events PATH and --output PATH", usage)
 			}
 			if stderr.Len() != 0 {
 				t.Fatalf("stderr = %q, want empty", stderr.String())
 			}
 		})
+	}
+}
+
+func TestRunAcceptsToolNameFallbackWhenMCPServerIsEmpty(t *testing.T) {
+	eventsPath := writeEventsJSONL(t,
+		toolNameResultEvent("", "clawside__handoff_create", false, map[string]any{
+			"handoff":  map[string]any{"id": "hf-latest"},
+			"workflow": map[string]any{"id": "wf-latest"},
+		}),
+		toolNameResultEvent("", "clawside__handoff_get", false, map[string]any{"handoff": map[string]any{"id": "hf-latest"}}),
+		toolNameResultEvent("", "clawside__workflow_status", false, map[string]any{"workflow": map[string]any{"id": "wf-latest"}}),
+		toolNameResultEvent("", "clawside__watch_list", false, map[string]any{"watches": []any{map[string]any{"handoff_id": "hf-latest"}}}),
+		toolNameResultEvent("", "clawside__ownership_get", false, map[string]any{"handoff_id": "hf-latest", "current_owner": map[string]any{"id": "agent-a"}}),
+	)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run() error = %v", err)
+	}
+}
+
+func TestRunRejectsPrefixedToolNameWhenMCPServerIsOther(t *testing.T) {
+	eventsPath := writeEventsJSONL(t,
+		validHandoffCreateEvent(),
+		toolNameResultEvent("other", "clawside__handoff_get", false, map[string]any{"handoff": map[string]any{"id": "hf-latest"}}),
+		toolResultEvent("clawside", "workflow_status", false, map[string]any{"workflow": map[string]any{"id": "wf-latest"}}),
+		toolResultEvent("clawside", "watch_list", false, map[string]any{"watches": []any{map[string]any{"handoff_id": "hf-latest"}}}),
+		toolResultEvent("clawside", "ownership_get", false, map[string]any{"handoff_id": "hf-latest", "current_owner": map[string]any{"id": "agent-a"}}),
+	)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("run() error = nil, want error")
+	}
+	if err.Error() != "missing tool handoff_get in OpenClaw trajectory events" {
+		t.Fatalf("error = %q", err.Error())
+	}
+}
+
+func TestRunRejectsNonObjectStructuredContentWithToolName(t *testing.T) {
+	eventsPath := writeEventsJSONL(t,
+		toolResultEvent("clawside", "handoff_create", false, "not-an-object"),
+	)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("run() error = nil, want error")
+	}
+	if err.Error() != "tool handoff_create structuredContent must be an object" {
+		t.Fatalf("error = %q", err.Error())
+	}
+}
+
+func TestRunSanitizesMissingEventsFileError(t *testing.T) {
+	missingPath := filepath.Join(t.TempDir(), "missing-events.jsonl")
+	var stdout, stderr bytes.Buffer
+
+	err := run([]string{"--events", missingPath}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("run() error = nil, want error")
+	}
+	if err.Error() != "cannot read OpenClaw trajectory events file" {
+		t.Fatalf("error = %q", err.Error())
+	}
+	if strings.Contains(err.Error(), missingPath) || strings.Contains(stderr.String(), missingPath) {
+		t.Fatalf("error leaked path: err=%q stderr=%q", err.Error(), stderr.String())
 	}
 }
 
@@ -196,7 +268,7 @@ func writeValidEventsJSONL(t *testing.T) string {
 		}),
 		validHandoffCreateEvent(),
 		toolResultEvent("other", "handoff_get", false, map[string]any{"handoff": map[string]any{"id": "hf-other-server"}}),
-		toolResultEvent("", "clawside__handoff_get", false, map[string]any{"handoff": map[string]any{"id": "hf-latest"}}),
+		toolNameResultEvent("", "clawside__handoff_get", false, map[string]any{"handoff": map[string]any{"id": "hf-latest"}}),
 		toolResultEvent("clawside", "workflow_status", false, map[string]any{"workflow": map[string]any{"id": "wf-latest"}}),
 		toolResultEvent("clawside", "watch_list", false, map[string]any{"watches": []any{map[string]any{"handoff_id": "hf-latest"}}}),
 		toolResultEvent("clawside", "ownership_get", true, map[string]any{"handoff_id": "hf-error", "current_owner": map[string]any{"id": "agent-error"}}),
@@ -230,7 +302,7 @@ func validHandoffCreateEvent() map[string]any {
 	})
 }
 
-func toolResultEvent(server, tool string, isError bool, structuredContent map[string]any) map[string]any {
+func toolResultEvent(server, tool string, isError bool, structuredContent any) map[string]any {
 	return map[string]any{
 		"type": "tool.result",
 		"data": map[string]any{
@@ -244,4 +316,11 @@ func toolResultEvent(server, tool string, isError bool, structuredContent map[st
 			},
 		},
 	}
+}
+
+func toolNameResultEvent(server, toolName string, isError bool, structuredContent any) map[string]any {
+	event := toolResultEvent(server, "", isError, structuredContent)
+	message := event["data"].(map[string]any)["message"].(map[string]any)
+	message["toolName"] = toolName
+	return event
 }
