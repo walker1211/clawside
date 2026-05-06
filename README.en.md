@@ -29,6 +29,7 @@ This version now productizes the minimal v1 into an installable, registerable, a
 - `cmd/clawside-mcp/`: stdio MCP server entrypoint.
 - `cmd/openclaw-mcp-smoke/`: local smoke verifier for OpenClaw consuming the clawside MCP v1 surface.
 - `cmd/openclaw-tool-results-extract/`: local read-only CLI for extracting clawside tool structured results from OpenClaw trajectory.
+- `cmd/openclaw-truth-plane-extract/`: local read-only CLI for extracting minimal truth-plane handoff/workflow/watch/ownership validation results from OpenClaw trajectory.
 - `cmd/a2a-delivery/`: A2A delivery bridge CLI.
 - `internal/configbuilder/`: extracts the minimal sender config from OpenClaw source config.
 - `internal/orchestrator/`: handoff, workflow, event, watch, repair, and adapter foundations.
@@ -99,6 +100,7 @@ Then fill in:
 ./restart.sh
 ./scripts/start_mcp.sh --db ./sender.db
 ./scripts/extract_openclaw_tool_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
+./scripts/extract_openclaw_truth_plane_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
 Notes:
@@ -110,6 +112,7 @@ Notes:
 - `./scripts/start.sh`: starts the sender in the foreground through `go run .`, useful for debugging or avoiding a binary build.
 - `./scripts/start_mcp.sh`: starts the stdio MCP server for OpenClaw registration.
 - `./scripts/extract_openclaw_tool_results.sh`: extracts clawside sender tool structured results from OpenClaw trajectory `events.jsonl`.
+- `./scripts/extract_openclaw_truth_plane_results.sh`: extracts minimal truth-plane validation results from OpenClaw trajectory `events.jsonl`.
 
 `./start.sh` / `./stop.sh` / `./restart.sh` only manage the pidfile they write. If you started `./scripts/start.sh` manually in the foreground, stop that process manually.
 
@@ -281,6 +284,43 @@ openclaw sessions export-trajectory --agent main --session-key '<session-key>' -
 
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-tool-results /tmp/openclaw-tool-results.json
+```
+
+### Minimal truth-plane tool-chain validation
+
+Ask OpenClaw web / TG to make one real tool-chain call sequence and verify OpenClaw can consume handoff truth, workflow status, watch list, and ownership binding:
+
+```text
+Please create one test handoff through the registered clawside MCP tools, then query its handoff truth, workflow status, watch list, and ownership binding.
+
+Call these tools in order:
+1. handoff_create
+2. handoff_get
+3. workflow_status
+4. watch_list
+5. ownership_get
+
+Use these creation parameters:
+workflow_kind=manual_openclaw_truth_plane_smoke
+sender=agent:main
+receiver=agent:planner
+task_kind=truth_plane_smoke
+intent=verify OpenClaw can consume clawside truth-plane tools
+
+After the calls complete, output handoff_id and workflow_id.
+```
+
+After the calls complete, export the trajectory, extract truth-plane validation results, and pass them to the smoke verifier for read-only validation:
+
+```bash
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_truth_plane_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-truth-plane-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json
 ```
 
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
