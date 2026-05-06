@@ -267,6 +267,12 @@ To include an OpenClaw-side read-only tool call checklist, pass `--openclaw-tool
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --openclaw-tool-call-checklist
 ```
 
+After manually calling the three tools from the OpenClaw runtime / session according to the checklist, save the returned results as JSON and pass `--openclaw-tool-results` for read-only validation. The check only reads the user-supplied JSON file; it does not execute or fake OpenClaw calls:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --openclaw-tool-results /path/to/openclaw-tool-results.json
+```
+
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
 
 ```bash

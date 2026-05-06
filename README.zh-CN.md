@@ -267,6 +267,12 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --openclaw-tool-call-checklist
 ```
 
+在 OpenClaw runtime / session 中按 checklist 手动调用三个 tools 后，可把返回结果整理成 JSON 文件，并用 `--openclaw-tool-results` 做只读验收。该检查只读取用户提供的 JSON 文件，不会执行或伪造 OpenClaw 调用：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --openclaw-tool-results /path/to/openclaw-tool-results.json
+```
+
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
 
 ```bash
