@@ -132,6 +132,7 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 		}
 	}
 	report.addCheck(checkMCPRegistration(opts, report.Registration))
+	report.addCheck(checkOpenClawToolResults(opts))
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
 	} else {

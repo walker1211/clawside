@@ -42,6 +42,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&defaults.RegistrationConfigPath, "registration-config", defaults.RegistrationConfigPath, "read-only JSON MCP registration config to inspect")
 	fs.BoolVar(&defaults.SkipRegistrationCheck, "skip-registration-check", false, "skip read-only MCP registration readiness check")
 	fs.BoolVar(&defaults.IncludeOpenClawToolCallChecklist, "openclaw-tool-call-checklist", false, "include OpenClaw-side read-only tool call checklist")
+	fs.StringVar(&defaults.OpenClawToolResultsPath, "openclaw-tool-results", defaults.OpenClawToolResultsPath, "read-only JSON file containing OpenClaw-side tool results to validate")
 	fs.BoolVar(&defaults.DeliverMain, "deliver-main", false, "attempt a main bot delivery smoke check")
 	fs.Int64Var(&defaults.ChatID, "chat-id", 0, "Telegram chat ID for --deliver-main")
 	fs.StringVar(&defaults.Text, "text", "OpenClaw MCP smoke test", "text to send for --deliver-main")
