@@ -187,10 +187,10 @@ func TestCheckRunSmokeReportContract(t *testing.T) {
 	if !strings.Contains(text, `"registration"`) || strings.Contains(text, "registration_guidance") {
 		t.Fatalf("unexpected registration JSON contract: %s", text)
 	}
-	if len(report.Checks) != 10 {
-		t.Fatalf("expected 10 checks, got %+v", report.Checks)
+	if len(report.Checks) != 11 {
+		t.Fatalf("expected 11 checks, got %+v", report.Checks)
 	}
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -375,7 +375,7 @@ func TestRunReportsMCPRegistrationFromConfig(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -420,7 +420,7 @@ func TestRunReportsOpenClawToolResultsFromFile(t *testing.T) {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
 	assertCheck(t, report, "openclaw_tool_results", checkStatusOK)
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -466,7 +466,7 @@ func TestRunReportsOpenClawTruthPlaneResultsFromFile(t *testing.T) {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
 	assertCheck(t, report, "openclaw_truth_plane_results", checkStatusOK)
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -512,7 +512,7 @@ func TestRunReportsOpenClawTruthPlaneProgressionResultsFromFile(t *testing.T) {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
 	assertCheck(t, report, "openclaw_truth_plane_progression_results", checkStatusOK)
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -524,6 +524,27 @@ func TestRunReportsOpenClawTruthPlaneProgressionResultsFromFile(t *testing.T) {
 	if strings.Contains(stdout.String(), secret) || strings.Contains(stderr.String(), secret) {
 		t.Fatalf("smoke output leaked sender auth key:\nstdout=%s\nstderr=%s", stdout.String(), stderr.String())
 	}
+}
+
+func TestRunReportsOpenClawTruthPlaneMutationResultsFromFile(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+	mutationResultsPath := filepath.Join(dir, "mutation-results.json")
+	if err := os.WriteFile(mutationResultsPath, []byte(`{"truth_plane_mutation":{"handoff_id":"hf-123","workflow_id":"wf-123","watch":{"id":"watch-1","status":"disabled","deadline_at":"2026-05-07T12:30:00Z","escalation_policy":"manual-smoke-escalation"},"ownership":{"current_owner":{"type":"agent","id":"operator"},"lease_holder":{"type":"agent","id":"operator"},"reviewer_actor":{"type":"agent","id":"reviewer"},"escalation_owner":{"type":"user","id":"ops"},"fallback_owner":{"type":"agent","id":"planner"},"leased_at":"2026-05-07T12:00:00Z","lease_expires_at":"2026-05-07T12:30:00Z"},"tools":["handoff_create","watch_list","watch_update","ownership_update","ownership_get"]}}`), 0o600); err != nil {
+		t.Fatalf("write mutation results: %v", err)
+	}
+
+	report, err := RunSmoke(context.Background(), Options{
+		ConfigPath:                            configPath,
+		DBPath:                                filepath.Join(dir, "sender.db"),
+		SkipRegistrationCheck:                 true,
+		OpenClawTruthPlaneMutationResultsPath: mutationResultsPath,
+	})
+	if err != nil {
+		t.Fatalf("run smoke: %v", err)
+	}
+
+	assertCheck(t, report, openClawTruthPlaneMutationResultsCheckName, checkStatusOK)
 }
 
 func TestRunDeliverMainCallsA2ADeliverThroughMCP(t *testing.T) {

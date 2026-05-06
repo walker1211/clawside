@@ -326,6 +326,18 @@ func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
 	if !strings.Contains(content, "if [[ -n \"$OPENCLAW_TRUTH_PLANE_PROGRESSION_RESULTS_PATH\" ]]; then") || !strings.Contains(content, "set -- \"$@\" --openclaw-truth-plane-progression-results \"$OPENCLAW_TRUTH_PLANE_PROGRESSION_RESULTS_PATH\"") {
 		t.Fatalf("expected %s to forward --openclaw-truth-plane-progression-results only when set", path)
 	}
+	if !strings.Contains(content, "--openclaw-truth-plane-mutation-results PATH") {
+		t.Fatalf("expected %s help to list --openclaw-truth-plane-mutation-results", path)
+	}
+	if !strings.Contains(content, "OPENCLAW_TRUTH_PLANE_MUTATION_RESULTS_PATH=\"\"") {
+		t.Fatalf("expected %s to default OpenClaw truth-plane mutation results path to empty", path)
+	}
+	if !strings.Contains(content, "--openclaw-truth-plane-mutation-results)") || !strings.Contains(content, "OPENCLAW_TRUTH_PLANE_MUTATION_RESULTS_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --openclaw-truth-plane-mutation-results PATH", path)
+	}
+	if !strings.Contains(content, "if [[ -n \"$OPENCLAW_TRUTH_PLANE_MUTATION_RESULTS_PATH\" ]]; then") || !strings.Contains(content, "set -- \"$@\" --openclaw-truth-plane-mutation-results \"$OPENCLAW_TRUTH_PLANE_MUTATION_RESULTS_PATH\"") {
+		t.Fatalf("expected %s to forward --openclaw-truth-plane-mutation-results only when set", path)
+	}
 	if !strings.Contains(content, "DELIVER_MAIN=\"false\"") {
 		t.Fatalf("expected delivery to be disabled by default")
 	}
