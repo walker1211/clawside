@@ -280,7 +280,7 @@ func summarizeMutationResults(results []mutationToolResult) (extractedMutationRe
 			updatedOwnership = ownership
 			ownershipUpdate = true
 		case "ownership_get":
-			if !ownershipUpdate {
+			if !ownershipUpdate || !finalWatchList {
 				continue
 			}
 			ownership, ok := ownershipFromContent(result.StructuredContent)

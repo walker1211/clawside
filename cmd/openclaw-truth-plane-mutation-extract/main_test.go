@@ -140,6 +140,25 @@ func TestRunFailsWhenFinalWatchListDoesNotPersistUpdate(t *testing.T) {
 	}
 }
 
+func TestRunFailsWhenOwnershipGetAppearsBeforeFinalWatchList(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeMutationEvents(t, eventsPath,
+		mutationToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		mutationToolResultEvent("watch_list", mutationWatchListJSON("hf-123", "watch-123", "enabled", "", ""), false),
+		mutationToolResultEvent("watch_update", mutationWatchJSON("hf-123", "watch-123", "disabled", "2026-05-07T12:30:00Z", "manual-smoke-escalation"), false),
+		mutationToolResultEvent("ownership_update", mutationOwnershipJSON("hf-123", true), false),
+		mutationToolResultEvent("ownership_get", mutationOwnershipJSON("hf-123", true), false),
+		mutationToolResultEvent("watch_list", mutationWatchListJSON("hf-123", "watch-123", "disabled", "2026-05-07T12:30:00Z", "manual-smoke-escalation"), false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err == nil || err.Error() != "ownership_get did not persist ownership_update values" {
+		t.Fatalf("expected ownership persistence error, got %v", err)
+	}
+}
+
 func TestRunFailsWhenOwnershipGetDoesNotPersistUpdate(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")
