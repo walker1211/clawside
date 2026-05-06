@@ -161,6 +161,28 @@ func TestRunFailsOnRejectedProgressionDecision(t *testing.T) {
 	}
 }
 
+func TestRunFailsWhenExtraProgressionIsPresent(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeProgressionEvents(t, eventsPath,
+		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.claim", "claimed", true, "hf-123", "wf-123"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.start", "started", true, "hf-123", "wf-123"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.checkpoint", "checkpointed", true, "hf-123", "wf-123"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.complete", "completed", true, "hf-123", "wf-123"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.complete", "completed", false, "hf-123", "wf-123"), false),
+		progressionToolResultEvent("handoff_get", `{"handoff":{"id":"hf-123","workflow_id":"wf-123","state":"completed"}}`, false),
+		progressionToolResultEvent("workflow_status", `{"workflow":{"id":"wf-123","status":"completed"}}`, false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err == nil || err.Error() != "unexpected extra handoff_progress result" {
+		t.Fatalf("expected extra handoff_progress error, got %v", err)
+	}
+}
+
 func TestRunFailsWhenFinalHandoffIsNotCompleted(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")

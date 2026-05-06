@@ -266,6 +266,9 @@ func handoffCreateIDs(content map[string]any) (string, string, error) {
 }
 
 func validateProgressions(progressions []map[string]any, handoffID, workflowID string) ([]progressionStep, error) {
+	if len(progressions) > len(requiredProgressions) {
+		return nil, errors.New("unexpected extra handoff_progress result")
+	}
 	if len(progressions) < len(requiredProgressions) {
 		if len(progressions) == 0 {
 			return nil, errors.New("missing handoff_progress action receive")
