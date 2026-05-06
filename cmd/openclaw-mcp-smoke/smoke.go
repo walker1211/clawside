@@ -37,6 +37,7 @@ type Options struct {
 	SkipRegistrationCheck            bool
 	DeliverMain                      bool
 	IncludeOpenClawToolCallChecklist bool
+	OpenClawToolResultsPath          string
 	ChatID                           int64
 	Text                             string
 }
