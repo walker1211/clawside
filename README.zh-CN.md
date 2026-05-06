@@ -374,6 +374,8 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json
 ```
 
+### Stage 2 / 阶段 2 truth-plane mutation 验收
+
 如需验收 OpenClaw 真实 mutation watch / ownership 状态，可让 main agent 创建 handoff 后更新 watch 与 ownership，再从 trajectory 提取并验收结果：
 
 ```text

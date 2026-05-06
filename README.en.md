@@ -374,6 +374,8 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json
 ```
 
+### Stage 2 truth-plane mutation validation
+
 To validate that OpenClaw really mutates watch and ownership state, ask the main agent to create a handoff, update watch and ownership fields, then extract and validate the trajectory result:
 
 ```text
