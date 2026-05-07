@@ -244,6 +244,49 @@ func TestRunFailsWhenExtraSecondProgressionIsPresent(t *testing.T) {
 	}
 }
 
+func TestRunFailsWhenExtraFirstProgressionAfterDivergenceIsPresent(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	lines := append([]string{}, validContinuityFirstProgressionEvents()...)
+	lines = append(lines,
+		continuityToolResultEvent("divergence_list", `{"divergences":[]}`, false),
+		continuityToolResultEvent("handoff_progress", continuityProgressResultJSON("handoff.complete", "completed", true, "hf-123", "wf-123"), false),
+		continuityToolResultEvent("repair_candidate_list", `{"repair_candidates":[]}`, false),
+	)
+	writeContinuityEvents(t, eventsPath, lines...)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err == nil || err.Error() != "unexpected extra handoff_progress result" {
+		t.Fatalf("expected extra first-phase handoff_progress after divergence error, got %v", err)
+	}
+}
+
+func TestRunFailsWhenExtraSecondProgressionAfterFinalHandoffIsPresent(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	lines := append([]string{}, validContinuityPrefixEvents()...)
+	lines = append(lines,
+		continuityToolResultEvent("repair_reopen_handoff", continuityRepairRecordJSON("repair-123", continuityReason, "main", "created"), false),
+		continuityToolResultEvent("handoff_dispatch", continuityDispatchResultJSON("hf-123", "wf-123", true), false),
+		continuityToolResultEvent("handoff_progress", continuityProgressResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
+		continuityToolResultEvent("handoff_progress", continuityProgressResultJSON("handoff.claim", "claimed", true, "hf-123", "wf-123"), false),
+		continuityToolResultEvent("handoff_progress", continuityProgressResultJSON("handoff.start", "started", true, "hf-123", "wf-123"), false),
+		continuityToolResultEvent("handoff_progress", continuityProgressResultJSON("handoff.checkpoint", "checkpointed", true, "hf-123", "wf-123"), false),
+		continuityToolResultEvent("handoff_progress", continuityProgressResultJSON("handoff.complete", "completed", true, "hf-123", "wf-123"), false),
+		continuityToolResultEvent("handoff_get", continuityFinalHandoffJSON("completed"), false),
+		continuityToolResultEvent("handoff_progress", continuityProgressResultJSON("handoff.complete", "completed", true, "hf-123", "wf-123"), false),
+		continuityToolResultEvent("workflow_status", continuityWorkflowStatusJSON("completed", "completed", true), false),
+	)
+	writeContinuityEvents(t, eventsPath, lines...)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err == nil || err.Error() != "unexpected extra post-reopen handoff_progress result" {
+		t.Fatalf("expected extra second-phase handoff_progress after final handoff error, got %v", err)
+	}
+}
+
 func TestRunFailsOnMismatchedIDs(t *testing.T) {
 	tests := []struct {
 		name    string

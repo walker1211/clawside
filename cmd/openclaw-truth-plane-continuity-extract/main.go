@@ -307,10 +307,7 @@ func summarizeContinuityResults(results []continuityToolResult) (extractedContin
 			}
 			if !reopenSeen {
 				if firstProgressIndex >= len(continuityProgressions) {
-					if !divergenceSeen {
-						return payload, errors.New("unexpected extra handoff_progress result")
-					}
-					continue
+					return payload, errors.New("unexpected extra handoff_progress result")
 				}
 				if err := validateProgression(result.StructuredContent, continuityProgressions[firstProgressIndex], handoffID, workflowID, "handoff_progress"); err != nil {
 					return payload, err
@@ -322,10 +319,7 @@ func summarizeContinuityResults(results []continuityToolResult) (extractedContin
 				continue
 			}
 			if secondProgressIndex >= len(continuityProgressions) {
-				if payload.TruthPlaneContinuity.PostReopenFinalHandoffState == "" {
-					return payload, errors.New("unexpected extra post-reopen handoff_progress result")
-				}
-				continue
+				return payload, errors.New("unexpected extra post-reopen handoff_progress result")
 			}
 			if err := validateProgression(result.StructuredContent, continuityProgressions[secondProgressIndex], handoffID, workflowID, "post-reopen handoff_progress"); err != nil {
 				return payload, err
