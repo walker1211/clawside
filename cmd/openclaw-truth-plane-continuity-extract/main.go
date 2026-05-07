@@ -257,6 +257,9 @@ func isContinuityTool(tool string) bool {
 
 func summarizeContinuityResults(results []continuityToolResult) (extractedContinuityResults, error) {
 	var payload extractedContinuityResults
+	var latestPayload extractedContinuityResults
+	var latestFlowErr error
+	var latestFlowComplete bool
 	var handoffID, workflowID string
 	firstProgressIndex := 0
 	secondProgressIndex := 0
@@ -283,7 +286,9 @@ func summarizeContinuityResults(results []continuityToolResult) (extractedContin
 			reopenSeen = false
 			secondDispatchSeen = false
 			reopenRepair = repairRecord{}
-			payload.TruthPlaneContinuity.PostReopenFinalHandoffState = ""
+			latestFlowErr = nil
+			latestFlowComplete = false
+			payload = extractedContinuityResults{}
 		case "handoff_dispatch":
 			if handoffID == "" {
 				continue
@@ -354,7 +359,9 @@ func summarizeContinuityResults(results []continuityToolResult) (extractedContin
 			}
 			state, err := validatePostReopenFinalHandoff(result.StructuredContent, handoffID, workflowID)
 			if err != nil {
-				return payload, err
+				latestFlowComplete = true
+				latestFlowErr = err
+				continue
 			}
 			payload.TruthPlaneContinuity.PostReopenFinalHandoffState = state
 		case "workflow_status":
@@ -362,8 +369,10 @@ func summarizeContinuityResults(results []continuityToolResult) (extractedContin
 				continue
 			}
 			status, err := validatePostReopenFinalWorkflow(result.StructuredContent, handoffID, workflowID)
+			latestFlowComplete = true
 			if err != nil {
-				return payload, err
+				latestFlowErr = err
+				continue
 			}
 			payload.TruthPlaneContinuity.HandoffID = handoffID
 			payload.TruthPlaneContinuity.WorkflowID = workflowID
@@ -372,10 +381,17 @@ func summarizeContinuityResults(results []continuityToolResult) (extractedContin
 			payload.TruthPlaneContinuity.CandidateObserved = candidateSeen
 			payload.TruthPlaneContinuity.PostReopenFinalWorkflowStatus = status
 			payload.TruthPlaneContinuity.Tools = append([]string(nil), continuityTools...)
-			return payload, nil
+			latestPayload = payload
+			latestFlowErr = nil
 		}
 	}
 
+	if latestFlowComplete {
+		if latestFlowErr != nil {
+			return payload, latestFlowErr
+		}
+		return latestPayload, nil
+	}
 	if handoffID == "" {
 		return payload, errors.New("missing tool handoff_create in OpenClaw trajectory events")
 	}

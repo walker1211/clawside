@@ -395,6 +395,83 @@ func TestRunSelectsContinuityFlowFromMixedTrajectoryExport(t *testing.T) {
 	}
 }
 
+func TestRunSelectsLatestSuccessfulContinuityFlowFromRepeatedSessionExport(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	lines := append([]string{}, validContinuityPrefixEvents()...)
+	lines = append(lines, validContinuityPostRepairEvents("completed", "active")...)
+	lines = append(lines, renamedContinuityEvents(validContinuityEvents(), "hf-latest", "wf-latest", "repair-latest")...)
+	writeContinuityEvents(t, eventsPath, lines...)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v", err)
+	}
+	var payload extractedContinuityResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.TruthPlaneContinuity.HandoffID != "hf-latest" || payload.TruthPlaneContinuity.WorkflowID != "wf-latest" {
+		t.Fatalf("expected latest flow ids, got %+v", payload.TruthPlaneContinuity)
+	}
+	if payload.TruthPlaneContinuity.Repair.ID != "repair-latest" {
+		t.Fatalf("expected latest repair id, got %+v", payload.TruthPlaneContinuity.Repair)
+	}
+}
+
+func TestRunSelectsLatestSuccessfulContinuityFlowAfterEarlierFinalHandoffFailure(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	lines := append([]string{}, validContinuityPrefixEvents()...)
+	lines = append(lines, validContinuityPostRepairEvents("created", "completed")...)
+	lines = append(lines, renamedContinuityEvents(validContinuityEvents(), "hf-latest", "wf-latest", "repair-latest")...)
+	writeContinuityEvents(t, eventsPath, lines...)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v", err)
+	}
+	var payload extractedContinuityResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.TruthPlaneContinuity.HandoffID != "hf-latest" || payload.TruthPlaneContinuity.WorkflowID != "wf-latest" {
+		t.Fatalf("expected latest flow ids, got %+v", payload.TruthPlaneContinuity)
+	}
+}
+
+func TestRunFailsWhenLatestContinuityFlowFailsAfterEarlierSuccess(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	lines := append([]string{}, validContinuityEvents()...)
+	latest := append([]string{}, validContinuityPrefixEvents()...)
+	latest = append(latest, validContinuityPostRepairEvents("completed", "active")...)
+	lines = append(lines, renamedContinuityEvents(latest, "hf-latest", "wf-latest", "repair-latest")...)
+	writeContinuityEvents(t, eventsPath, lines...)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err == nil || err.Error() != "post-reopen final workflow status must be completed" {
+		t.Fatalf("expected latest failed flow error, got %v", err)
+	}
+}
+
+func TestRunFailsWhenLatestContinuityFlowHasFinalHandoffFailureAfterEarlierSuccess(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	lines := append([]string{}, validContinuityEvents()...)
+	latest := append([]string{}, validContinuityPrefixEvents()...)
+	latest = append(latest, validContinuityPostRepairEvents("created", "completed")...)
+	lines = append(lines, renamedContinuityEvents(latest, "hf-latest", "wf-latest", "repair-latest")...)
+	writeContinuityEvents(t, eventsPath, lines...)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err == nil || err.Error() != "post-reopen final handoff state must be completed" {
+		t.Fatalf("expected latest final handoff error, got %v", err)
+	}
+}
+
 func TestRunAcceptsNullDivergenceAndCandidateLists(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")
@@ -473,6 +550,17 @@ func writeContinuityEventsWithFinals(t *testing.T, path string, finalHandoffStat
 
 func validContinuityEvents() []string {
 	return append(validContinuityPrefixEvents(), validContinuityPostRepairEvents("completed", "completed")...)
+}
+
+func renamedContinuityEvents(lines []string, handoffID string, workflowID string, repairID string) []string {
+	renamed := make([]string, 0, len(lines))
+	for _, line := range lines {
+		line = strings.ReplaceAll(line, "hf-123", handoffID)
+		line = strings.ReplaceAll(line, "wf-123", workflowID)
+		line = strings.ReplaceAll(line, "repair-123", repairID)
+		renamed = append(renamed, line)
+	}
+	return renamed
 }
 
 func validContinuityPrefixEvents() []string {

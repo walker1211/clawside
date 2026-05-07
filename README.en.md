@@ -595,6 +595,7 @@ workflow_kind=manual_openclaw_truth_plane_continuity_smoke
 sender=agent:main
 receiver=agent:planner
 task_kind=truth_plane_continuity_smoke
+required_for_workflow_completion=true
 intent=verify OpenClaw can reopen a completed clawside handoff and continue it to completed truth again
 
 For the first handoff_dispatch call, set handoff_id to the handoff_id returned by handoff_create, adapter=manual, and target=agent:planner.

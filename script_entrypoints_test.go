@@ -407,6 +407,29 @@ func TestReadmeDocumentsOpenClawTruthPlaneReopenValidation(t *testing.T) {
 	}
 }
 
+func TestReadmeStage5ContinuityPromptRequiresWorkflowCompletion(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		section := readReadmeSection(t, path, "### Stage 5")
+		if !strings.Contains(section, "required_for_workflow_completion=true") {
+			t.Fatalf("expected %s Stage 5 continuity prompt to require workflow completion", path)
+		}
+	}
+}
+
+func readReadmeSection(t *testing.T, path string, heading string) string {
+	t.Helper()
+	content := readTextFile(t, path)
+	start := strings.Index(content, heading)
+	if start < 0 {
+		t.Fatalf("expected %s to contain section %q", path, heading)
+	}
+	section := content[start:]
+	if next := strings.Index(section[len(heading):], "\n### "); next >= 0 {
+		section = section[:len(heading)+next]
+	}
+	return section
+}
+
 func TestReadmeDocumentsOpenClawTruthPlaneContinuityValidation(t *testing.T) {
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
