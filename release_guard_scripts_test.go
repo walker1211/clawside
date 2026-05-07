@@ -43,6 +43,17 @@ func TestSecretScanFailsForTrackedSensitivePath(t *testing.T) {
 	}
 }
 
+func TestSecretScanAllowsTrackedExampleEnv(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/secret-scan.sh")
+	writeFile(t, filepath.Join(repo, ".example.env"), "SENDER_AUTH_KEY=change-me-local-sender-key\n")
+	runGit(t, repo, "add", ".example.env", "scripts/secret-scan.sh")
+
+	stdout, stderr, err := runScript(t, repo, "scripts/secret-scan.sh")
+	if err != nil {
+		t.Fatalf("expected secret scan to allow tracked .example.env: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+}
+
 func TestSecretScanDetectsGenericAssignments(t *testing.T) {
 	repo := newTempGitRepoWithScript(t, "scripts/secret-scan.sh")
 	apiSecret := "abcdef1234567890"

@@ -768,7 +768,7 @@ Remote CI runs on `push` and `pull_request`:
 4. `go vet ./...`
 5. `go test -count=1 ./...`
 
-The release workflow runs only on `v*` tags, builds linux amd64/arm64, darwin amd64/arm64, and windows amd64 artifacts, generates checksums, and creates or updates the GitHub Release. Each release archive includes the binary, `LICENSE`, root README, multilingual READMEs, and `configs/config.example.toml`; it excludes `.env`, `configs/config.toml`, databases, logs, and `.openclaw/trajectory-exports`.
+The release workflow runs only on `v*` tags, builds linux amd64/arm64, darwin amd64/arm64, and windows amd64 artifacts, generates checksums, and creates or updates the GitHub Release. Each release archive includes the binary, `LICENSE`, root README, multilingual READMEs, `.example.env`, and `configs/config.example.toml`; it excludes `.env`, `configs/config.toml`, databases, logs, and `.openclaw/trajectory-exports`.
 
 Recommended release path:
 

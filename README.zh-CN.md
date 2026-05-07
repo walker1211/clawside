@@ -768,7 +768,7 @@ Stage 9 在 Stage 8 本地发布保护之上增加 GitHub Actions 远端 CI 和 
 4. `go vet ./...`
 5. `go test -count=1 ./...`
 
-Release workflow 只在 `v*` tag 上运行，构建 linux amd64/arm64、darwin amd64/arm64、windows amd64 五个平台产物，生成 checksums，并创建或更新 GitHub Release。每个 release 归档包含二进制、`LICENSE`、根 README、多语言 README 和 `configs/config.example.toml`，不包含 `.env`、`configs/config.toml`、数据库、日志或 `.openclaw/trajectory-exports`。
+Release workflow 只在 `v*` tag 上运行，构建 linux amd64/arm64、darwin amd64/arm64、windows amd64 五个平台产物，生成 checksums，并创建或更新 GitHub Release。每个 release 归档包含二进制、`LICENSE`、根 README、多语言 README、`.example.env` 和 `configs/config.example.toml`，不包含 `.env`、`configs/config.toml`、数据库、日志或 `.openclaw/trajectory-exports`。
 
 推荐发布路径：
 

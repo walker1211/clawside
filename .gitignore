@@ -5,26 +5,48 @@
 
 # Secrets
 .env
+*.env
+!.example.env
+*.pem
+*.key
+credentials.json
+
+# Local config
 config.toml
 configs/config.toml
 
-# Local runtime data
+# Data
 sender.db
 *.db
+*.sqlite
 .openclaw/
+
+# Build artifacts
+/output/
+dist/
+build/
+seen.json
+nohup.out
 __pycache__/
 *.pyc
 
-# Output
-/output/
-seen.json
-nohup.out
-
 # IDE
 .idea/
+.vscode/
 
 # Logs
 logs/
+*.log
 
 # OS
 .DS_Store
+
+# Worktrees
+.worktrees/
+worktrees/
+.claude/worktrees/
+
+# Local/private project assets
+docs/superpowers/
+/private/
+/local/

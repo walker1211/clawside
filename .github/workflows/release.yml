@@ -97,6 +97,7 @@ jobs:
           cp README.md "dist/${{ matrix.artifact_name }}/README.md"
           cp README.zh-CN.md "dist/${{ matrix.artifact_name }}/README.zh-CN.md"
           cp README.en.md "dist/${{ matrix.artifact_name }}/README.en.md"
+          cp .example.env "dist/${{ matrix.artifact_name }}/.example.env"
           mkdir -p "dist/${{ matrix.artifact_name }}/configs"
           cp configs/config.example.toml "dist/${{ matrix.artifact_name }}/configs/config.example.toml"
 

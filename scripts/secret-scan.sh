@@ -59,6 +59,8 @@ report_finding() {
 check_sensitive_path() {
   path="$1"
   case "$path" in
+    .example.env)
+      ;;
     .env|*.env|config.toml|configs/config.toml|credentials.json|*.pem|*.key|*.sqlite|*.db|*.log|.openclaw/trajectory-exports/*)
       report_finding "$path" 0 "sensitive tracked path"
       ;;

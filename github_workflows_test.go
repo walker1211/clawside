@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -22,6 +23,66 @@ func TestStage9LicenseFile(t *testing.T) {
 		if !strings.Contains(license, want) {
 			t.Fatalf("expected LICENSE to contain %q", want)
 		}
+	}
+}
+
+func TestGitHubReadinessFiles(t *testing.T) {
+	requiredFiles := []struct {
+		path string
+		want []string
+	}{
+		{path: ".example.env", want: []string{"SENDER_AUTH_KEY=", "CLAWSIDE_TARGET_AGENT_BOT_MAP="}},
+		{path: "SECURITY.md", want: []string{"GitHub Security", "private vulnerability report", "Do not post secrets"}},
+		{path: "CONTRIBUTING.md", want: []string{"configs/config.example.toml", "scripts/ci-local.sh clean", "scripts/secret-scan.sh", "Conventional Commits"}},
+		{path: ".github/ISSUE_TEMPLATE/bug_report.yml", want: []string{"name: Bug report", "Do not include secrets", "configs/config.example.toml"}},
+		{path: ".github/ISSUE_TEMPLATE/feature_request.yml", want: []string{"name: Feature request", "Problem", "Proposed solution"}},
+		{path: ".github/PULL_REQUEST_TEMPLATE.md", want: []string{"## Summary", "## Test plan", "scripts/ci-local.sh clean"}},
+		{path: ".gitignore", want: []string{"# Binary", "# Secrets", "# Local config", "# Data", "# Build artifacts", "# IDE", "# Logs", "# OS", "# Worktrees", "# Local/private project assets"}},
+	}
+
+	for _, tc := range requiredFiles {
+		contentBytes, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("expected %s to exist: %v", tc.path, err)
+		}
+		content := string(contentBytes)
+		for _, want := range tc.want {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", tc.path, want)
+			}
+		}
+	}
+}
+
+func TestRootReadmeLanguageSwitch(t *testing.T) {
+	contentBytes, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("expected README.md to exist: %v", err)
+	}
+	content := string(contentBytes)
+	if !strings.Contains(content, "[中文](./README.zh-CN.md) | [English](./README.en.md)") {
+		t.Fatalf("expected README.md to use short language switch labels")
+	}
+	for _, forbidden := range []string{"[中文文档]", "[English Documentation]"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("expected README.md not to contain %q", forbidden)
+		}
+	}
+	for _, target := range []string{"README.zh-CN.md", "README.en.md"} {
+		if count := strings.Count(content, target); count != 1 {
+			t.Fatalf("expected README.md to link %s exactly once, got %d", target, count)
+		}
+	}
+}
+
+func TestLocalPlanningDocsAreNotTracked(t *testing.T) {
+	cmd := exec.Command("git", "ls-files", "docs/superpowers")
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git ls-files docs/superpowers failed: %v", err)
+	}
+	if strings.TrimSpace(string(output)) != "" {
+		t.Fatalf("expected docs/superpowers to be untracked local planning docs, got:\n%s", output)
 	}
 }
 
@@ -119,6 +180,7 @@ func TestGitHubReleaseWorkflow(t *testing.T) {
 		"README.zh-CN.md",
 		"README.en.md",
 		"configs/config.example.toml",
+		".example.env",
 		"actions/upload-artifact",
 		"actions/download-artifact",
 		"sha256sum",

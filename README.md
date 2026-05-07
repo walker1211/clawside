@@ -4,7 +4,7 @@
 
 It currently provides a local Telegram sender, handoff/workflow orchestration foundations, and a productized OpenClaw-consumable MCP + skill v1 surface.
 
-[中文文档](./README.zh-CN.md) | [English Documentation](./README.en.md)
+[中文](./README.zh-CN.md) | [English](./README.en.md)
 
 ## Quick Start
 
@@ -50,8 +50,3 @@ configs/config.example.toml
 ```
 
 `configs/config.toml`, `.env`, `sender.db`, logs, and local runtime data are ignored by git.
-
-## Documentation
-
-- [中文文档](./README.zh-CN.md)
-- [English Documentation](./README.en.md)

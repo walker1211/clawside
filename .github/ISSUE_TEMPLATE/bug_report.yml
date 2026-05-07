@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a reproducible problem in clawside
+title: "bug: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not include secrets, tokens, `.env`, `configs/config.toml`, private prompts, databases, or sensitive logs.
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: Which release, tag, or commit are you using?
+      placeholder: v0.1.0 or commit SHA
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Non-sensitive config context
+      description: Describe relevant config shape. Use `configs/config.example.toml` style placeholders only.
+    validations:
+      required: false
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List the smallest steps that reproduce the issue.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior and sanitized logs
+      description: Paste only redacted logs with secrets removed.
+    validations:
+      required: true

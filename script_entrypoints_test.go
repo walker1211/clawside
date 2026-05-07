@@ -660,6 +660,7 @@ func TestReadmeStage9DocumentsRemoteCIRelease(t *testing.T) {
 			"gofmt",
 			"go vet ./...",
 			"configs/config.example.toml",
+			".example.env",
 			".env",
 			"configs/config.toml",
 			".openclaw/trajectory-exports",
