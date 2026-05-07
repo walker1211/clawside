@@ -34,6 +34,7 @@
 - `cmd/openclaw-truth-plane-mutation-extract/`：从 OpenClaw trajectory 提取 watch / ownership mutation 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-repair-extract/`：从 OpenClaw trajectory 提取 repair invalidate-event replay 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-reopen-extract/`：从 OpenClaw trajectory 提取 divergence/candidate/reopen handoff 验收结果的本地只读 CLI
+- `cmd/openclaw-truth-plane-continuity-extract/`：从 OpenClaw trajectory 提取 truth-plane continuity reopen 后继续推进验收结果的本地只读 CLI
 - `cmd/a2a-delivery/`：A2A delivery bridge CLI
 - `internal/configbuilder/`：从 OpenClaw 源配置提取 sender 所需最小配置
 - `internal/orchestrator/`：handoff、workflow、event、watch、repair、adapter 基础实现
@@ -109,6 +110,7 @@ cp configs/config.example.toml configs/config.toml
 ./scripts/extract_openclaw_truth_plane_mutation_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_repair_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_reopen_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
+./scripts/extract_openclaw_truth_plane_continuity_results.sh --events .openclaw/trajectory-exports/export-directory/events.jsonl
 ```
 
 说明：
@@ -125,6 +127,7 @@ cp configs/config.example.toml configs/config.toml
 - `./scripts/extract_openclaw_truth_plane_mutation_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 watch / ownership mutation 验收结果
 - `./scripts/extract_openclaw_truth_plane_repair_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 repair invalidate-event replay 验收结果
 - `./scripts/extract_openclaw_truth_plane_reopen_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 divergence/candidate/reopen handoff 验收结果
+- `./scripts/extract_openclaw_truth_plane_continuity_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 truth-plane continuity reopen 后继续推进验收结果
 
 `./start.sh` / `./stop.sh` / `./restart.sh` 只管理自己写入的 pidfile。如果你是手动前台运行 `./scripts/start.sh`，请手动停止该进程。
 
@@ -558,6 +561,80 @@ openclaw_truth_plane_reopen_results: ok
 
 ```bash
 ./scripts/verify_openclaw_mcp.sh --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json
+```
+
+### Stage 5 / 阶段 5 truth-plane continuity smoke 验收
+
+如需验收 OpenClaw 在 reopen 同一条 handoff 后，仍可沿同一 handoff 继续推进并再次落到 completed truth，可让 main agent 先完整推进一条 handoff，观察 divergence 与 repair candidate，reopen 后再对同一个 handoff 重新 dispatch 与 progress：
+
+```text
+请通过已注册的 clawside MCP tools 创建一条测试 handoff，dispatch 后按协议推进到 completed，然后查询 divergence、repair candidate，reopen 这条 completed handoff，并对同一个 handoff 再次 dispatch、receive、claim、start、checkpoint、complete，最后查询 handoff truth 与 workflow status。
+
+请按顺序调用：
+1. handoff_create
+2. handoff_dispatch
+3. handoff_progress action=receive
+4. handoff_progress action=claim
+5. handoff_progress action=start
+6. handoff_progress action=checkpoint
+7. handoff_progress action=complete
+8. divergence_list
+9. repair_candidate_list
+10. repair_reopen_handoff
+11. handoff_dispatch
+12. handoff_progress action=receive
+13. handoff_progress action=claim
+14. handoff_progress action=start
+15. handoff_progress action=checkpoint
+16. handoff_progress action=complete
+17. handoff_get
+18. workflow_status
+
+创建参数请使用：
+workflow_kind=manual_openclaw_truth_plane_continuity_smoke
+sender=agent:main
+receiver=agent:planner
+task_kind=truth_plane_continuity_smoke
+intent=verify OpenClaw can reopen a completed clawside handoff and continue it to completed truth again
+
+第一次 handoff_dispatch 请将 handoff_id 设为 handoff_create 返回的 handoff_id，adapter=manual，target=agent:planner。
+第一次 handoff_progress 序列请使用 handoff_create 返回的 handoff_id，actor=agent:planner，并依次执行 receive、claim、start、checkpoint、complete。
+divergence_list 和 repair_candidate_list 请使用 handoff_create 返回的 handoff_id。
+repair_reopen_handoff 请使用同一个 handoff_id，reason 设为 `manual continuity smoke reopen completed handoff`，actor=agent:main。
+第二次 handoff_dispatch 请继续使用同一个 handoff_id，adapter=manual，target=agent:planner。
+第二次 handoff_progress 序列请继续使用同一个 handoff_id，actor=agent:planner，并依次执行 receive、claim、start、checkpoint、complete。
+handoff_get 请使用同一个 handoff_id。workflow_status 请使用 handoff_create 返回的 workflow_id。
+
+调用完成后，请输出 handoff_id、workflow_id、repair_id、repair action、reopened_state、post-reopen final handoff state、post-reopen final workflow status，以及 divergence_list / repair_candidate_list 是否返回 structuredContent。
+```
+
+```bash
+openclaw sessions export-trajectory --agent main --session-key 'quoted descriptive session key' --json
+
+./scripts/extract_openclaw_truth_plane_continuity_results.sh \
+  --events .openclaw/trajectory-exports/export-directory/events.jsonl \
+  --output /tmp/openclaw-truth-plane-continuity-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
+```
+
+预期结果摘要包含：
+
+```text
+openclaw_truth_plane_continuity_results: ok
+```
+
+本地提取命令示例：
+
+```bash
+./scripts/extract_openclaw_truth_plane_continuity_results.sh --events PATH --output /tmp/openclaw-truth-plane-continuity-results.json
+```
+
+本地 verifier 命令示例：
+
+```bash
+./scripts/verify_openclaw_mcp.sh --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
 ```
 
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
