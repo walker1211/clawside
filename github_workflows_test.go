@@ -75,14 +75,14 @@ func TestRootReadmeLanguageSwitch(t *testing.T) {
 	}
 }
 
-func TestLocalPlanningDocsAreNotTracked(t *testing.T) {
-	cmd := exec.Command("git", "ls-files", "docs/superpowers")
+func TestLocalDocsAreNotTracked(t *testing.T) {
+	cmd := exec.Command("git", "ls-files", "docs")
 	output, err := cmd.Output()
 	if err != nil {
-		t.Fatalf("git ls-files docs/superpowers failed: %v", err)
+		t.Fatalf("git ls-files docs failed: %v", err)
 	}
 	if strings.TrimSpace(string(output)) != "" {
-		t.Fatalf("expected docs/superpowers to be untracked local planning docs, got:\n%s", output)
+		t.Fatalf("expected docs to be untracked local docs, got:\n%s", output)
 	}
 }
 
@@ -97,9 +97,9 @@ func TestGitHubCIWorkflow(t *testing.T) {
 		"name: CI",
 		"push:",
 		"pull_request:",
-		"actions/checkout",
+		"actions/checkout@v6",
 		"fetch-depth: 0",
-		"actions/setup-go",
+		"actions/setup-go@v6",
 		"go-version-file: go.mod",
 		"scripts/secret-scan.sh",
 		"scripts/secret-scan.sh --history",
@@ -156,9 +156,9 @@ func TestGitHubReleaseWorkflow(t *testing.T) {
 		"release:",
 		"needs: preflight",
 		"needs: build",
-		"actions/checkout",
+		"actions/checkout@v6",
 		"fetch-depth: 0",
-		"actions/setup-go",
+		"actions/setup-go@v6",
 		"go-version-file: go.mod",
 		"scripts/secret-scan.sh",
 		"scripts/secret-scan.sh --history",
@@ -181,8 +181,8 @@ func TestGitHubReleaseWorkflow(t *testing.T) {
 		"README.en.md",
 		"configs/config.example.toml",
 		".example.env",
-		"actions/upload-artifact",
-		"actions/download-artifact",
+		"actions/upload-artifact@v7",
+		"actions/download-artifact@v8",
 		"sha256sum",
 		"softprops/action-gh-release",
 		"GITHUB_TOKEN",

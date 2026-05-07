@@ -47,6 +47,6 @@ worktrees/
 .claude/worktrees/
 
 # Local/private project assets
-docs/superpowers/
+docs/
 /private/
 /local/
