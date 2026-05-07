@@ -89,6 +89,53 @@ func TestRunWritesContinuitySummaryToStdout(t *testing.T) {
 	}
 }
 
+func TestRunAcceptsMCPPrefixedToolNameWithoutServerOrToolDetails(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	var lines []string
+	for _, line := range validContinuityEvents() {
+		lines = append(lines, mcpPrefixedToolNameOnlyEvent(t, line))
+	}
+	writeContinuityEvents(t, eventsPath, lines...)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v", err)
+	}
+	var payload extractedContinuityResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.TruthPlaneContinuity.HandoffID != "hf-123" || payload.TruthPlaneContinuity.WorkflowID != "wf-123" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestRunResetsExistingOutputFileModeTo0600(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	outputPath := filepath.Join(dir, "continuity.json")
+	writeValidContinuityEvents(t, eventsPath)
+	if err := os.WriteFile(outputPath, []byte("existing"), 0o644); err != nil {
+		t.Fatalf("write existing output: %v", err)
+	}
+	if err := os.Chmod(outputPath, 0o644); err != nil {
+		t.Fatalf("chmod existing output: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath, "--output", outputPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v", err)
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		t.Fatalf("stat output: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("output mode = %v, want 0600", info.Mode().Perm())
+	}
+}
+
 func TestRunRequiresEventsPath(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := run(nil, &stdout, &stderr)
@@ -392,6 +439,26 @@ func writeContinuityEvents(t *testing.T, path string, lines ...string) {
 
 func continuityToolResultEvent(tool string, structured string, isError bool) string {
 	return `{"type":"tool.result","data":{"message":{"toolName":"clawside__` + tool + `","details":{"mcpServer":"clawside","mcpTool":"` + tool + `","structuredContent":` + structured + `},"isError":` + boolJSON(isError) + `}}}`
+}
+
+func mcpPrefixedToolNameOnlyEvent(t *testing.T, line string) string {
+	t.Helper()
+	var event map[string]any
+	if err := json.Unmarshal([]byte(line), &event); err != nil {
+		t.Fatalf("unmarshal event: %v", err)
+	}
+	data := event["data"].(map[string]any)
+	message := data["message"].(map[string]any)
+	toolName := message["toolName"].(string)
+	message["toolName"] = strings.Replace(toolName, "clawside__", "mcp__clawside__", 1)
+	details := message["details"].(map[string]any)
+	details["mcpServer"] = ""
+	details["mcpTool"] = ""
+	out, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	return string(out)
 }
 
 func continuityCreateJSON() string {

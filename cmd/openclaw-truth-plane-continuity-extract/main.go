@@ -148,10 +148,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return fmt.Errorf("encode continuity summary: %w", err)
 	}
 	if *outputPath != "" {
-		return os.WriteFile(*outputPath, b.Bytes(), 0o600)
+		return writeOutputFile(*outputPath, b.Bytes())
 	}
 	_, err = stdout.Write(b.Bytes())
 	return err
+}
+
+func writeOutputFile(path string, data []byte) error {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func writeUsage(w io.Writer) error {
@@ -216,10 +223,13 @@ func normalizeClawsideToolName(server, mcpTool, toolName string) (string, bool) 
 		}
 		return strings.TrimPrefix(tool, clawsideMCPServerName+"__"), true
 	}
-	if !strings.HasPrefix(toolName, clawsideMCPServerName+"__") {
-		return "", false
+	if strings.HasPrefix(toolName, "mcp__"+clawsideMCPServerName+"__") {
+		return strings.TrimPrefix(toolName, "mcp__"+clawsideMCPServerName+"__"), true
 	}
-	return strings.TrimPrefix(toolName, clawsideMCPServerName+"__"), true
+	if strings.HasPrefix(toolName, clawsideMCPServerName+"__") {
+		return strings.TrimPrefix(toolName, clawsideMCPServerName+"__"), true
+	}
+	return "", false
 }
 
 func isContinuityTool(tool string) bool {
