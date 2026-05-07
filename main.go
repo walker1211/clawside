@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
+	"os"
 	"os/signal"
 	"path/filepath"
 	"syscall"
@@ -15,7 +17,23 @@ func defaultConfigPath() string {
 	return filepath.Join("configs", "config.toml")
 }
 
+func isHelpRequest(args []string) bool {
+	return len(args) == 2 && (args[1] == "help" || args[1] == "--help" || args[1] == "-h")
+}
+
+func printUsage() error {
+	_, err := fmt.Fprintf(os.Stdout, "usage: %s [help|--help|-h]\n\nStarts the clawside sender service using %s.\n", filepath.Base(os.Args[0]), defaultConfigPath())
+	return err
+}
+
 func main() {
+	if isHelpRequest(os.Args) {
+		if err := printUsage(); err != nil {
+			log.Fatalf("write help: %v", err)
+		}
+		return
+	}
+
 	cfg, err := LoadConfigFromTOML(defaultConfigPath())
 	if err != nil {
 		log.Fatalf("load config: %v", err)

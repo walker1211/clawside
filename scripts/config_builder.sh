@@ -5,16 +5,27 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUTPUT_PATH="$(pwd)/configs/config.toml"
 
 usage() {
-  printf 'usage: %s [--input PATH]\n' "$0" >&2
+  printf 'usage: %s [--input PATH]\n' "$0"
 }
 
 INPUT_PATH=""
 if [[ $# -eq 0 ]]; then
   :
+elif [[ $# -eq 1 ]]; then
+  case "$1" in
+    help|--help|-h)
+      usage
+      exit 0
+      ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
 elif [[ $# -eq 2 && "$1" == "--input" ]]; then
   INPUT_PATH="$2"
 else
-  usage
+  usage >&2
   exit 1
 fi
 
