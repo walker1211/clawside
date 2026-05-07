@@ -14,6 +14,7 @@ OPENCLAW_TRUTH_PLANE_PROGRESSION_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_MUTATION_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_REPAIR_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_REOPEN_RESULTS_PATH=""
+OPENCLAW_TRUTH_PLANE_CONTINUITY_RESULTS_PATH=""
 DELIVER_MAIN="false"
 CHAT_ID=""
 TEXT_VALUE="OpenClaw MCP smoke test"
@@ -50,6 +51,8 @@ usage() {
   printf '                             Read-only JSON file with OpenClaw truth-plane repair results to validate\n'
   printf '  --openclaw-truth-plane-reopen-results PATH\n'
   printf '                             Read-only JSON file with OpenClaw truth-plane reopen results to validate\n'
+  printf '  --openclaw-truth-plane-continuity-results PATH\n'
+  printf '                             Read-only JSON file with OpenClaw truth-plane continuity results to validate\n'
   printf '  --deliver-main             Perform real delivery through the main sender path\n'
   printf '  --chat-id ID               Chat ID used when delivery is enabled\n'
   printf '  --text TEXT                Smoke message text (default: OpenClaw MCP smoke test)\n'
@@ -160,6 +163,14 @@ while [[ $# -gt 0 ]]; do
       OPENCLAW_TRUTH_PLANE_REOPEN_RESULTS_PATH="$2"
       shift 2
       ;;
+    --openclaw-truth-plane-continuity-results)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      OPENCLAW_TRUTH_PLANE_CONTINUITY_RESULTS_PATH="$2"
+      shift 2
+      ;;
     --deliver-main)
       DELIVER_MAIN="true"
       shift
@@ -226,6 +237,9 @@ run_smoke() {
   fi
   if [[ -n "$OPENCLAW_TRUTH_PLANE_REOPEN_RESULTS_PATH" ]]; then
     set -- "$@" --openclaw-truth-plane-reopen-results "$OPENCLAW_TRUTH_PLANE_REOPEN_RESULTS_PATH"
+  fi
+  if [[ -n "$OPENCLAW_TRUTH_PLANE_CONTINUITY_RESULTS_PATH" ]]; then
+    set -- "$@" --openclaw-truth-plane-continuity-results "$OPENCLAW_TRUTH_PLANE_CONTINUITY_RESULTS_PATH"
   fi
   if [[ "$DELIVER_MAIN" == "true" ]]; then
     set -- "$@" --deliver-main
