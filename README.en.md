@@ -33,6 +33,7 @@ This version now productizes the minimal v1 into an installable, registerable, a
 - `cmd/openclaw-truth-plane-progression-extract/`: local read-only CLI for extracting completed handoff progression validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-mutation-extract/`: local read-only CLI for extracting watch / ownership mutation validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-repair-extract/`: local read-only CLI for extracting repair invalidate-event replay validation results from OpenClaw trajectory.
+- `cmd/openclaw-truth-plane-reopen-extract/`: local read-only CLI for extracting divergence/candidate/reopen handoff validation results from OpenClaw trajectory.
 - `cmd/a2a-delivery/`: A2A delivery bridge CLI.
 - `internal/configbuilder/`: extracts the minimal sender config from OpenClaw source config.
 - `internal/orchestrator/`: handoff, workflow, event, watch, repair, and adapter foundations.
@@ -107,6 +108,7 @@ Then fill in:
 ./scripts/extract_openclaw_truth_plane_progression_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_mutation_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_repair_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
+./scripts/extract_openclaw_truth_plane_reopen_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
 Notes:
@@ -122,6 +124,7 @@ Notes:
 - `./scripts/extract_openclaw_truth_plane_progression_results.sh`: extracts completed progression validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_mutation_results.sh`: extracts watch / ownership mutation validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_repair_results.sh`: extracts repair invalidate-event replay validation results from OpenClaw trajectory `events.jsonl`.
+- `./scripts/extract_openclaw_truth_plane_reopen_results.sh`: extracts divergence/candidate/reopen handoff validation results from OpenClaw trajectory `events.jsonl`.
 
 `./start.sh` / `./stop.sh` / `./restart.sh` only manage the pidfile they write. If you started `./scripts/start.sh` manually in the foreground, stop that process manually.
 
@@ -484,6 +487,77 @@ openclaw sessions export-trajectory --agent main --session-key '<session-key>' -
 
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json
+```
+
+### Stage 4 truth-plane divergence/candidate/reopen smoke validation
+
+To validate that OpenClaw really observes divergence, lists repair candidates, and reopens a completed handoff, ask the main agent to fully progress one handoff, then query divergence and candidates before reopening it:
+
+```text
+Please create one test handoff through the registered clawside MCP tools, dispatch it, progress it to completed according to the protocol, then query divergence and repair candidates, reopen that completed handoff, and query repair, final handoff truth, and workflow status.
+
+Call these tools in order:
+1. handoff_create
+2. handoff_dispatch
+3. handoff_progress action=receive
+4. handoff_progress action=claim
+5. handoff_progress action=start
+6. handoff_progress action=checkpoint
+7. handoff_progress action=complete
+8. divergence_list
+9. repair_candidate_list
+10. repair_reopen_handoff
+11. repair_list
+12. handoff_get
+13. workflow_status
+
+Use these creation parameters:
+workflow_kind=manual_openclaw_truth_plane_reopen_smoke
+sender=agent:main
+receiver=agent:planner
+task_kind=truth_plane_reopen_smoke
+intent=verify OpenClaw can list divergence and repair candidates, then reopen a clawside handoff
+
+Use these dispatch parameters:
+set handoff_id to the handoff_id returned by handoff_create
+adapter=manual
+target=agent:planner
+
+For every handoff_progress call, set handoff_id to the handoff_id returned by handoff_create, set actor=agent:planner, and run the actions in the order above.
+Call divergence_list, repair_candidate_list, repair_list, and handoff_get with the handoff_id returned by handoff_create.
+For repair_reopen_handoff, use handoff_id, reason, and actor: set handoff_id to the handoff_id returned by handoff_create, set reason to `manual repair smoke reopen completed handoff`, and set actor=agent:main.
+Call workflow_status with the workflow_id returned by handoff_create.
+
+After the calls complete, output handoff_id, workflow_id, divergence_id, candidate_id, reopened handoff_id, repair_id, final handoff state, and workflow status.
+```
+
+```bash
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_truth_plane_reopen_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-truth-plane-reopen-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json
+```
+
+Expected result summary includes:
+
+```text
+openclaw_truth_plane_reopen_results: ok
+```
+
+Local extraction command example:
+
+```bash
+./scripts/extract_openclaw_truth_plane_reopen_results.sh --events PATH --output /tmp/openclaw-truth-plane-reopen-results.json
+```
+
+Local verifier command example:
+
+```bash
+./scripts/verify_openclaw_mcp.sh --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json
 ```
 
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:

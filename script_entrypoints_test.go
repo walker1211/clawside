@@ -344,6 +344,24 @@ func TestReadmeDocumentsOpenClawTruthPlaneRepairValidation(t *testing.T) {
 	}
 }
 
+func TestReadmeDocumentsOpenClawTruthPlaneReopenValidation(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		content := readTextFile(t, path)
+		for _, want := range []string{
+			"cmd/openclaw-truth-plane-reopen-extract/",
+			"scripts/extract_openclaw_truth_plane_reopen_results.sh",
+			"repair_reopen_handoff",
+			"divergence_list",
+			"repair_candidate_list",
+			"--openclaw-truth-plane-reopen-results",
+		} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", path, want)
+			}
+		}
+	}
+}
+
 func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
 	path := "scripts/verify_openclaw_mcp.sh"
 	info, err := os.Stat(path)
