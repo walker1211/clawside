@@ -76,6 +76,136 @@ func TestStartMCPScriptPassesSenderAuthKeyViaEnv(t *testing.T) {
 	}
 }
 
+func TestSecretScanScriptEntrypoint(t *testing.T) {
+	path := "scripts/secret-scan.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, want := range []string{
+		"help|--help|-h",
+		"--history",
+		"git ls-files",
+		"git rev-parse --is-shallow-repository",
+		"git rev-list --objects --all",
+		"configs/config.toml",
+		".env",
+		"[redacted]",
+		"sender_auth_key",
+		"PRIVATE KEY",
+		"bot[0-9]",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") {
+		t.Fatalf("%s should avoid Bash arrays for Bash 3.2 with set -u", path)
+	}
+	if strings.Contains(content, "BASH_SOURCE") {
+		t.Fatalf("%s should use $0 instead of BASH_SOURCE for Bash 3.2 compatibility", path)
+	}
+}
+
+func TestCILocalScriptEntrypoint(t *testing.T) {
+	path := "scripts/ci-local.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, want := range []string{
+		"help|--help|-h",
+		"clean",
+		"mktemp -d",
+		"git ls-files",
+		"scripts/secret-scan.sh",
+		"scripts/secret-scan.sh --history",
+		"gofmt -l",
+		"go vet ./...",
+		"go test -count=1 ./...",
+		"./build.sh",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") || strings.Contains(content, "BASH_SOURCE") {
+		t.Fatalf("%s should avoid Bash arrays and BASH_SOURCE for Bash 3.2 with set -u", path)
+	}
+}
+
+func TestInstallHooksScriptEntrypoint(t *testing.T) {
+	path := "scripts/install-hooks.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, want := range []string{
+		"help|--help|-h",
+		"git rev-parse --git-path hooks/pre-push",
+		"CLAWSIDE_SKIP_PRE_PUSH_CI",
+		"scripts/ci-local.sh clean",
+		"cat > \"$HOOK_PATH\"",
+		"chmod +x \"$HOOK_PATH\"",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	if strings.Contains(content, "git config") {
+		t.Fatalf("%s must not update git config", path)
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") || strings.Contains(content, "BASH_SOURCE") {
+		t.Fatalf("%s should avoid Bash arrays and BASH_SOURCE for Bash 3.2 with set -u", path)
+	}
+}
+
+func TestTagReleaseScriptEntrypoint(t *testing.T) {
+	path := "scripts/tag-release.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, want := range []string{
+		"help|--help|-h",
+		"--push",
+		"git status --porcelain",
+		"v*)",
+		"git rev-parse -q --verify \"refs/tags/$TAG_NAME\"",
+		"git ls-remote --exit-code --tags origin \"refs/tags/$TAG_NAME\"",
+		"scripts/ci-local.sh clean",
+		"git tag \"$TAG_NAME\"",
+		"CLAWSIDE_SKIP_PRE_PUSH_CI=1 git push origin \"$TAG_NAME\"",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") || strings.Contains(content, "BASH_SOURCE") {
+		t.Fatalf("%s should avoid Bash arrays and BASH_SOURCE for Bash 3.2 with set -u", path)
+	}
+}
+
 func TestOpenClawToolResultsExtractScriptEntrypoint(t *testing.T) {
 	path := "scripts/extract_openclaw_tool_results.sh"
 	info, err := os.Stat(path)
@@ -463,6 +593,46 @@ func TestReadmeStage7DocumentsFixturesProfile(t *testing.T) {
 	}
 }
 
+func TestReadmeStage8DocumentsLocalReleaseGuard(t *testing.T) {
+	for _, tc := range []struct {
+		path          string
+		heading       string
+		commonHeading string
+	}{
+		{path: "README.zh-CN.md", heading: "### Stage 8 / 阶段 8 本地发布保护", commonHeading: "## 常用脚本"},
+		{path: "README.en.md", heading: "### Stage 8 local release guard", commonHeading: "## Common scripts"},
+	} {
+		commonScripts := readReadmeSection(t, tc.path, tc.commonHeading)
+		if !strings.Contains(commonScripts, "./scripts/tag-release.sh --help") {
+			t.Fatalf("expected %s common scripts section to contain %q", tc.path, "./scripts/tag-release.sh --help")
+		}
+
+		section := readReadmeSection(t, tc.path, tc.heading)
+		if strings.Contains(section, "## A2A delivery bridge CLI") {
+			t.Fatalf("expected %s Stage 8 section to stop before A2A delivery bridge CLI", tc.path)
+		}
+		wantTokens := []string{
+			"scripts/secret-scan.sh",
+			"scripts/ci-local.sh clean",
+			"scripts/install-hooks.sh",
+			"scripts/tag-release.sh",
+			"--push",
+			"GitHub Actions",
+			"release",
+		}
+		if tc.path == "README.zh-CN.md" {
+			wantTokens = append(wantTokens, "本地发布保护", "不会自动 push", "不会创建 GitHub Release")
+		} else {
+			wantTokens = append(wantTokens, "local release guard", "does not push automatically", "does not create GitHub Releases")
+		}
+		for _, want := range wantTokens {
+			if !strings.Contains(section, want) {
+				t.Fatalf("expected %s Stage 8 section to contain %q", tc.path, want)
+			}
+		}
+	}
+}
+
 func readReadmeSection(t *testing.T, path string, heading string) string {
 	t.Helper()
 	content := readTextFile(t, path)
@@ -471,10 +641,34 @@ func readReadmeSection(t *testing.T, path string, heading string) string {
 		t.Fatalf("expected %s to contain section %q", path, heading)
 	}
 	section := content[start:]
-	if next := strings.Index(section[len(heading):], "\n### "); next >= 0 {
-		section = section[:len(heading)+next]
+	currentLevel := markdownHeadingLevel(heading)
+	for offset := len(heading); offset < len(section); {
+		nextLine := strings.IndexByte(section[offset:], '\n')
+		if nextLine < 0 {
+			break
+		}
+		lineStart := offset + nextLine + 1
+		if lineStart >= len(section) {
+			break
+		}
+		level := markdownHeadingLevel(section[lineStart:])
+		if level > 0 && level <= currentLevel {
+			return section[:lineStart-1]
+		}
+		offset = lineStart
 	}
 	return section
+}
+
+func markdownHeadingLevel(line string) int {
+	level := 0
+	for level < len(line) && line[level] == '#' {
+		level++
+	}
+	if level == 0 || level >= len(line) || line[level] != ' ' {
+		return 0
+	}
+	return level
 }
 
 func TestReadmeDocumentsOpenClawTruthPlaneContinuityValidation(t *testing.T) {

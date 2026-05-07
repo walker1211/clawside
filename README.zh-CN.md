@@ -99,6 +99,10 @@ cp configs/config.example.toml configs/config.toml
 
 ```bash
 ./scripts/config_builder.sh
+./scripts/secret-scan.sh
+./scripts/ci-local.sh clean
+./scripts/install-hooks.sh
+./scripts/tag-release.sh --help
 ./build.sh
 ./start.sh
 ./stop.sh
@@ -116,6 +120,10 @@ cp configs/config.example.toml configs/config.toml
 说明：
 
 - `./build.sh`：构建根 sender 二进制 `./clawside`
+- `./scripts/secret-scan.sh`：扫描 tracked 文件和可选 git history 中的高风险 secret，输出会 redaction，不打印完整 secret
+- `./scripts/ci-local.sh clean`：从 tracked 文件构造临时干净目录，运行 secret scan、gofmt、vet、test 和 build
+- `./scripts/install-hooks.sh`：安装本仓库 `.git/hooks/pre-push`，push 前默认执行 clean 本地 CI
+- `./scripts/tag-release.sh --help`：查看本地 release tag 保护脚本用法；实际创建 tag 前请先阅读 Stage 8 本地发布保护说明
 - `./start.sh`：后台启动 sender 服务，写入 `logs/sender.pid` 和 `logs/sender.log`
 - `./stop.sh`：停止由 `./start.sh` 记录的 sender 进程
 - `./restart.sh`：依次执行 `./stop.sh` 和 `./start.sh`
@@ -708,6 +716,45 @@ testdata/openclaw-smoke/stage0-5/
 - `release`：在真实 evidence 基础上再显式开启 `--deliver-main` 和 `--chat-id`。
 
 真实投递仍然只通过 sender 后端完成，不直接调用 Telegram API。
+
+### Stage 8 / 阶段 8 本地发布保护
+
+Stage 8 增加本地 release guard，用于在打 tag 前重复执行同一组安全检查。它不是 GitHub Actions，也不会自动 push、不会创建 GitHub Release。
+
+本地 clean CI：
+
+```bash
+./scripts/ci-local.sh clean
+```
+
+`clean` 模式只从 `git ls-files` 的 tracked 文件构造临时目录，然后依次运行：
+
+1. `scripts/secret-scan.sh`
+2. `scripts/secret-scan.sh --history`
+3. `gofmt` 检查
+4. `go vet ./...`
+5. `go test -count=1 ./...`
+6. `./build.sh`
+
+安装 pre-push hook：
+
+```bash
+./scripts/install-hooks.sh
+```
+
+创建本地 release tag：
+
+```bash
+./scripts/tag-release.sh v0.1.0
+```
+
+`tag-release.sh` 要求工作树干净、tag 名以 `v` 开头、tag 不存在，并且会在创建 tag 前强制运行 `scripts/ci-local.sh clean`。默认只创建本地 tag；只有显式传入 `--push` 才会推送 tag：
+
+```bash
+./scripts/tag-release.sh v0.1.0 --push
+```
+
+`--push` 只表示推送 tag，不会创建 GitHub Release。Stage 8 不新增 GitHub Actions release workflow。
 
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
 

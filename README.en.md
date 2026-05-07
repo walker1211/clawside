@@ -99,6 +99,10 @@ Then fill in:
 
 ```bash
 ./scripts/config_builder.sh
+./scripts/secret-scan.sh
+./scripts/ci-local.sh clean
+./scripts/install-hooks.sh
+./scripts/tag-release.sh --help
 ./build.sh
 ./start.sh
 ./stop.sh
@@ -116,6 +120,10 @@ Then fill in:
 Notes:
 
 - `./build.sh`: builds the root sender binary at `./clawside`.
+- `./scripts/secret-scan.sh`: scans tracked files and optional git history for high-risk secrets, with redacted output that does not print full secrets.
+- `./scripts/ci-local.sh clean`: builds a temporary clean directory from tracked files, then runs secret scan, gofmt, vet, tests, and build.
+- `./scripts/install-hooks.sh`: installs this repository's `.git/hooks/pre-push`, which runs clean local CI before push by default.
+- `./scripts/tag-release.sh --help`: shows local release tag guard usage; read the Stage 8 local release guard notes before creating a tag.
 - `./start.sh`: starts the sender service in the background and writes `logs/sender.pid` plus `logs/sender.log`.
 - `./stop.sh`: stops the sender process recorded by `./start.sh`.
 - `./restart.sh`: runs `./stop.sh` and then `./start.sh`.
@@ -708,6 +716,45 @@ Release or full acceptance still uses:
 - `release`: start from real evidence and explicitly enable `--deliver-main` and `--chat-id`.
 
 Real delivery still goes through the sender backend only and never calls the Telegram API directly.
+
+### Stage 8 local release guard
+
+Stage 8 adds a local release guard for repeating the same safety checks before tagging. It is not GitHub Actions, does not push automatically, and does not create GitHub Releases.
+
+Run clean local CI:
+
+```bash
+./scripts/ci-local.sh clean
+```
+
+`clean` mode builds a temporary directory from `git ls-files` tracked files, then runs:
+
+1. `scripts/secret-scan.sh`
+2. `scripts/secret-scan.sh --history`
+3. `gofmt` check
+4. `go vet ./...`
+5. `go test -count=1 ./...`
+6. `./build.sh`
+
+Install the pre-push hook:
+
+```bash
+./scripts/install-hooks.sh
+```
+
+Create a local release tag:
+
+```bash
+./scripts/tag-release.sh v0.1.0
+```
+
+`tag-release.sh` requires a clean worktree, a tag name starting with `v`, a non-existing tag, and a passing `scripts/ci-local.sh clean` run before tag creation. By default it only creates a local tag. Pass `--push` explicitly to push the tag:
+
+```bash
+./scripts/tag-release.sh v0.1.0 --push
+```
+
+`--push` only pushes the tag; it does not create a GitHub Release. Stage 8 does not add a GitHub Actions release workflow.
 
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
 
