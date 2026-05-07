@@ -416,6 +416,30 @@ func TestReadmeStage5ContinuityPromptRequiresWorkflowCompletion(t *testing.T) {
 	}
 }
 
+func TestReadmeStage6DocumentsSmokeProfiles(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		section := readReadmeSection(t, path, "### Stage 6")
+		wantTokens := []string{
+			"--profile quick",
+			"--profile truth-plane-full",
+			"--profile release",
+			"--deliver-main",
+			"--chat-id",
+			"trajectory",
+		}
+		if path == "README.zh-CN.md" {
+			wantTokens = append(wantTokens, "sender 后端", "不直接调用 Telegram API")
+		} else {
+			wantTokens = append(wantTokens, "sender backend", "never calls the Telegram API directly")
+		}
+		for _, want := range wantTokens {
+			if !strings.Contains(section, want) {
+				t.Fatalf("expected %s Stage 6 section to contain %q", path, want)
+			}
+		}
+	}
+}
+
 func readReadmeSection(t *testing.T, path string, heading string) string {
 	t.Helper()
 	content := readTextFile(t, path)
@@ -620,5 +644,31 @@ func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
 				t.Fatalf("%s should not print SENDER_AUTH_KEY values", path)
 			}
 		}
+	}
+}
+
+func TestVerifyOpenClawMCPScriptSupportsProfiles(t *testing.T) {
+	path := "scripts/verify_openclaw_mcp.sh"
+	content := readTextFile(t, path)
+
+	for _, want := range []string{
+		"PROFILE=\"\"",
+		"--profile PROFILE",
+		"--profile)",
+		"PROFILE=\"$2\"",
+		"set -- \"$@\" --profile \"$PROFILE\"",
+		"validate_profile",
+		"run_release_readiness",
+		"gofmt -l",
+		"go -C \"$ROOT_DIR\" vet ./...",
+		"go -C \"$ROOT_DIR\" test -count=1 ./...",
+		"\"$ROOT_DIR/build.sh\"",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	if strings.Contains(content, "PROFILE_ARGS=()") || strings.Contains(content, "${PROFILE_ARGS[@]}") {
+		t.Fatalf("%s should avoid Bash arrays for Bash 3.2 with set -u", path)
 	}
 }

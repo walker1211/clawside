@@ -156,4 +156,3 @@ func (w *Worker) claimLeaseDuration() time.Duration {
 	}
 	return d
 }
-

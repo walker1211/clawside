@@ -206,6 +206,160 @@ func TestCheckRunSmokeReportContract(t *testing.T) {
 	}
 }
 
+func TestRunSmokeQuickProfileReportsProfileAndAllowsSkippedEvidence(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+
+	report, err := RunSmoke(context.Background(), Options{
+		Profile:    profileQuick,
+		ConfigPath: configPath,
+		DBPath:     filepath.Join(dir, "sender.db"),
+	})
+	if err != nil {
+		t.Fatalf("run smoke: %v", err)
+	}
+
+	if report.Profile != profileQuick {
+		t.Fatalf("expected profile %q, got %q", profileQuick, report.Profile)
+	}
+	if report.Status != reportStatusOK {
+		t.Fatalf("expected report ok, got %+v", report)
+	}
+	assertCheck(t, report, "openclaw_tool_results", checkStatusSkipped)
+	assertCheck(t, report, "openclaw_truth_plane_continuity_results", checkStatusSkipped)
+	assertCheck(t, report, "a2a_main_delivery", checkStatusSkipped)
+}
+
+func TestRunSmokeQuickProfileRejectsDeliverMain(t *testing.T) {
+	_, err := RunSmoke(context.Background(), Options{Profile: profileQuick, DeliverMain: true, ChatID: 1})
+	if err == nil {
+		t.Fatalf("expected quick profile deliver-main error")
+	}
+	if err.Error() != "profile quick does not support --deliver-main; use --profile release" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunSmokeTruthPlaneFullProfileRequiresAllResultPaths(t *testing.T) {
+	_, err := RunSmoke(context.Background(), Options{Profile: profileTruthPlaneFull})
+	if err == nil {
+		t.Fatalf("expected missing result path error")
+	}
+	if err.Error() != "profile truth-plane-full requires --openclaw-tool-results" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunSmokeTruthPlaneFullProfileAcceptsAllResultPaths(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+	opts := validProfileEvidenceOptions(t)
+	opts.Profile = profileTruthPlaneFull
+	opts.ConfigPath = configPath
+	opts.DBPath = filepath.Join(dir, "sender.db")
+
+	report, err := RunSmoke(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("run smoke: %v", err)
+	}
+
+	if report.Profile != profileTruthPlaneFull {
+		t.Fatalf("expected profile %q, got %q", profileTruthPlaneFull, report.Profile)
+	}
+	assertCheck(t, report, "openclaw_tool_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_progression_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_mutation_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_repair_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_reopen_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_continuity_results", checkStatusOK)
+	assertCheck(t, report, "a2a_main_delivery", checkStatusSkipped)
+}
+
+func TestRunSmokeReleaseProfileRequiresDelivery(t *testing.T) {
+	opts := validProfileEvidenceOptions(t)
+	opts.Profile = profileRelease
+
+	_, err := RunSmoke(context.Background(), opts)
+	if err == nil {
+		t.Fatalf("expected missing deliver-main error")
+	}
+	if err.Error() != "profile release requires --deliver-main" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	opts.DeliverMain = true
+	_, err = RunSmoke(context.Background(), opts)
+	if err == nil {
+		t.Fatalf("expected missing chat-id error")
+	}
+	if err.Error() != "profile release requires --chat-id" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunSmokeRejectsUnknownProfile(t *testing.T) {
+	_, err := RunSmoke(context.Background(), Options{Profile: "nightly"})
+	if err == nil {
+		t.Fatalf("expected unknown profile error")
+	}
+	if err.Error() != "unsupported profile nightly; supported profiles: quick, truth-plane-full, release" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunSmokeNoProfilePreservesSkippedEvidenceChecks(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+
+	report, err := RunSmoke(context.Background(), Options{
+		ConfigPath: configPath,
+		DBPath:     filepath.Join(dir, "sender.db"),
+	})
+	if err != nil {
+		t.Fatalf("run smoke: %v", err)
+	}
+
+	if report.Profile != "" {
+		t.Fatalf("expected empty profile, got %q", report.Profile)
+	}
+	assertCheck(t, report, "openclaw_tool_results", checkStatusSkipped)
+	assertCheck(t, report, "openclaw_truth_plane_results", checkStatusSkipped)
+	assertCheck(t, report, "openclaw_truth_plane_progression_results", checkStatusSkipped)
+	assertCheck(t, report, "openclaw_truth_plane_mutation_results", checkStatusSkipped)
+	assertCheck(t, report, "openclaw_truth_plane_repair_results", checkStatusSkipped)
+	assertCheck(t, report, "openclaw_truth_plane_reopen_results", checkStatusSkipped)
+	assertCheck(t, report, "openclaw_truth_plane_continuity_results", checkStatusSkipped)
+}
+
+func validProfileEvidenceOptions(t *testing.T) Options {
+	t.Helper()
+	dir := t.TempDir()
+
+	toolResultsPath := filepath.Join(dir, "tool-results.json")
+	writeOpenClawToolResultsTestJSON(t, toolResultsPath, validOpenClawToolResultsValueForTest(
+		map[string]any{"status": "ok"},
+		map[string]any{"status": "ok"},
+		validOpenClawStatsResultForTest(),
+	))
+
+	truthPlaneResultsPath := filepath.Join(dir, "truth-plane-results.json")
+	writeOpenClawTruthPlaneResultsTestJSON(t, truthPlaneResultsPath, validOpenClawTruthPlaneResultsValueForTest())
+
+	progressionResultsPath := filepath.Join(dir, "progression-results.json")
+	writeOpenClawTruthPlaneProgressionResultsTestJSON(t, progressionResultsPath, validOpenClawTruthPlaneProgressionResultsValueForTest())
+
+	return Options{
+		OpenClawToolResultsPath:                  toolResultsPath,
+		OpenClawTruthPlaneResultsPath:            truthPlaneResultsPath,
+		OpenClawTruthPlaneProgressionResultsPath: progressionResultsPath,
+		OpenClawTruthPlaneMutationResultsPath:    writeMutationResultJSON(t, validMutationResultJSON()),
+		OpenClawTruthPlaneRepairResultsPath:      writeRepairResultJSON(t, validRepairResultJSON()),
+		OpenClawTruthPlaneReopenResultsPath:      writeReopenResultJSON(t, validReopenResultJSON()),
+		OpenClawTruthPlaneContinuityResultsPath:  writeContinuityResultJSON(t, validContinuityResultJSON()),
+	}
+}
+
 func TestCheckA2AMainDeliveryRedactsLastErrorInReportAndDetail(t *testing.T) {
 	const secret = "super-secret-sender-key"
 	const telegramToken = "bot123456:SECRET_TOKEN"
@@ -268,6 +422,31 @@ func TestRunSmokeRegistrationKeepsCustomMCPArgs(t *testing.T) {
 	customArgs[0] = "mutated"
 	if report.Registration.Args[0] != "run" {
 		t.Fatalf("expected registration args to be copied, got %+v", report.Registration.Args)
+	}
+}
+
+func TestRunReleaseProfileRequiresProfileSpecificChatIDError(t *testing.T) {
+	opts := validProfileEvidenceOptions(t)
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{
+		"--profile", profileRelease,
+		"--openclaw-tool-results", opts.OpenClawToolResultsPath,
+		"--openclaw-truth-plane-results", opts.OpenClawTruthPlaneResultsPath,
+		"--openclaw-truth-plane-progression-results", opts.OpenClawTruthPlaneProgressionResultsPath,
+		"--openclaw-truth-plane-mutation-results", opts.OpenClawTruthPlaneMutationResultsPath,
+		"--openclaw-truth-plane-repair-results", opts.OpenClawTruthPlaneRepairResultsPath,
+		"--openclaw-truth-plane-reopen-results", opts.OpenClawTruthPlaneReopenResultsPath,
+		"--openclaw-truth-plane-continuity-results", opts.OpenClawTruthPlaneContinuityResultsPath,
+		"--deliver-main",
+	}, stdout, stderr)
+
+	if err == nil {
+		t.Fatalf("expected missing chat-id error")
+	}
+	if err.Error() != "profile release requires --chat-id" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

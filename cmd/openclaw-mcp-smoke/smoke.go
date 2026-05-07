@@ -24,9 +24,14 @@ const (
 
 	reportStatusOK     = "ok"
 	reportStatusFailed = "failed"
+
+	profileQuick          = "quick"
+	profileTruthPlaneFull = "truth-plane-full"
+	profileRelease        = "release"
 )
 
 type Options struct {
+	Profile                                  string
 	ConfigPath                               string
 	DBPath                                   string
 	SenderBaseURL                            string
@@ -75,6 +80,7 @@ var expectedV1Tools = []string{
 
 type Report struct {
 	Status                    string                           `json:"status"`
+	Profile                   string                           `json:"profile,omitempty"`
 	Checks                    []CheckResult                    `json:"checks"`
 	Tools                     []string                         `json:"tools"`
 	DeliveryResult            *a2adelivery.DeliveryResult      `json:"delivery_result,omitempty"`
@@ -102,9 +108,82 @@ type RegistrationGuidance struct {
 	Note    string            `json:"note"`
 }
 
+type requiredProfilePath struct {
+	flagName string
+	value    string
+}
+
+func normalizedProfile(profile string) (string, error) {
+	profile = strings.TrimSpace(profile)
+	switch profile {
+	case "", profileQuick, profileTruthPlaneFull, profileRelease:
+		return profile, nil
+	default:
+		return "", fmt.Errorf("unsupported profile %s; supported profiles: quick, truth-plane-full, release", profile)
+	}
+}
+
+func validateProfileOptions(opts Options) error {
+	switch opts.Profile {
+	case "":
+		return nil
+	case profileQuick:
+		if opts.DeliverMain {
+			return errors.New("profile quick does not support --deliver-main; use --profile release")
+		}
+		return nil
+	case profileTruthPlaneFull:
+		return requireTruthPlaneFullEvidence(opts)
+	case profileRelease:
+		if err := requireTruthPlaneFullEvidence(opts); err != nil {
+			return err
+		}
+		if !opts.DeliverMain {
+			return errors.New("profile release requires --deliver-main")
+		}
+		if opts.ChatID <= 0 {
+			return errors.New("profile release requires --chat-id")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unsupported profile %s; supported profiles: quick, truth-plane-full, release", opts.Profile)
+	}
+}
+
+func requireTruthPlaneFullEvidence(opts Options) error {
+	for _, required := range truthPlaneFullEvidencePaths(opts) {
+		if strings.TrimSpace(required.value) == "" {
+			return fmt.Errorf("profile truth-plane-full requires --%s", required.flagName)
+		}
+	}
+	return nil
+}
+
+func truthPlaneFullEvidencePaths(opts Options) []requiredProfilePath {
+	return []requiredProfilePath{
+		{flagName: "openclaw-tool-results", value: opts.OpenClawToolResultsPath},
+		{flagName: "openclaw-truth-plane-results", value: opts.OpenClawTruthPlaneResultsPath},
+		{flagName: "openclaw-truth-plane-progression-results", value: opts.OpenClawTruthPlaneProgressionResultsPath},
+		{flagName: "openclaw-truth-plane-mutation-results", value: opts.OpenClawTruthPlaneMutationResultsPath},
+		{flagName: "openclaw-truth-plane-repair-results", value: opts.OpenClawTruthPlaneRepairResultsPath},
+		{flagName: "openclaw-truth-plane-reopen-results", value: opts.OpenClawTruthPlaneReopenResultsPath},
+		{flagName: "openclaw-truth-plane-continuity-results", value: opts.OpenClawTruthPlaneContinuityResultsPath},
+	}
+}
+
 func RunSmoke(ctx context.Context, opts Options) (Report, error) {
+	profile, err := normalizedProfile(opts.Profile)
+	if err != nil {
+		return Report{}, err
+	}
+	opts.Profile = profile
+	if err := validateProfileOptions(opts); err != nil {
+		return Report{}, err
+	}
+
 	report := Report{
 		Status:       reportStatusOK,
+		Profile:      profile,
 		Tools:        []string{},
 		Registration: buildRegistrationGuidanceForOptions(opts),
 	}

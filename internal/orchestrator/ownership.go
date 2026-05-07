@@ -3,16 +3,16 @@ package orchestrator
 import "time"
 
 type OwnershipBinding struct {
-	HandoffID        string     `json:"handoff_id"`
-	CurrentOwner     ActorRef   `json:"current_owner"`
-	LeaseHolder      ActorRef   `json:"lease_holder"`
-	ReviewerActor    ActorRef   `json:"reviewer_actor"`
-	EscalationOwner  ActorRef   `json:"escalation_owner"`
-	FallbackOwner    ActorRef   `json:"fallback_owner"`
-	LeasedAt         *time.Time `json:"leased_at,omitempty"`
-	LeaseExpiresAt   *time.Time `json:"lease_expires_at,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	HandoffID       string     `json:"handoff_id"`
+	CurrentOwner    ActorRef   `json:"current_owner"`
+	LeaseHolder     ActorRef   `json:"lease_holder"`
+	ReviewerActor   ActorRef   `json:"reviewer_actor"`
+	EscalationOwner ActorRef   `json:"escalation_owner"`
+	FallbackOwner   ActorRef   `json:"fallback_owner"`
+	LeasedAt        *time.Time `json:"leased_at,omitempty"`
+	LeaseExpiresAt  *time.Time `json:"lease_expires_at,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
 }
 
 func OwnershipBindingFromHandoff(h Handoff) OwnershipBinding {

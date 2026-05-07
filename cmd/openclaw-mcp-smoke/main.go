@@ -33,6 +33,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var jsonOnly bool
 	fs := flag.NewFlagSet("openclaw-mcp-smoke", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	fs.StringVar(&defaults.Profile, "profile", defaults.Profile, "smoke profile: quick, truth-plane-full, release")
 	fs.StringVar(&defaults.ConfigPath, "config", defaults.ConfigPath, "path to clawside config TOML")
 	fs.StringVar(&defaults.DBPath, "db", defaults.DBPath, "path to sender SQLite database")
 	fs.StringVar(&defaults.SenderBaseURL, "sender-base-url", defaults.SenderBaseURL, "sender service base URL")
@@ -60,7 +61,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if len(mcpArgs) > 0 {
 		defaults.MCPArgs = []string(mcpArgs)
 	}
-	if defaults.DeliverMain && defaults.ChatID <= 0 {
+	profile, err := normalizedProfile(defaults.Profile)
+	if err != nil {
+		return err
+	}
+	defaults.Profile = profile
+	if defaults.DeliverMain && defaults.ChatID <= 0 && defaults.Profile != profileRelease {
 		return errors.New("chat-id is required when --deliver-main is set")
 	}
 

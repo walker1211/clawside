@@ -15,6 +15,7 @@ OPENCLAW_TRUTH_PLANE_MUTATION_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_REPAIR_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_REOPEN_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_CONTINUITY_RESULTS_PATH=""
+PROFILE=""
 DELIVER_MAIN="false"
 CHAT_ID=""
 TEXT_VALUE="OpenClaw MCP smoke test"
@@ -31,6 +32,7 @@ usage() {
   printf '  SENDER_AUTH_KEY   Sender auth key forwarded to the smoke verifier when set\n'
   printf '\n'
   printf 'Options:\n'
+  printf '  --profile PROFILE          Smoke profile: quick, truth-plane-full, release\n'
   printf '  --config PATH              Config path (default: ROOT_DIR/configs/config.toml)\n'
   printf '  --db PATH                  Sender DB path (default: ROOT_DIR/sender.db)\n'
   printf '  --sender-base-url URL      Sender service URL\n'
@@ -71,6 +73,14 @@ fi
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --profile)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      PROFILE="$2"
+      shift 2
+      ;;
     --config)
       if [[ $# -lt 2 ]]; then
         usage >&2
@@ -206,6 +216,33 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
+validate_profile() {
+  case "$PROFILE" in
+    ""|quick|truth-plane-full|release)
+      ;;
+    *)
+      printf 'unsupported profile %s; supported profiles: quick, truth-plane-full, release\n' "$PROFILE" >&2
+      exit 1
+      ;;
+  esac
+}
+
+run_release_readiness() {
+  if [[ "$PROFILE" != "release" ]]; then
+    return 0
+  fi
+
+  printf 'Running release readiness checks...\n'
+  UNFORMATTED="$(gofmt -l $(git -C "$ROOT_DIR" ls-files '*.go'))"
+  if [[ -n "$UNFORMATTED" ]]; then
+    printf 'gofmt check failed:\n%s\n' "$UNFORMATTED" >&2
+    return 1
+  fi
+  go -C "$ROOT_DIR" vet ./...
+  go -C "$ROOT_DIR" test -count=1 ./...
+  "$ROOT_DIR/build.sh"
+}
+
 run_smoke() {
   set -- go run -C "$ROOT_DIR" ./cmd/openclaw-mcp-smoke \
     --config "$CONFIG_PATH" \
@@ -213,6 +250,10 @@ run_smoke() {
     --sender-base-url "$SENDER_BASE_URL_VALUE" \
     --mcp-command "$MCP_COMMAND" \
     --text "$TEXT_VALUE"
+
+  if [[ -n "$PROFILE" ]]; then
+    set -- "$@" --profile "$PROFILE"
+  fi
 
   if [[ -n "$REGISTRATION_CONFIG_PATH" ]]; then
     set -- "$@" --registration-config "$REGISTRATION_CONFIG_PATH"
@@ -254,4 +295,6 @@ run_smoke() {
   "$@"
 }
 
+validate_profile
+run_release_readiness
 run_smoke

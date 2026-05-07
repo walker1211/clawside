@@ -640,6 +640,50 @@ Local verifier command example:
 ./scripts/verify_openclaw_mcp.sh --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
 ```
 
+### Stage 6 smoke profile validation
+
+Stage 6 groups the Stage 0-5 validation paths into explicit profiles so operators do not need to remember a long argument list for each run.
+
+Quick local health check:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --profile quick
+```
+
+Full truth-plane evidence gate:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --profile truth-plane-full \
+  --openclaw-tool-results /tmp/openclaw-tool-results.json \
+  --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json \
+  --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json \
+  --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
+  --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
+  --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
+```
+
+`truth-plane-full` requires every Stage 0-5 OpenClaw trajectory extractor JSON path explicitly. Missing evidence fails the run instead of being treated as skipped.
+
+Pre-release local gate:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --profile release \
+  --openclaw-tool-results /tmp/openclaw-tool-results.json \
+  --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json \
+  --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json \
+  --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
+  --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
+  --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json \
+  --deliver-main \
+  --chat-id <telegram_chat_id>
+```
+
+`release` runs local Go readiness checks before the full OpenClaw MCP smoke check. Real delivery still goes through the sender backend only and never calls the Telegram API directly.
+
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
 
 ```bash

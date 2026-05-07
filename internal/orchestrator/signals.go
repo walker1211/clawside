@@ -5,14 +5,14 @@ import "time"
 type ObservedSignalKind string
 
 const (
-	ObservedSignalTransportAccepted         ObservedSignalKind = "transport_accepted"
-	ObservedSignalTransportRejected         ObservedSignalKind = "transport_rejected"
-	ObservedSignalTransportTimeout          ObservedSignalKind = "transport_timeout"
+	ObservedSignalTransportAccepted          ObservedSignalKind = "transport_accepted"
+	ObservedSignalTransportRejected          ObservedSignalKind = "transport_rejected"
+	ObservedSignalTransportTimeout           ObservedSignalKind = "transport_timeout"
 	ObservedSignalTransportDeliveryConfirmed ObservedSignalKind = "transport_delivery_confirmed"
-	ObservedSignalReminderSent              ObservedSignalKind = "reminder_sent"
-	ObservedSignalWatchTriggered            ObservedSignalKind = "watch_triggered"
-	ObservedSignalEscalationOpened          ObservedSignalKind = "escalation_opened"
-	ObservedSignalEscalationResolved        ObservedSignalKind = "escalation_resolved"
+	ObservedSignalReminderSent               ObservedSignalKind = "reminder_sent"
+	ObservedSignalWatchTriggered             ObservedSignalKind = "watch_triggered"
+	ObservedSignalEscalationOpened           ObservedSignalKind = "escalation_opened"
+	ObservedSignalEscalationResolved         ObservedSignalKind = "escalation_resolved"
 )
 
 type RepairCandidateReason string
@@ -26,10 +26,10 @@ const (
 type RepairSuggestedAction string
 
 const (
-	RepairSuggestedActionReview              RepairSuggestedAction = "review"
-	RepairSuggestedActionBackfillEvent       RepairSuggestedAction = "backfill_event"
-	RepairSuggestedActionRequestRevision     RepairSuggestedAction = "request_revision"
-	RepairSuggestedActionEscalate            RepairSuggestedAction = "escalate"
+	RepairSuggestedActionReview          RepairSuggestedAction = "review"
+	RepairSuggestedActionBackfillEvent   RepairSuggestedAction = "backfill_event"
+	RepairSuggestedActionRequestRevision RepairSuggestedAction = "request_revision"
+	RepairSuggestedActionEscalate        RepairSuggestedAction = "escalate"
 )
 
 type RepairCandidateStatus string
@@ -40,15 +40,15 @@ const (
 )
 
 type ObservedSignal struct {
-	ID          string             `json:"id"`
-	HandoffID   string             `json:"handoff_id"`
-	WorkflowID  string             `json:"workflow_id"`
-	Kind        ObservedSignalKind `json:"kind"`
-	Reason      string             `json:"reason,omitempty"`
-	EventID     string             `json:"event_id,omitempty"`
-	AttemptID   string             `json:"attempt_id,omitempty"`
-	Details     map[string]any     `json:"details,omitempty"`
-	ObservedAt  time.Time          `json:"observed_at"`
+	ID         string             `json:"id"`
+	HandoffID  string             `json:"handoff_id"`
+	WorkflowID string             `json:"workflow_id"`
+	Kind       ObservedSignalKind `json:"kind"`
+	Reason     string             `json:"reason,omitempty"`
+	EventID    string             `json:"event_id,omitempty"`
+	AttemptID  string             `json:"attempt_id,omitempty"`
+	Details    map[string]any     `json:"details,omitempty"`
+	ObservedAt time.Time          `json:"observed_at"`
 }
 
 type RepairCandidate struct {

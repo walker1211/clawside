@@ -164,10 +164,10 @@ type DispatchAttempt struct {
 type TransportStatus string
 
 const (
-	TransportRequested        TransportStatus = "requested"
-	TransportAccepted         TransportStatus = "accepted"
-	TransportRejected         TransportStatus = "rejected"
-	TransportTimeout          TransportStatus = "timeout"
+	TransportRequested         TransportStatus = "requested"
+	TransportAccepted          TransportStatus = "accepted"
+	TransportRejected          TransportStatus = "rejected"
+	TransportTimeout           TransportStatus = "timeout"
 	TransportDeliveryConfirmed TransportStatus = "delivery_confirmed"
 )
 

@@ -592,11 +592,11 @@ func TestWorkerFailsTransportErrorsWithoutRetry(t *testing.T) {
 
 func TestWorkerIgnoresSettlementStateConflict(t *testing.T) {
 	cases := []struct {
-		name               string
-		setup              func(t *testing.T, ctx context.Context, store *Store, jobID int64)
-		transport          roundTripFunc
-		expectLastSuccess  bool
-		expectLastFailure  bool
+		name              string
+		setup             func(t *testing.T, ctx context.Context, store *Store, jobID int64)
+		transport         roundTripFunc
+		expectLastSuccess bool
+		expectLastFailure bool
 	}{
 		{
 			name: "sent conflict does not fail processing",

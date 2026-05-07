@@ -640,6 +640,50 @@ openclaw_truth_plane_continuity_results: ok
 ./scripts/verify_openclaw_mcp.sh --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
 ```
 
+### Stage 6 / 阶段 6 smoke profile 验收
+
+Stage 6 将前面 Stage 0-5 的验收入口收敛成明确的 profile，避免每次手工记住一长串参数。
+
+快速本地健康检查：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --profile quick
+```
+
+完整 truth-plane evidence gate：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --profile truth-plane-full \
+  --openclaw-tool-results /tmp/openclaw-tool-results.json \
+  --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json \
+  --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json \
+  --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
+  --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
+  --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
+```
+
+`truth-plane-full` 要求所有 Stage 0-5 的 OpenClaw trajectory extractor JSON 都显式传入；缺少任一项都会失败，不再把缺失 evidence 当成 skipped。
+
+发布前本地 gate：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --profile release \
+  --openclaw-tool-results /tmp/openclaw-tool-results.json \
+  --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json \
+  --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json \
+  --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
+  --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
+  --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json \
+  --deliver-main \
+  --chat-id <telegram_chat_id>
+```
+
+`release` 会先执行本地 Go readiness 检查，再执行完整 OpenClaw MCP smoke；真实投递仍然只通过 sender 后端完成，不直接调用 Telegram API。
+
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
 
 ```bash
