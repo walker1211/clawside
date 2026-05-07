@@ -47,6 +47,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&defaults.OpenClawTruthPlaneProgressionResultsPath, "openclaw-truth-plane-progression-results", defaults.OpenClawTruthPlaneProgressionResultsPath, "read-only JSON file containing OpenClaw truth-plane progression results to validate")
 	fs.StringVar(&defaults.OpenClawTruthPlaneMutationResultsPath, "openclaw-truth-plane-mutation-results", defaults.OpenClawTruthPlaneMutationResultsPath, "read-only JSON file containing OpenClaw truth-plane mutation results to validate")
 	fs.StringVar(&defaults.OpenClawTruthPlaneRepairResultsPath, "openclaw-truth-plane-repair-results", defaults.OpenClawTruthPlaneRepairResultsPath, "read-only JSON file containing OpenClaw truth-plane repair results to validate")
+	fs.StringVar(&defaults.OpenClawTruthPlaneReopenResultsPath, "openclaw-truth-plane-reopen-results", defaults.OpenClawTruthPlaneReopenResultsPath, "read-only JSON file containing OpenClaw truth-plane reopen results to validate")
 	fs.BoolVar(&defaults.DeliverMain, "deliver-main", false, "attempt a main bot delivery smoke check")
 	fs.Int64Var(&defaults.ChatID, "chat-id", 0, "Telegram chat ID for --deliver-main")
 	fs.StringVar(&defaults.Text, "text", "OpenClaw MCP smoke test", "text to send for --deliver-main")

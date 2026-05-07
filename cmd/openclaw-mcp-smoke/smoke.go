@@ -42,6 +42,7 @@ type Options struct {
 	OpenClawTruthPlaneProgressionResultsPath string
 	OpenClawTruthPlaneMutationResultsPath    string
 	OpenClawTruthPlaneRepairResultsPath      string
+	OpenClawTruthPlaneReopenResultsPath      string
 	ChatID                                   int64
 	Text                                     string
 }
@@ -141,6 +142,7 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	report.addCheck(checkOpenClawTruthPlaneProgressionResults(opts))
 	report.addCheck(checkOpenClawTruthPlaneMutationResults(opts))
 	report.addCheck(checkOpenClawTruthPlaneRepairResults(opts))
+	report.addCheck(checkOpenClawTruthPlaneReopenResults(opts))
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
 	} else {
