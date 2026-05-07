@@ -1,0 +1,13 @@
+{
+  "truth_plane": {
+    "handoff_id": "hf_019dfd8e-1512-755f-89f7-51efca42dac7",
+    "workflow_id": "wf_019dfd8e-1512-754f-a101-3acf50747032",
+    "tools": [
+      "handoff_create",
+      "handoff_get",
+      "workflow_status",
+      "watch_list",
+      "ownership_get"
+    ]
+  }
+}

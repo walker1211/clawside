@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -27,7 +28,11 @@ const (
 
 	profileQuick          = "quick"
 	profileTruthPlaneFull = "truth-plane-full"
+	profileFixtures       = "fixtures"
 	profileRelease        = "release"
+
+	supportedProfileValues = "quick, truth-plane-full, fixtures, release"
+	defaultFixtureDir      = "testdata/openclaw-smoke/stage0-5"
 )
 
 type Options struct {
@@ -42,6 +47,7 @@ type Options struct {
 	SkipRegistrationCheck                    bool
 	DeliverMain                              bool
 	IncludeOpenClawToolCallChecklist         bool
+	OpenClawFixtureDir                       string
 	OpenClawToolResultsPath                  string
 	OpenClawTruthPlaneResultsPath            string
 	OpenClawTruthPlaneProgressionResultsPath string
@@ -116,11 +122,33 @@ type requiredProfilePath struct {
 func normalizedProfile(profile string) (string, error) {
 	profile = strings.TrimSpace(profile)
 	switch profile {
-	case "", profileQuick, profileTruthPlaneFull, profileRelease:
+	case "", profileQuick, profileTruthPlaneFull, profileFixtures, profileRelease:
 		return profile, nil
 	default:
-		return "", fmt.Errorf("unsupported profile %s; supported profiles: quick, truth-plane-full, release", profile)
+		return "", fmt.Errorf("unsupported profile %s; supported profiles: %s", profile, supportedProfileValues)
 	}
+}
+
+func applyProfileDefaults(opts Options) Options {
+	if opts.Profile != profileFixtures {
+		return opts
+	}
+	return applyFixturesProfileDefaults(opts)
+}
+
+func applyFixturesProfileDefaults(opts Options) Options {
+	fixtureDir := strings.TrimSpace(opts.OpenClawFixtureDir)
+	if fixtureDir == "" {
+		fixtureDir = defaultFixtureDir
+	}
+	opts.OpenClawToolResultsPath = filepath.Join(fixtureDir, "tool-results.json")
+	opts.OpenClawTruthPlaneResultsPath = filepath.Join(fixtureDir, "truth-plane-results.json")
+	opts.OpenClawTruthPlaneProgressionResultsPath = filepath.Join(fixtureDir, "progression-results.json")
+	opts.OpenClawTruthPlaneMutationResultsPath = filepath.Join(fixtureDir, "mutation-results.json")
+	opts.OpenClawTruthPlaneRepairResultsPath = filepath.Join(fixtureDir, "repair-results.json")
+	opts.OpenClawTruthPlaneReopenResultsPath = filepath.Join(fixtureDir, "reopen-results.json")
+	opts.OpenClawTruthPlaneContinuityResultsPath = filepath.Join(fixtureDir, "continuity-results.json")
+	return opts
 }
 
 func validateProfileOptions(opts Options) error {
@@ -133,6 +161,17 @@ func validateProfileOptions(opts Options) error {
 		}
 		return nil
 	case profileTruthPlaneFull:
+		if err := requireTruthPlaneFullEvidence(opts); err != nil {
+			return err
+		}
+		if opts.DeliverMain && opts.ChatID <= 0 {
+			return errors.New("chat-id is required when --deliver-main is set")
+		}
+		return nil
+	case profileFixtures:
+		if opts.DeliverMain {
+			return errors.New("profile fixtures does not support --deliver-main; use --profile release")
+		}
 		return requireTruthPlaneFullEvidence(opts)
 	case profileRelease:
 		if err := requireTruthPlaneFullEvidence(opts); err != nil {
@@ -146,7 +185,7 @@ func validateProfileOptions(opts Options) error {
 		}
 		return nil
 	default:
-		return fmt.Errorf("unsupported profile %s; supported profiles: quick, truth-plane-full, release", opts.Profile)
+		return fmt.Errorf("unsupported profile %s; supported profiles: %s", opts.Profile, supportedProfileValues)
 	}
 }
 
@@ -177,6 +216,7 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 		return Report{}, err
 	}
 	opts.Profile = profile
+	opts = applyProfileDefaults(opts)
 	if err := validateProfileOptions(opts); err != nil {
 		return Report{}, err
 	}

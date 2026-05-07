@@ -1,0 +1,37 @@
+{
+  "truth_plane_progression": {
+    "handoff_id": "hf_019dfe2e-3830-7311-b9e1-36faa4c84de5",
+    "workflow_id": "wf_019dfe2e-3830-72f5-b3cc-d080533da554",
+    "progressions": [
+      {
+        "action": "receive",
+        "state": "received"
+      },
+      {
+        "action": "claim",
+        "state": "claimed"
+      },
+      {
+        "action": "start",
+        "state": "started"
+      },
+      {
+        "action": "checkpoint",
+        "state": "checkpointed"
+      },
+      {
+        "action": "complete",
+        "state": "completed"
+      }
+    ],
+    "final_handoff_state": "completed",
+    "final_workflow_status": "completed",
+    "tools": [
+      "handoff_create",
+      "handoff_dispatch",
+      "handoff_progress",
+      "handoff_get",
+      "workflow_status"
+    ]
+  }
+}

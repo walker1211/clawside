@@ -684,6 +684,31 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
 
 `release` runs local Go readiness checks before the full OpenClaw MCP smoke check. Real delivery still goes through the sender backend only and never calls the Telegram API directly.
 
+### Stage 7 fixtures profile regression validation
+
+Stage 7 adds repository-owned golden evidence fixtures so local and CI runs can regression-test Stage 0-5 OpenClaw MCP verifier behavior without depending on private `.openclaw/trajectory-exports` paths.
+
+Shortest command:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --profile fixtures
+```
+
+`fixtures` reads bundled extracted JSON samples from:
+
+```text
+testdata/openclaw-smoke/stage0-5/
+```
+
+These fixtures are for local / CI regression. They prove the verifier still accepts stable golden evidence; they are not release acceptance evidence and do not prove that a fresh real OpenClaw trajectory still produces the same results.
+
+Release or full acceptance still uses:
+
+- `truth-plane-full`: pass all seven JSON files extracted from real OpenClaw trajectory evidence explicitly;
+- `release`: start from real evidence and explicitly enable `--deliver-main` and `--chat-id`.
+
+Real delivery still goes through the sender backend only and never calls the Telegram API directly.
+
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
 
 ```bash

@@ -684,6 +684,31 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
 
 `release` 会先执行本地 Go readiness 检查，再执行完整 OpenClaw MCP smoke；真实投递仍然只通过 sender 后端完成，不直接调用 Telegram API。
 
+### Stage 7 / 阶段 7 fixtures profile 回归验收
+
+Stage 7 增加仓库内置的 golden evidence fixtures，让本地和 CI 可以不用依赖 `.openclaw/trajectory-exports` 私有路径，也能稳定回归 Stage 0-5 的 OpenClaw MCP verifier 行为。
+
+最短命令：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --profile fixtures
+```
+
+`fixtures` 会读取仓库内置的 extracted JSON 样本：
+
+```text
+testdata/openclaw-smoke/stage0-5/
+```
+
+这些 fixtures 用于本地 / CI regression，证明 verifier 对固定 golden evidence 的判断没有回退；它们不是发布验收 evidence，也不证明新的真实 OpenClaw trajectory 仍然能产出同样结果。
+
+发布或完整验收仍然使用：
+
+- `truth-plane-full`：显式传入真实 OpenClaw trajectory extractor 输出的 7 个 JSON；
+- `release`：在真实 evidence 基础上再显式开启 `--deliver-main` 和 `--chat-id`。
+
+真实投递仍然只通过 sender 后端完成，不直接调用 Telegram API。
+
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
 
 ```bash

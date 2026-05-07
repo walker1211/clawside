@@ -1,0 +1,43 @@
+{
+  "truth_plane_mutation": {
+    "handoff_id": "hf_019dfe70-b058-7d75-ad0c-c4661e6bfc98",
+    "workflow_id": "wf_019dfe70-b058-7d69-8e9a-491e8a3e2c70",
+    "watch": {
+      "id": "watch_019dfe70-b058-7e34-9958-68940e5596d6",
+      "status": "disabled",
+      "deadline_at": "2026-05-07T12:30:00Z",
+      "escalation_policy": "manual-smoke-escalation"
+    },
+    "ownership": {
+      "current_owner": {
+        "type": "agent",
+        "id": "operator"
+      },
+      "lease_holder": {
+        "type": "agent",
+        "id": "operator"
+      },
+      "reviewer_actor": {
+        "type": "agent",
+        "id": "reviewer"
+      },
+      "escalation_owner": {
+        "type": "user",
+        "id": "ops"
+      },
+      "fallback_owner": {
+        "type": "agent",
+        "id": "planner"
+      },
+      "leased_at": "2026-05-07T12:00:00Z",
+      "lease_expires_at": "2026-05-07T12:30:00Z"
+    },
+    "tools": [
+      "handoff_create",
+      "watch_list",
+      "watch_update",
+      "ownership_update",
+      "ownership_get"
+    ]
+  }
+}

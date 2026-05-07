@@ -1,0 +1,25 @@
+{
+  "truth_plane_repair": {
+    "handoff_id": "hf_019dffaa-c88d-7e57-9db6-cc047e5b3dd2",
+    "workflow_id": "wf_019dffaa-c88d-7e48-b2e1-5785f6c9bb98",
+    "invalidated_event_id": "evt_019dffaa-de84-7059-ad47-35bcafd11831",
+    "repair": {
+      "id": "repair_019dffaa-ea53-7a41-b127-af4f59a17ebb",
+      "action": "invalidate_event",
+      "reason": "manual repair smoke invalidate receive event",
+      "actor": {
+        "type": "agent",
+        "id": "main"
+      }
+    },
+    "final_handoff_state": "dispatched",
+    "tools": [
+      "handoff_create",
+      "handoff_dispatch",
+      "handoff_progress",
+      "repair_invalidate_event",
+      "repair_list",
+      "handoff_get"
+    ]
+  }
+}

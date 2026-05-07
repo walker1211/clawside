@@ -440,6 +440,29 @@ func TestReadmeStage6DocumentsSmokeProfiles(t *testing.T) {
 	}
 }
 
+func TestReadmeStage7DocumentsFixturesProfile(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		section := readReadmeSection(t, path, "### Stage 7")
+		wantTokens := []string{
+			"--profile fixtures",
+			"testdata/openclaw-smoke/stage0-5",
+			"truth-plane-full",
+			"release",
+			"trajectory",
+		}
+		if path == "README.zh-CN.md" {
+			wantTokens = append(wantTokens, "回归", "不是发布验收 evidence", "sender 后端")
+		} else {
+			wantTokens = append(wantTokens, "regression", "not release acceptance evidence", "sender backend")
+		}
+		for _, want := range wantTokens {
+			if !strings.Contains(section, want) {
+				t.Fatalf("expected %s Stage 7 section to contain %q", path, want)
+			}
+		}
+	}
+}
+
 func readReadmeSection(t *testing.T, path string, heading string) string {
 	t.Helper()
 	content := readTextFile(t, path)
@@ -654,6 +677,7 @@ func TestVerifyOpenClawMCPScriptSupportsProfiles(t *testing.T) {
 	for _, want := range []string{
 		"PROFILE=\"\"",
 		"--profile PROFILE",
+		"quick, truth-plane-full, fixtures, release",
 		"--profile)",
 		"PROFILE=\"$2\"",
 		"set -- \"$@\" --profile \"$PROFILE\"",

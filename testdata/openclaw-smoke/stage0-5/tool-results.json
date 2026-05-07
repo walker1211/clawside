@@ -1,0 +1,27 @@
+{
+  "results": [
+    {
+      "tool": "sender_health",
+      "result": {
+        "status": "ok"
+      }
+    },
+    {
+      "tool": "sender_ready",
+      "result": {
+        "status": "ok"
+      }
+    },
+    {
+      "tool": "sender_stats",
+      "result": {
+        "worker_running": true,
+        "pending_count": 0,
+        "retry_count": 0,
+        "sending_count": 0,
+        "sent_count": 1,
+        "failed_count": 0
+      }
+    }
+  ]
+}

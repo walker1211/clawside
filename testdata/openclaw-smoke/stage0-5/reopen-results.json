@@ -1,0 +1,35 @@
+{
+  "truth_plane_reopen": {
+    "handoff_id": "hf_019e0037-4f58-7007-9458-1a542d5eb61a",
+    "workflow_id": "wf_019e0037-4f57-7f3e-aac7-6366e152418c",
+    "repair": {
+      "id": "repair_019e0038-18e2-7347-997c-a02e0c11be46",
+      "action": "reopen_handoff",
+      "reason": "manual repair smoke reopen completed handoff",
+      "actor": {
+        "type": "agent",
+        "id": "main"
+      },
+      "reopened_state": "created"
+    },
+    "divergence_observed": true,
+    "candidate_observed": true,
+    "final_handoff_state": "created",
+    "final_workflow_status": "active",
+    "tools": [
+      "handoff_create",
+      "handoff_dispatch",
+      "handoff_progress",
+      "handoff_progress",
+      "handoff_progress",
+      "handoff_progress",
+      "handoff_progress",
+      "divergence_list",
+      "repair_candidate_list",
+      "repair_reopen_handoff",
+      "repair_list",
+      "handoff_get",
+      "workflow_status"
+    ]
+  }
+}

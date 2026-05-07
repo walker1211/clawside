@@ -240,12 +240,95 @@ func TestRunSmokeQuickProfileRejectsDeliverMain(t *testing.T) {
 	}
 }
 
+func TestRunSmokeFixturesProfileUsesBundledEvidence(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+
+	report, err := RunSmoke(context.Background(), Options{
+		Profile:            profileFixtures,
+		ConfigPath:         configPath,
+		DBPath:             filepath.Join(dir, "sender.db"),
+		OpenClawFixtureDir: filepath.Join("..", "..", "testdata", "openclaw-smoke", "stage0-5"),
+	})
+	if err != nil {
+		t.Fatalf("run smoke: %v", err)
+	}
+
+	if report.Profile != profileFixtures {
+		t.Fatalf("expected profile %q, got %q", profileFixtures, report.Profile)
+	}
+	assertCheck(t, report, "openclaw_tool_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_progression_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_mutation_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_repair_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_reopen_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_continuity_results", checkStatusOK)
+	assertCheck(t, report, "a2a_main_delivery", checkStatusSkipped)
+}
+
+func TestRunSmokeFixturesProfileRejectsDeliverMain(t *testing.T) {
+	_, err := RunSmoke(context.Background(), Options{
+		Profile:            profileFixtures,
+		DeliverMain:        true,
+		ChatID:             1,
+		OpenClawFixtureDir: filepath.Join("..", "..", "testdata", "openclaw-smoke", "stage0-5"),
+	})
+	if err == nil {
+		t.Fatalf("expected fixtures profile deliver-main error")
+	}
+	if err.Error() != "profile fixtures does not support --deliver-main; use --profile release" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunFixturesProfileRequiresProfileSpecificDeliveryError(t *testing.T) {
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{"--profile", profileFixtures, "--deliver-main"}, stdout, stderr)
+	if err == nil {
+		t.Fatalf("expected fixtures profile deliver-main error")
+	}
+	if err.Error() != "profile fixtures does not support --deliver-main; use --profile release" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunSmokeReleaseProfileDoesNotUseFixtures(t *testing.T) {
+	_, err := RunSmoke(context.Background(), Options{
+		Profile:            profileRelease,
+		DeliverMain:        true,
+		ChatID:             1,
+		OpenClawFixtureDir: filepath.Join("..", "..", "testdata", "openclaw-smoke", "stage0-5"),
+	})
+	if err == nil {
+		t.Fatalf("expected release profile to require explicit result paths")
+	}
+	if err.Error() != "profile truth-plane-full requires --openclaw-tool-results" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunSmokeTruthPlaneFullProfileRequiresAllResultPaths(t *testing.T) {
 	_, err := RunSmoke(context.Background(), Options{Profile: profileTruthPlaneFull})
 	if err == nil {
 		t.Fatalf("expected missing result path error")
 	}
 	if err.Error() != "profile truth-plane-full requires --openclaw-tool-results" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunSmokeTruthPlaneFullProfileRequiresChatIDWhenDeliverMain(t *testing.T) {
+	opts := validProfileEvidenceOptions(t)
+	opts.Profile = profileTruthPlaneFull
+	opts.DeliverMain = true
+
+	_, err := RunSmoke(context.Background(), opts)
+	if err == nil {
+		t.Fatalf("expected missing chat-id error")
+	}
+	if err.Error() != "chat-id is required when --deliver-main is set" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -303,7 +386,7 @@ func TestRunSmokeRejectsUnknownProfile(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected unknown profile error")
 	}
-	if err.Error() != "unsupported profile nightly; supported profiles: quick, truth-plane-full, release" {
+	if err.Error() != "unsupported profile nightly; supported profiles: quick, truth-plane-full, fixtures, release" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

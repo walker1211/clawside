@@ -33,7 +33,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var jsonOnly bool
 	fs := flag.NewFlagSet("openclaw-mcp-smoke", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.StringVar(&defaults.Profile, "profile", defaults.Profile, "smoke profile: quick, truth-plane-full, release")
+	fs.StringVar(&defaults.Profile, "profile", defaults.Profile, "smoke profile: quick, truth-plane-full, fixtures, release")
 	fs.StringVar(&defaults.ConfigPath, "config", defaults.ConfigPath, "path to clawside config TOML")
 	fs.StringVar(&defaults.DBPath, "db", defaults.DBPath, "path to sender SQLite database")
 	fs.StringVar(&defaults.SenderBaseURL, "sender-base-url", defaults.SenderBaseURL, "sender service base URL")
@@ -66,7 +66,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defaults.Profile = profile
-	if defaults.DeliverMain && defaults.ChatID <= 0 && defaults.Profile != profileRelease {
+	if defaults.DeliverMain && defaults.ChatID <= 0 && defaults.Profile == "" {
 		return errors.New("chat-id is required when --deliver-main is set")
 	}
 
@@ -113,15 +113,20 @@ func defaultOptions(cwd string) (Options, error) {
 	if err != nil {
 		return Options{}, fmt.Errorf("resolve default mcp command: %w", err)
 	}
+	fixtureDir, err := filepath.Abs(filepath.Join(cwd, defaultFixtureDir))
+	if err != nil {
+		return Options{}, fmt.Errorf("resolve default OpenClaw fixture dir: %w", err)
+	}
 
 	return Options{
-		ConfigPath:    configPath,
-		DBPath:        dbPath,
-		SenderBaseURL: "http://127.0.0.1:8787",
-		SenderAuthKey: os.Getenv("SENDER_AUTH_KEY"),
-		MCPCommand:    mcpCommand,
-		MCPArgs:       []string{"--db", dbPath},
-		Text:          "OpenClaw MCP smoke test",
+		ConfigPath:         configPath,
+		DBPath:             dbPath,
+		SenderBaseURL:      "http://127.0.0.1:8787",
+		SenderAuthKey:      os.Getenv("SENDER_AUTH_KEY"),
+		MCPCommand:         mcpCommand,
+		MCPArgs:            []string{"--db", dbPath},
+		OpenClawFixtureDir: fixtureDir,
+		Text:               "OpenClaw MCP smoke test",
 	}, nil
 }
 
