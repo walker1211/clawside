@@ -77,6 +77,37 @@ func TestRunWritesReopenSummaryToStdout(t *testing.T) {
 	}
 }
 
+func TestRunSelectsReopenFlowAfterEarlierPartialFlow(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	lines := []string{
+		reopenToolResultEvent("handoff_create", `{"workflow":{"id":"wf-earlier"},"handoff":{"id":"hf-earlier","workflow_id":"wf-earlier"}}`, false),
+		reopenToolResultEvent("handoff_dispatch", reopenDispatchResultJSON("hf-earlier", "wf-earlier", true), false),
+		reopenToolResultEvent("handoff_progress", reopenProgressResultJSON("handoff.receive", "received", true, "hf-earlier", "wf-earlier"), false),
+		reopenToolResultEvent("handoff_get", `{"handoff":{"id":"hf-earlier","workflow_id":"wf-earlier","state":"dispatched"},"timeline":[]}`, false),
+	}
+	lines = append(lines, validReopenPrefixEvents()[1:]...)
+	lines = append(lines,
+		reopenToolResultEvent("repair_reopen_handoff", reopenRepairRecordJSON("repair-123", reopenReason, "main", "created"), false),
+		reopenToolResultEvent("repair_list", reopenRepairListJSON(reopenRepairRecordJSON("repair-123", reopenReason, "main", "created")), false),
+		reopenToolResultEvent("handoff_get", reopenFinalHandoffJSON("created"), false),
+		reopenToolResultEvent("workflow_status", reopenWorkflowStatusJSON("active", "created", true), false),
+	)
+	writeReopenEvents(t, eventsPath, lines...)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v", err)
+	}
+	var payload extractedReopenResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.TruthPlaneReopen.HandoffID != "hf-123" || payload.TruthPlaneReopen.WorkflowID != "wf-123" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
 func TestRunRequiresEventsPath(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	err := run(nil, &stdout, &stderr)
@@ -172,6 +203,33 @@ func TestRunFailsOnMismatchedDispatchIDs(t *testing.T) {
 				t.Fatalf("expected %q, got %v", tt.wantErr, err)
 			}
 		})
+	}
+}
+
+func TestRunAcceptsNullDivergenceAndCandidateLists(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	lines := append([]string{}, validReopenPrefixEvents()[:8]...)
+	lines = append(lines,
+		reopenToolResultEvent("divergence_list", `{"divergences":null}`, false),
+		reopenToolResultEvent("repair_candidate_list", `{"repair_candidates":null}`, false),
+		reopenToolResultEvent("repair_reopen_handoff", reopenRepairRecordJSON("repair-123", reopenReason, "main", "created"), false),
+		reopenToolResultEvent("repair_list", reopenRepairListJSON(reopenRepairRecordJSON("repair-123", reopenReason, "main", "created")), false),
+		reopenToolResultEvent("handoff_get", reopenFinalHandoffJSON("created"), false),
+		reopenToolResultEvent("workflow_status", reopenWorkflowStatusJSON("active", "created", true), false),
+	)
+	writeReopenEvents(t, eventsPath, lines...)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v", err)
+	}
+	var payload extractedReopenResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if !payload.TruthPlaneReopen.DivergenceObserved || !payload.TruthPlaneReopen.CandidateObserved {
+		t.Fatalf("expected null lists to count as observed structuredContent: %+v", payload.TruthPlaneReopen)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 const (
 	clawsideMCPServerName = "clawside"
 	reopenReason          = "manual repair smoke reopen completed handoff"
+	reopenWorkflowKind    = "manual_openclaw_truth_plane_reopen_smoke"
 )
 
 var reopenTools = []string{
@@ -235,14 +236,23 @@ func summarizeReopenResults(results []reopenToolResult) (extractedReopenResults,
 	for _, result := range results {
 		switch result.Tool {
 		case "handoff_create":
-			if !dispatchSeen && progressIndex == 0 {
-				id, wfID, err := handoffCreateIDs(result.StructuredContent)
-				if err != nil {
-					return payload, err
-				}
-				handoffID = id
-				workflowID = wfID
+			id, wfID, kind, err := handoffCreateIDs(result.StructuredContent)
+			if err != nil {
+				return payload, err
 			}
+			if kind != "" && kind != reopenWorkflowKind {
+				continue
+			}
+			handoffID = id
+			workflowID = wfID
+			progressIndex = 0
+			dispatchSeen = false
+			divergenceSeen = false
+			candidateSeen = false
+			reopenSeen = false
+			repairListSeen = false
+			reopenRepair = repairRecord{}
+			payload.TruthPlaneReopen.FinalHandoffState = ""
 		case "handoff_dispatch":
 			if handoffID == "" || dispatchSeen {
 				continue
@@ -346,19 +356,26 @@ func summarizeReopenResults(results []reopenToolResult) (extractedReopenResults,
 	return payload, errors.New("missing tool workflow_status in OpenClaw trajectory events")
 }
 
-func handoffCreateIDs(content map[string]any) (string, string, error) {
+func handoffCreateIDs(content map[string]any) (string, string, string, error) {
 	handoffID, ok := nestedString(content, "handoff", "id")
 	if !ok {
-		return "", "", errors.New("handoff_create handoff id is required")
+		return "", "", "", errors.New("handoff_create handoff id is required")
 	}
 	workflowID, ok := nestedString(content, "handoff", "workflow_id")
 	if !ok {
 		workflowID, ok = nestedString(content, "workflow", "id")
 	}
 	if !ok {
-		return "", "", errors.New("handoff_create workflow id is required")
+		return "", "", "", errors.New("handoff_create workflow id is required")
 	}
-	return handoffID, workflowID, nil
+	workflowKind, _ := nestedString(content, "workflow", "kind")
+	if workflowKind == "" {
+		workflowKind, _ = nestedString(content, "workflow", "workflow_kind")
+	}
+	if workflowKind == "" {
+		workflowKind, _ = nestedString(content, "handoff", "workflow_kind")
+	}
+	return handoffID, workflowID, workflowKind, nil
 }
 
 func validateDispatch(content map[string]any, handoffID, workflowID string) error {
@@ -458,7 +475,11 @@ type observedListSpec struct {
 }
 
 func validateObservedList(content map[string]any, spec observedListSpec, handoffID, workflowID string) error {
-	entries, ok := content[spec.Key].([]any)
+	entriesValue, exists := content[spec.Key]
+	if !exists || entriesValue == nil {
+		return nil
+	}
+	entries, ok := entriesValue.([]any)
 	if !ok {
 		return fmt.Errorf("%s must be an array", spec.Key)
 	}
