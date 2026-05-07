@@ -339,8 +339,8 @@ func TestOpenClawTruthPlaneContinuityExtractScriptEntrypoint(t *testing.T) {
 	}
 
 	content := readTextFile(t, path)
-	if !strings.Contains(content, "go run -C \"$ROOT_DIR\" ./cmd/openclaw-truth-plane-continuity-extract") {
-		t.Fatalf("expected %s to invoke openclaw-truth-plane-continuity-extract with go run -C", path)
+	if !strings.Contains(content, "go run -C \"$ROOT_DIR\" ./cmd/openclaw-truth-plane-continuity-extract --events \"$EVENTS_PATH\"") {
+		t.Fatalf("expected %s to invoke openclaw-truth-plane-continuity-extract with go run -C and --events", path)
 	}
 	for _, helpToken := range []string{"help", "--help", "-h"} {
 		if !strings.Contains(content, helpToken) {
@@ -358,6 +358,9 @@ func TestOpenClawTruthPlaneContinuityExtractScriptEntrypoint(t *testing.T) {
 	}
 	if !strings.Contains(content, "OUTPUT_PATH=\"\"") {
 		t.Fatalf("expected %s to default output path to empty", path)
+	}
+	if !strings.Contains(content, "--output PATH") {
+		t.Fatalf("expected %s help to list --output", path)
 	}
 	if !strings.Contains(content, "--output)") || !strings.Contains(content, "OUTPUT_PATH=\"$2\"") {
 		t.Fatalf("expected %s to parse --output PATH", path)
