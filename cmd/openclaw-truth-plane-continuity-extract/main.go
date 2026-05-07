@@ -155,6 +155,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 }
 
 func writeOutputFile(path string, data []byte) error {
+	if _, err := os.Stat(path); err == nil {
+		if err := os.Chmod(path, 0o600); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return err
 	}
@@ -221,13 +228,20 @@ func normalizeClawsideToolName(server, mcpTool, toolName string) (string, bool) 
 		if tool == "" {
 			tool = toolName
 		}
-		return strings.TrimPrefix(tool, clawsideMCPServerName+"__"), true
+		return normalizeClawsideToolPrefix(tool, true)
 	}
-	if strings.HasPrefix(toolName, "mcp__"+clawsideMCPServerName+"__") {
-		return strings.TrimPrefix(toolName, "mcp__"+clawsideMCPServerName+"__"), true
+	return normalizeClawsideToolPrefix(toolName, false)
+}
+
+func normalizeClawsideToolPrefix(toolName string, allowBare bool) (string, bool) {
+	if tool, ok := strings.CutPrefix(toolName, "mcp__"+clawsideMCPServerName+"__"); ok {
+		return tool, true
 	}
-	if strings.HasPrefix(toolName, clawsideMCPServerName+"__") {
-		return strings.TrimPrefix(toolName, clawsideMCPServerName+"__"), true
+	if tool, ok := strings.CutPrefix(toolName, clawsideMCPServerName+"__"); ok {
+		return tool, true
+	}
+	if allowBare && toolName != "" {
+		return toolName, true
 	}
 	return "", false
 }
@@ -293,6 +307,9 @@ func summarizeContinuityResults(results []continuityToolResult) (extractedContin
 			}
 			if !reopenSeen {
 				if firstProgressIndex >= len(continuityProgressions) {
+					if !divergenceSeen {
+						return payload, errors.New("unexpected extra handoff_progress result")
+					}
 					continue
 				}
 				if err := validateProgression(result.StructuredContent, continuityProgressions[firstProgressIndex], handoffID, workflowID, "handoff_progress"); err != nil {
@@ -305,6 +322,9 @@ func summarizeContinuityResults(results []continuityToolResult) (extractedContin
 				continue
 			}
 			if secondProgressIndex >= len(continuityProgressions) {
+				if payload.TruthPlaneContinuity.PostReopenFinalHandoffState == "" {
+					return payload, errors.New("unexpected extra post-reopen handoff_progress result")
+				}
 				continue
 			}
 			if err := validateProgression(result.StructuredContent, continuityProgressions[secondProgressIndex], handoffID, workflowID, "post-reopen handoff_progress"); err != nil {
