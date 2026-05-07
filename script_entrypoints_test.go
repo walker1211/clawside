@@ -410,14 +410,35 @@ func TestReadmeDocumentsOpenClawTruthPlaneReopenValidation(t *testing.T) {
 func TestReadmeDocumentsOpenClawTruthPlaneContinuityValidation(t *testing.T) {
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
-		for _, want := range []string{
+		wantTokens := []string{
 			"cmd/openclaw-truth-plane-continuity-extract/",
 			"scripts/extract_openclaw_truth_plane_continuity_results.sh",
 			"repair_reopen_handoff",
 			"divergence_list",
 			"repair_candidate_list",
 			"--openclaw-truth-plane-continuity-results",
-		} {
+			"manual continuity smoke reopen completed handoff",
+			"actor=agent:planner",
+			"actor=agent:main",
+			"workflow_kind=manual_openclaw_truth_plane_continuity_smoke",
+			"export-directory",
+		}
+		if path == "README.zh-CN.md" {
+			wantTokens = append(wantTokens,
+				"handoff_create 返回的 workflow_id",
+				"同一个 handoff_id",
+				"将 `export-directory` 替换为 `openclaw sessions export-trajectory` 打印的实际导出目录名",
+				"`export-directory` 不是字面路径片段",
+			)
+		} else {
+			wantTokens = append(wantTokens,
+				"workflow_id returned by handoff_create",
+				"same handoff_id",
+				"replace `export-directory` with the actual export directory name printed by `openclaw sessions export-trajectory`",
+				"`export-directory` is not a literal path segment",
+			)
+		}
+		for _, want := range wantTokens {
 			if !strings.Contains(content, want) {
 				t.Fatalf("expected %s to contain %q", path, want)
 			}

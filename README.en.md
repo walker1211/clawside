@@ -608,8 +608,10 @@ Call handoff_get with the same handoff_id. Call workflow_status with the workflo
 After the calls complete, output handoff_id, workflow_id, repair_id, repair action, reopened_state, post-reopen final handoff state, post-reopen final workflow status, and whether divergence_list / repair_candidate_list returned structuredContent.
 ```
 
+In the export and extraction examples, replace `full session key` with the actual full session key and replace `export-directory` with the actual export directory name printed by `openclaw sessions export-trajectory`; `export-directory` is not a literal path segment.
+
 ```bash
-openclaw sessions export-trajectory --agent main --session-key 'quoted descriptive session key' --json
+openclaw sessions export-trajectory --agent main --session-key 'full session key' --json
 
 ./scripts/extract_openclaw_truth_plane_continuity_results.sh \
   --events .openclaw/trajectory-exports/export-directory/events.jsonl \

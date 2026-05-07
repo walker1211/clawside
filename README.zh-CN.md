@@ -608,8 +608,10 @@ handoff_get 请使用同一个 handoff_id。workflow_status 请使用 handoff_cr
 调用完成后，请输出 handoff_id、workflow_id、repair_id、repair action、reopened_state、post-reopen final handoff state、post-reopen final workflow status，以及 divergence_list / repair_candidate_list 是否返回 structuredContent。
 ```
 
+导出与提取示例中，请将 `完整 session key` 替换为实际完整 session key，将 `export-directory` 替换为 `openclaw sessions export-trajectory` 打印的实际导出目录名；`export-directory` 不是字面路径片段。
+
 ```bash
-openclaw sessions export-trajectory --agent main --session-key 'quoted descriptive session key' --json
+openclaw sessions export-trajectory --agent main --session-key '完整 session key' --json
 
 ./scripts/extract_openclaw_truth_plane_continuity_results.sh \
   --events .openclaw/trajectory-exports/export-directory/events.jsonl \
