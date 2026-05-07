@@ -633,6 +633,51 @@ func TestReadmeStage8DocumentsLocalReleaseGuard(t *testing.T) {
 	}
 }
 
+func TestReadmeStage9DocumentsRemoteCIRelease(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		heading string
+	}{
+		{path: "README.zh-CN.md", heading: "### Stage 9 / 阶段 9 远端 CI 与 Release workflow"},
+		{path: "README.en.md", heading: "### Stage 9 remote CI and release workflow"},
+	} {
+		section := readReadmeSection(t, tc.path, tc.heading)
+		wantTokens := []string{
+			"Stage 8",
+			"Stage 9",
+			"GitHub Actions",
+			"push",
+			"pull_request",
+			"v*",
+			"scripts/ci-local.sh clean",
+			"scripts/tag-release.sh vX.Y.Z",
+			"scripts/tag-release.sh vX.Y.Z --push",
+			"GitHub Release",
+			"LICENSE",
+			"go test -count=1 ./...",
+			"scripts/secret-scan.sh",
+			"scripts/secret-scan.sh --history",
+			"gofmt",
+			"go vet ./...",
+			"configs/config.example.toml",
+			".env",
+			"configs/config.toml",
+			".openclaw/trajectory-exports",
+			"checksums",
+		}
+		if tc.path == "README.zh-CN.md" {
+			wantTokens = append(wantTokens, "远端 CI", "显式授权", "实现和本地验收不执行 push、tag 或 release", "# 明确授权后才执行：", "数据库", "日志", "产物")
+		} else {
+			wantTokens = append(wantTokens, "remote CI", "explicit authorization", "implementation and local verification do not run push, tag, or release", "# Run only after explicit authorization:", "databases", "logs", "artifacts")
+		}
+		for _, want := range wantTokens {
+			if !strings.Contains(section, want) {
+				t.Fatalf("expected %s Stage 9 section to contain %q", tc.path, want)
+			}
+		}
+	}
+}
+
 func readReadmeSection(t *testing.T, path string, heading string) string {
 	t.Helper()
 	content := readTextFile(t, path)
@@ -642,6 +687,7 @@ func readReadmeSection(t *testing.T, path string, heading string) string {
 	}
 	section := content[start:]
 	currentLevel := markdownHeadingLevel(heading)
+	inFencedCodeBlock := false
 	for offset := len(heading); offset < len(section); {
 		nextLine := strings.IndexByte(section[offset:], '\n')
 		if nextLine < 0 {
@@ -651,9 +697,19 @@ func readReadmeSection(t *testing.T, path string, heading string) string {
 		if lineStart >= len(section) {
 			break
 		}
-		level := markdownHeadingLevel(section[lineStart:])
-		if level > 0 && level <= currentLevel {
-			return section[:lineStart-1]
+		lineEnd := strings.IndexByte(section[lineStart:], '\n')
+		line := section[lineStart:]
+		if lineEnd >= 0 {
+			line = section[lineStart : lineStart+lineEnd]
+		}
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			inFencedCodeBlock = !inFencedCodeBlock
+		}
+		if !inFencedCodeBlock {
+			level := markdownHeadingLevel(line)
+			if level > 0 && level <= currentLevel {
+				return section[:lineStart-1]
+			}
 		}
 		offset = lineStart
 	}

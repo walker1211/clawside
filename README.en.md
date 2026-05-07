@@ -756,6 +756,31 @@ Create a local release tag:
 
 `--push` only pushes the tag; it does not create a GitHub Release. Stage 8 does not add a GitHub Actions release workflow.
 
+### Stage 9 remote CI and release workflow
+
+Stage 9 adds GitHub Actions remote CI and a `v*` tag-triggered release workflow on top of the Stage 8 local release guard. Stage 8 is the local pre-tag guard; Stage 9 is the remote preflight, build, checksum, and GitHub Release layer after the tag reaches GitHub.
+
+Remote CI runs on `push` and `pull_request`:
+
+1. `scripts/secret-scan.sh`
+2. `scripts/secret-scan.sh --history`
+3. `gofmt` check
+4. `go vet ./...`
+5. `go test -count=1 ./...`
+
+The release workflow runs only on `v*` tags, builds linux amd64/arm64, darwin amd64/arm64, and windows amd64 artifacts, generates checksums, and creates or updates the GitHub Release. Each release archive includes the binary, `LICENSE`, root README, multilingual READMEs, and `configs/config.example.toml`; it excludes `.env`, `configs/config.toml`, databases, logs, and `.openclaw/trajectory-exports`.
+
+Recommended release path:
+
+```bash
+scripts/ci-local.sh clean
+scripts/tag-release.sh vX.Y.Z
+# Run only after explicit authorization:
+scripts/tag-release.sh vX.Y.Z --push
+```
+
+`--push` pushes the `v*` tag to GitHub, then the GitHub Actions release workflow builds artifacts remotely and creates or updates the GitHub Release. Stage 9 implementation and local verification do not run push, tag, or release; those shared-state operations still require explicit authorization.
+
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
 
 ```bash

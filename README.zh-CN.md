@@ -756,6 +756,31 @@ Stage 8 增加本地 release guard，用于在打 tag 前重复执行同一组�
 
 `--push` 只表示推送 tag，不会创建 GitHub Release。Stage 8 不新增 GitHub Actions release workflow。
 
+### Stage 9 / 阶段 9 远端 CI 与 Release workflow
+
+Stage 9 在 Stage 8 本地发布保护之上增加 GitHub Actions 远端 CI 和 `v*` tag 触发的 release workflow。Stage 8 负责本地 pre-tag guard，Stage 9 负责 tag 到达 GitHub 后的远端 preflight、构建、checksum 和 GitHub Release。
+
+远端 CI 在 `push` 和 `pull_request` 上运行：
+
+1. `scripts/secret-scan.sh`
+2. `scripts/secret-scan.sh --history`
+3. `gofmt` 检查
+4. `go vet ./...`
+5. `go test -count=1 ./...`
+
+Release workflow 只在 `v*` tag 上运行，构建 linux amd64/arm64、darwin amd64/arm64、windows amd64 五个平台产物，生成 checksums，并创建或更新 GitHub Release。每个 release 归档包含二进制、`LICENSE`、根 README、多语言 README 和 `configs/config.example.toml`，不包含 `.env`、`configs/config.toml`、数据库、日志或 `.openclaw/trajectory-exports`。
+
+推荐发布路径：
+
+```bash
+scripts/ci-local.sh clean
+scripts/tag-release.sh vX.Y.Z
+# 明确授权后才执行：
+scripts/tag-release.sh vX.Y.Z --push
+```
+
+`--push` 会把 `v*` tag 推送到 GitHub，然后由 GitHub Actions release workflow 远端构建并创建或更新 GitHub Release。Stage 9 的实现和本地验收不执行 push、tag 或 release；这些共享状态操作仍需要显式授权。
+
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
 
 ```bash
