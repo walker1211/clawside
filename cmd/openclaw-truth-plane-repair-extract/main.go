@@ -15,21 +15,24 @@ import (
 const (
 	clawsideMCPServerName = "clawside"
 	repairReason          = "manual repair smoke invalidate receive event"
+	backfillRepairReason  = "manual repair smoke backfill receive event"
 )
 
-var repairTools = []string{"handoff_create", "handoff_dispatch", "handoff_progress", "repair_invalidate_event", "repair_list", "handoff_get"}
+var repairTools = []string{"handoff_create", "handoff_dispatch", "handoff_progress", "repair_invalidate_event", "repair_backfill_event", "repair_list", "handoff_get"}
 
 type extractedRepairResults struct {
 	TruthPlaneRepair extractedRepairSummary `json:"truth_plane_repair"`
 }
 
 type extractedRepairSummary struct {
-	HandoffID          string       `json:"handoff_id"`
-	WorkflowID         string       `json:"workflow_id"`
-	InvalidatedEventID string       `json:"invalidated_event_id"`
-	Repair             repairRecord `json:"repair"`
-	FinalHandoffState  string       `json:"final_handoff_state"`
-	Tools              []string     `json:"tools"`
+	HandoffID           string       `json:"handoff_id"`
+	WorkflowID          string       `json:"workflow_id"`
+	InvalidatedEventID  string       `json:"invalidated_event_id"`
+	Repair              repairRecord `json:"repair"`
+	BackfillRepair      repairRecord `json:"backfill_repair"`
+	BackfilledEventType string       `json:"backfilled_event_type,omitempty"`
+	FinalHandoffState   string       `json:"final_handoff_state"`
+	Tools               []string     `json:"tools"`
 }
 
 type repairRecord struct {
@@ -198,8 +201,8 @@ func isRepairTool(tool string) bool {
 func summarizeRepairResults(results []repairToolResult) (extractedRepairResults, error) {
 	var payload extractedRepairResults
 	var handoffID, workflowID, receiveEventID string
-	var dispatchSeen, receiveSeen, invalidationSeen, repairListSeen bool
-	var invalidationRepair repairRecord
+	var dispatchSeen, receiveSeen, invalidationSeen, backfillSeen, repairListSeen bool
+	var invalidationRepair, backfillRepair repairRecord
 
 	for _, result := range results {
 		switch result.Tool {
@@ -240,18 +243,32 @@ func summarizeRepairResults(results []repairToolResult) (extractedRepairResults,
 			}
 			invalidationRepair = repair
 			invalidationSeen = true
-		case "repair_list":
-			if !invalidationSeen || repairListSeen {
+		case "repair_backfill_event":
+			if !invalidationSeen || backfillSeen {
 				continue
 			}
-			if repairListContains(result.StructuredContent, receiveEventID, invalidationRepair) {
-				repairListSeen = true
+			repair, err := validateRepairBackfill(result.StructuredContent)
+			if err != nil {
+				return payload, err
 			}
+			backfillRepair = repair
+			backfillSeen = true
+		case "repair_list":
+			if !backfillSeen || repairListSeen {
+				continue
+			}
+			if !repairListContainsInvalidation(result.StructuredContent, receiveEventID, invalidationRepair) {
+				return payload, errors.New("repair_list did not include the invalidation repair record")
+			}
+			if !repairListContainsBackfill(result.StructuredContent, handoffID, backfillRepair) {
+				return payload, errors.New("repair_list did not include the backfill repair record")
+			}
+			repairListSeen = true
 		case "handoff_get":
 			if !repairListSeen {
 				continue
 			}
-			state, err := validateFinalHandoff(result.StructuredContent, handoffID, workflowID)
+			state, backfilledEventType, err := validateFinalHandoff(result.StructuredContent, handoffID, workflowID)
 			if err != nil {
 				return payload, err
 			}
@@ -259,6 +276,8 @@ func summarizeRepairResults(results []repairToolResult) (extractedRepairResults,
 			payload.TruthPlaneRepair.WorkflowID = workflowID
 			payload.TruthPlaneRepair.InvalidatedEventID = receiveEventID
 			payload.TruthPlaneRepair.Repair = invalidationRepair
+			payload.TruthPlaneRepair.BackfillRepair = backfillRepair
+			payload.TruthPlaneRepair.BackfilledEventType = backfilledEventType
 			payload.TruthPlaneRepair.FinalHandoffState = state
 			payload.TruthPlaneRepair.Tools = append([]string(nil), repairTools...)
 			return payload, nil
@@ -276,6 +295,9 @@ func summarizeRepairResults(results []repairToolResult) (extractedRepairResults,
 	}
 	if !invalidationSeen {
 		return payload, errors.New("missing tool repair_invalidate_event in OpenClaw trajectory events")
+	}
+	if !backfillSeen {
+		return payload, errors.New("missing tool repair_backfill_event in OpenClaw trajectory events")
 	}
 	if !repairListSeen {
 		return payload, errors.New("repair_list did not include the invalidation repair record")
@@ -413,7 +435,36 @@ func validateRepairInvalidation(content map[string]any, receiveEventID string) (
 	return repair, nil
 }
 
-func repairListContains(content map[string]any, receiveEventID string, want repairRecord) bool {
+func validateRepairBackfill(content map[string]any) (repairRecord, error) {
+	repair, _ := repairFromContent(content)
+	if repair.ID == "" {
+		return repairRecord{}, errors.New("repair_backfill_event repair id is required")
+	}
+	if repair.Action != "backfill_event" {
+		return repairRecord{}, errors.New("repair_backfill_event action must be backfill_event")
+	}
+	if repair.Reason != backfillRepairReason {
+		return repairRecord{}, errors.New("repair_backfill_event reason must be manual repair smoke backfill receive event")
+	}
+	if repair.Actor.Type != "agent" || repair.Actor.ID != "main" {
+		return repairRecord{}, errors.New("repair_backfill_event actor must be agent:main")
+	}
+	return repair, nil
+}
+
+func repairListContainsInvalidation(content map[string]any, receiveEventID string, want repairRecord) bool {
+	return repairListContains(content, want, func(source map[string]any) bool {
+		return repairInvalidatedEventID(source) == receiveEventID
+	})
+}
+
+func repairListContainsBackfill(content map[string]any, handoffID string, want repairRecord) bool {
+	return repairListContains(content, want, func(source map[string]any) bool {
+		return repairBackfillTargetID(source) == handoffID
+	})
+}
+
+func repairListContains(content map[string]any, want repairRecord, matchesTarget func(map[string]any) bool) bool {
 	repairs, ok := content["repairs"].([]any)
 	if !ok {
 		return false
@@ -424,7 +475,7 @@ func repairListContains(content map[string]any, receiveEventID string, want repa
 			continue
 		}
 		repair, source := repairFromContent(repairObject)
-		if repair == want && repairInvalidatedEventID(source) == receiveEventID {
+		if repair == want && matchesTarget(source) {
 			return true
 		}
 	}
@@ -451,20 +502,42 @@ func repairInvalidatedEventID(content map[string]any) string {
 	return stringField(content, "target_id")
 }
 
-func validateFinalHandoff(content map[string]any, handoffID, workflowID string) (string, error) {
+func repairBackfillTargetID(content map[string]any) string {
+	return stringField(content, "target_id")
+}
+
+func validateFinalHandoff(content map[string]any, handoffID, workflowID string) (string, string, error) {
 	gotHandoffID, ok := nestedString(content, "handoff", "id")
 	if !ok || gotHandoffID != handoffID {
-		return "", errors.New("handoff_get handoff id does not match handoff_create")
+		return "", "", errors.New("handoff_get handoff id does not match handoff_create")
 	}
 	gotWorkflowID, ok := nestedString(content, "handoff", "workflow_id")
 	if !ok || gotWorkflowID != workflowID {
-		return "", errors.New("handoff_get workflow id does not match handoff_create")
+		return "", "", errors.New("handoff_get workflow id does not match handoff_create")
 	}
 	state, ok := nestedString(content, "handoff", "state")
-	if !ok || state != "dispatched" {
-		return "", errors.New("handoff_get final state must be dispatched")
+	if !ok || state != "received" {
+		return "", "", errors.New("handoff_get final state must be received")
 	}
-	return state, nil
+	return state, backfilledEventType(content), nil
+}
+
+func backfilledEventType(content map[string]any) string {
+	timeline, ok := content["timeline"].([]any)
+	if !ok {
+		return ""
+	}
+	for _, eventValue := range timeline {
+		event, ok := eventValue.(map[string]any)
+		if !ok {
+			continue
+		}
+		accepted, _ := event["accepted"].(bool)
+		if accepted && stringField(event, "type") == "received" {
+			return "received"
+		}
+	}
+	return ""
 }
 
 func actorField(object map[string]any, key string) repairActor {

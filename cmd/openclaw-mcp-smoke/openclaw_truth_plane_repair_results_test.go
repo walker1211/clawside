@@ -23,7 +23,7 @@ func TestCheckOpenClawTruthPlaneRepairResultsValid(t *testing.T) {
 	if check.Status != checkStatusOK {
 		t.Fatalf("expected ok, got %+v", check)
 	}
-	if check.Detail != "validated repair_invalidate_event replayed truth" {
+	if check.Detail != "validated repair_backfill_event replayed truth" {
 		t.Fatalf("unexpected detail %q", check.Detail)
 	}
 }
@@ -35,18 +35,23 @@ func TestCheckOpenClawTruthPlaneRepairResultsRejectsInvalidData(t *testing.T) {
 		want string
 	}{
 		{name: "missing root", json: `{}`, want: "openclaw truth-plane repair results.truth_plane_repair must be an object"},
-		{name: "missing handoff id", json: `{"truth_plane_repair":{"workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"final_handoff_state":"dispatched","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair handoff_id must be non-empty"},
-		{name: "missing workflow id", json: `{"truth_plane_repair":{"handoff_id":"hf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"final_handoff_state":"dispatched","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair workflow_id must be non-empty"},
-		{name: "missing event id", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","repair":` + validRepairJSON() + `,"final_handoff_state":"dispatched","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair invalidated_event_id must be non-empty"},
-		{name: "non-object repair", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":"repair-1","final_handoff_state":"dispatched","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair repair must be an object"},
-		{name: "missing repair id", json: repairResultJSONWithRepair(`{"action":"invalidate_event","reason":"manual repair smoke invalidate receive event","actor":{"type":"agent","id":"main"}}`), want: "truth-plane repair id must be non-empty"},
-		{name: "wrong action", json: repairResultJSONWithRepair(`{"id":"repair-1","action":"reopen_handoff","reason":"manual repair smoke invalidate receive event","actor":{"type":"agent","id":"main"}}`), want: "truth-plane repair action must be invalidate_event"},
-		{name: "wrong reason", json: repairResultJSONWithRepair(`{"id":"repair-1","action":"invalidate_event","reason":"other reason","actor":{"type":"agent","id":"main"}}`), want: "truth-plane repair reason must be manual repair smoke invalidate receive event"},
-		{name: "wrong actor", json: repairResultJSONWithRepair(`{"id":"repair-1","action":"invalidate_event","reason":"manual repair smoke invalidate receive event","actor":{"type":"agent","id":"operator"}}`), want: "truth-plane repair actor must be agent:main"},
-		{name: "wrong final state", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"final_handoff_state":"received","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair final_handoff_state must be dispatched"},
-		{name: "tools not array", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"final_handoff_state":"dispatched","tools":{}}}`, want: "truth-plane repair tools must be an array"},
-		{name: "missing tool", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"final_handoff_state":"dispatched","tools":["handoff_create","handoff_dispatch","handoff_progress","repair_invalidate_event","repair_list"]}}`, want: "missing truth-plane repair tool handoff_get"},
-		{name: "unknown tool", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"final_handoff_state":"dispatched","tools":["handoff_create","handoff_dispatch","handoff_progress","repair_invalidate_event","repair_list","handoff_get","token-private-value"]}}`, want: "unknown truth-plane repair tool"},
+		{name: "missing handoff id", json: `{"truth_plane_repair":{"workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"backfill_repair":` + validBackfillRepairJSON() + `,"final_handoff_state":"received","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair handoff_id must be non-empty"},
+		{name: "missing workflow id", json: `{"truth_plane_repair":{"handoff_id":"hf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"backfill_repair":` + validBackfillRepairJSON() + `,"final_handoff_state":"received","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair workflow_id must be non-empty"},
+		{name: "missing event id", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","repair":` + validRepairJSON() + `,"backfill_repair":` + validBackfillRepairJSON() + `,"final_handoff_state":"received","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair invalidated_event_id must be non-empty"},
+		{name: "non-object repair", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":"repair-1","backfill_repair":` + validBackfillRepairJSON() + `,"final_handoff_state":"received","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair repair must be an object"},
+		{name: "missing repair id", json: repairResultJSONWithRepair(`{"action":"invalidate_event","reason":"manual repair smoke invalidate receive event","actor":{"type":"agent","id":"main"}}`), want: "truth-plane repair repair id must be non-empty"},
+		{name: "wrong action", json: repairResultJSONWithRepair(`{"id":"repair-1","action":"reopen_handoff","reason":"manual repair smoke invalidate receive event","actor":{"type":"agent","id":"main"}}`), want: "truth-plane repair repair action must be invalidate_event"},
+		{name: "wrong reason", json: repairResultJSONWithRepair(`{"id":"repair-1","action":"invalidate_event","reason":"other reason","actor":{"type":"agent","id":"main"}}`), want: "truth-plane repair repair reason must be manual repair smoke invalidate receive event"},
+		{name: "wrong actor", json: repairResultJSONWithRepair(`{"id":"repair-1","action":"invalidate_event","reason":"manual repair smoke invalidate receive event","actor":{"type":"agent","id":"operator"}}`), want: "truth-plane repair repair actor must be agent:main"},
+		{name: "missing backfill repair", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"final_handoff_state":"received","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair backfill_repair must be an object"},
+		{name: "non-object backfill repair", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"backfill_repair":"repair-2","final_handoff_state":"received","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair backfill_repair must be an object"},
+		{name: "wrong backfill action", json: repairResultJSONWithBackfillRepair(`{"id":"repair-2","action":"invalidate_event","reason":"manual repair smoke backfill receive event","actor":{"type":"agent","id":"main"}}`), want: "truth-plane repair backfill_repair action must be backfill_event"},
+		{name: "wrong backfill reason", json: repairResultJSONWithBackfillRepair(`{"id":"repair-2","action":"backfill_event","reason":"other reason","actor":{"type":"agent","id":"main"}}`), want: "truth-plane repair backfill_repair reason must be manual repair smoke backfill receive event"},
+		{name: "wrong backfill actor", json: repairResultJSONWithBackfillRepair(`{"id":"repair-2","action":"backfill_event","reason":"manual repair smoke backfill receive event","actor":{"type":"agent","id":"operator"}}`), want: "truth-plane repair backfill_repair actor must be agent:main"},
+		{name: "wrong final state", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"backfill_repair":` + validBackfillRepairJSON() + `,"final_handoff_state":"dispatched","tools":` + validRepairToolsJSON() + `}}`, want: "truth-plane repair final_handoff_state must be received"},
+		{name: "tools not array", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"backfill_repair":` + validBackfillRepairJSON() + `,"final_handoff_state":"received","tools":{}}}`, want: "truth-plane repair tools must be an array"},
+		{name: "missing tool", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"backfill_repair":` + validBackfillRepairJSON() + `,"final_handoff_state":"received","tools":["handoff_create","handoff_dispatch","handoff_progress","repair_invalidate_event","repair_list","handoff_get"]}}`, want: "missing truth-plane repair tool repair_backfill_event"},
+		{name: "unknown tool", json: `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"backfill_repair":` + validBackfillRepairJSON() + `,"final_handoff_state":"received","tools":["handoff_create","handoff_dispatch","handoff_progress","repair_invalidate_event","repair_backfill_event","repair_list","handoff_get","token-private-value"]}}`, want: "unknown truth-plane repair tool"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -84,7 +89,7 @@ func TestCheckOpenClawTruthPlaneRepairResultsRejectsInvalidJSONWithoutLeak(t *te
 }
 
 func TestCheckOpenClawTruthPlaneRepairResultsUnknownToolDoesNotLeakSenderAuthKey(t *testing.T) {
-	path := writeRepairResultJSON(t, `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":`+validRepairJSON()+`,"final_handoff_state":"dispatched","tools":["handoff_create","handoff_dispatch","handoff_progress","repair_invalidate_event","repair_list","handoff_get","token-private-value"]}}`)
+	path := writeRepairResultJSON(t, `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":`+validRepairJSON()+`,"backfill_repair":`+validBackfillRepairJSON()+`,"final_handoff_state":"received","tools":["handoff_create","handoff_dispatch","handoff_progress","repair_invalidate_event","repair_backfill_event","repair_list","handoff_get","token-private-value"]}}`)
 	check := checkOpenClawTruthPlaneRepairResults(Options{OpenClawTruthPlaneRepairResultsPath: path, SenderAuthKey: "token-private-value"})
 	if check.Status != checkStatusFailed || check.Detail != "unknown truth-plane repair tool" {
 		t.Fatalf("unexpected check: %+v", check)
@@ -104,17 +109,25 @@ func writeRepairResultJSON(t *testing.T, content string) string {
 }
 
 func validRepairResultJSON() string {
-	return `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"final_handoff_state":"dispatched","tools":` + validRepairToolsJSON() + `}}`
+	return `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"backfill_repair":` + validBackfillRepairJSON() + `,"final_handoff_state":"received","tools":` + validRepairToolsJSON() + `}}`
 }
 
 func repairResultJSONWithRepair(repair string) string {
-	return `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + repair + `,"final_handoff_state":"dispatched","tools":` + validRepairToolsJSON() + `}}`
+	return `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + repair + `,"backfill_repair":` + validBackfillRepairJSON() + `,"final_handoff_state":"received","tools":` + validRepairToolsJSON() + `}}`
+}
+
+func repairResultJSONWithBackfillRepair(repair string) string {
+	return `{"truth_plane_repair":{"handoff_id":"hf-123","workflow_id":"wf-123","invalidated_event_id":"evt-123","repair":` + validRepairJSON() + `,"backfill_repair":` + repair + `,"final_handoff_state":"received","tools":` + validRepairToolsJSON() + `}}`
 }
 
 func validRepairJSON() string {
 	return `{"id":"repair-1","action":"invalidate_event","reason":"manual repair smoke invalidate receive event","actor":{"type":"agent","id":"main"}}`
 }
 
+func validBackfillRepairJSON() string {
+	return `{"id":"repair-2","action":"backfill_event","reason":"manual repair smoke backfill receive event","actor":{"type":"agent","id":"main"}}`
+}
+
 func validRepairToolsJSON() string {
-	return `["handoff_create","handoff_dispatch","handoff_progress","repair_invalidate_event","repair_list","handoff_get"]`
+	return `["handoff_create","handoff_dispatch","handoff_progress","repair_invalidate_event","repair_backfill_event","repair_list","handoff_get"]`
 }

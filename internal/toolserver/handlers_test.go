@@ -597,6 +597,89 @@ func TestHandleRepairInvalidateEventCreatesRepair(t *testing.T) {
 	}
 }
 
+func TestHandleRepairBackfillEventCreatesRepairAndReplaysTruth(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if _, err := h.HandleHandoffDispatch(context.Background(), HandoffDispatchInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("HandleHandoffDispatch: %v", err)
+	}
+	received, err := h.HandleHandoffProgress(context.Background(), HandoffProgressInput{
+		Action:    string(orchestrator.ProtocolActionReceive),
+		HandoffID: created.Handoff.ID,
+		Actor:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffProgress(receive): %v", err)
+	}
+	if _, err := h.HandleRepairInvalidateEvent(context.Background(), RepairInvalidateEventInput{
+		EventID: received.Event.ID,
+		Reason:  "bad receive event",
+		Actor:   ActorRefInput{Type: string(orchestrator.ActorUser), ID: "operator"},
+	}); err != nil {
+		t.Fatalf("HandleRepairInvalidateEvent: %v", err)
+	}
+
+	repair, err := h.HandleRepairBackfillEvent(context.Background(), RepairBackfillEventInput{
+		WorkflowID:    created.Workflow.ID,
+		HandoffID:     created.Handoff.ID,
+		Type:          string(orchestrator.EventReceived),
+		SubjectActor:  ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		ProducerActor: ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		RequestedBy:   ActorRefInput{Type: string(orchestrator.ActorUser), ID: "operator"},
+		Reason:        "restore receive event",
+	})
+	if err != nil {
+		t.Fatalf("HandleRepairBackfillEvent: %v", err)
+	}
+	if repair.Action != "backfill_event" {
+		t.Fatalf("expected backfill_event action, got %s", repair.Action)
+	}
+	if repair.TargetID != created.Handoff.ID {
+		t.Fatalf("expected target %s, got %s", created.Handoff.ID, repair.TargetID)
+	}
+
+	repairs, err := h.HandleRepairList(context.Background(), RepairListInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleRepairList: %v", err)
+	}
+	if len(repairs) < 2 || repairs[len(repairs)-1].Action != "backfill_event" {
+		t.Fatalf("expected persisted backfill repair, got %+v", repairs)
+	}
+
+	truth, err := h.HandleHandoffGet(context.Background(), HandoffGetInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleHandoffGet: %v", err)
+	}
+	if truth.Handoff.State != orchestrator.StateReceived {
+		t.Fatalf("expected received handoff state after backfill, got %s", truth.Handoff.State)
+	}
+	if truth.Handoff.LastAuthoritativeEventID == "" || truth.Handoff.LastAuthoritativeEventID == received.Event.ID {
+		t.Fatalf("expected new backfilled event to become last authoritative event, got %+v", truth.Handoff)
+	}
+	foundBackfill := false
+	for _, event := range truth.Timeline {
+		if event.ID == truth.Handoff.LastAuthoritativeEventID && event.Type == orchestrator.EventReceived && event.Accepted {
+			foundBackfill = true
+		}
+	}
+	if !foundBackfill {
+		t.Fatalf("expected timeline to include accepted backfilled receive event, got %+v", truth.Timeline)
+	}
+}
+
 func TestHandleRepairReopenHandoffCreatesRepair(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{

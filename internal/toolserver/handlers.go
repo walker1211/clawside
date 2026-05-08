@@ -132,6 +132,16 @@ type RepairInvalidateEventInput struct {
 	Actor   ActorRefInput `json:"actor"`
 }
 
+type RepairBackfillEventInput struct {
+	WorkflowID    string        `json:"workflow_id"`
+	HandoffID     string        `json:"handoff_id"`
+	Type          string        `json:"type"`
+	SubjectActor  ActorRefInput `json:"subject_actor"`
+	ProducerActor ActorRefInput `json:"producer_actor"`
+	RequestedBy   ActorRefInput `json:"requested_by"`
+	Reason        string        `json:"reason"`
+}
+
 type RepairReopenHandoffInput struct {
 	HandoffID string        `json:"handoff_id"`
 	Reason    string        `json:"reason"`
@@ -421,6 +431,32 @@ func (h *Handlers) HandleRepairInvalidateEvent(ctx context.Context, input Repair
 		EventID: strings.TrimSpace(input.EventID),
 		Reason:  strings.TrimSpace(input.Reason),
 		Actor:   actor,
+	})
+}
+
+func (h *Handlers) HandleRepairBackfillEvent(ctx context.Context, input RepairBackfillEventInput) (orchestrator.RepairRecord, error) {
+	subjectActor, err := toActorRef(input.SubjectActor)
+	if err != nil {
+		return orchestrator.RepairRecord{}, err
+	}
+	producerActor, err := toActorRef(input.ProducerActor)
+	if err != nil {
+		return orchestrator.RepairRecord{}, err
+	}
+	requestedBy, err := toActorRef(input.RequestedBy)
+	if err != nil {
+		return orchestrator.RepairRecord{}, err
+	}
+	return h.svc.BackfillEvent(ctx, orchestrator.BackfillEventInput{
+		Event: orchestrator.EventRecord{
+			WorkflowID:    strings.TrimSpace(input.WorkflowID),
+			HandoffID:     strings.TrimSpace(input.HandoffID),
+			Type:          orchestrator.EventType(strings.TrimSpace(input.Type)),
+			SubjectActor:  subjectActor,
+			ProducerActor: producerActor,
+		},
+		Reason:      strings.TrimSpace(input.Reason),
+		RequestedBy: requestedBy,
 	})
 }
 

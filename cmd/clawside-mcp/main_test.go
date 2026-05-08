@@ -19,7 +19,7 @@ var documentedV1ToolGroups = map[string][]string{
 	"handoff lifecycle":    {"handoff_create", "handoff_get", "handoff_dispatch", "handoff_progress"},
 	"workflow query":       {"workflow_status", "workflow_list"},
 	"watch ownership":      {"watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update"},
-	"repair divergence":    {"repair_list", "repair_invalidate_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_list"},
+	"repair divergence":    {"repair_list", "repair_invalidate_event", "repair_backfill_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_list"},
 	"sender observability": {"sender_health", "sender_ready", "sender_stats", "sender_job_list", "sender_job_get"},
 	"a2a delivery":         {"a2a_deliver"},
 }
@@ -511,6 +511,73 @@ func TestServerCallRepairInvalidateEventSucceeds(t *testing.T) {
 		t.Fatalf("expected repair_invalidate_event success, got error result")
 	}
 	assertStructuredObject(t, result, "action")
+}
+
+func TestServerCallRepairBackfillEventSucceeds(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	created, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_create", Arguments: map[string]any{
+		"workflow_kind": "generic",
+		"sender":        map[string]any{"type": "agent", "id": "planner"},
+		"receiver":      map[string]any{"type": "agent", "id": "writer"},
+		"task_kind":     "generic_task",
+		"intent":        "draft chapter",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_create): %v", err)
+	}
+	handoffID := extractHandoffID(t, created)
+	workflowID := extractWorkflowID(t, created)
+	if _, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_dispatch", Arguments: map[string]any{
+		"handoff_id": handoffID,
+		"adapter":    "openclaw",
+		"target":     "agent:writer",
+	}}}); err != nil {
+		t.Fatalf("CallTool(handoff_dispatch): %v", err)
+	}
+	received, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_progress", Arguments: map[string]any{
+		"action":     "receive",
+		"handoff_id": handoffID,
+		"actor":      map[string]any{"type": "agent", "id": "writer"},
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_progress): %v", err)
+	}
+	if _, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "repair_invalidate_event", Arguments: map[string]any{
+		"event_id": extractEventID(t, received),
+		"reason":   "bad event",
+		"actor":    map[string]any{"type": "user", "id": "operator"},
+	}}}); err != nil {
+		t.Fatalf("CallTool(repair_invalidate_event): %v", err)
+	}
+
+	result, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "repair_backfill_event", Arguments: map[string]any{
+		"workflow_id":    workflowID,
+		"handoff_id":     handoffID,
+		"type":           "received",
+		"subject_actor":  map[string]any{"type": "agent", "id": "writer"},
+		"producer_actor": map[string]any{"type": "agent", "id": "writer"},
+		"requested_by":   map[string]any{"type": "user", "id": "operator"},
+		"reason":         "restore receive event",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(repair_backfill_event): %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected repair_backfill_event success, got error result")
+	}
+	payload, ok := result.StructuredContent.(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured content object, got %T", result.StructuredContent)
+	}
+	if got := payload["action"]; got != "backfill_event" {
+		t.Fatalf("expected backfill_event action, got %+v", payload)
+	}
 }
 
 func TestServerCallRepairReopenHandoffSucceeds(t *testing.T) {

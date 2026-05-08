@@ -12,12 +12,22 @@
         "id": "main"
       }
     },
-    "final_handoff_state": "dispatched",
+    "backfill_repair": {
+      "id": "repair_019dffaa-f5e1-7b5f-b4d6-6b537bb6ab9d",
+      "action": "backfill_event",
+      "reason": "manual repair smoke backfill receive event",
+      "actor": {
+        "type": "agent",
+        "id": "main"
+      }
+    },
+    "final_handoff_state": "received",
     "tools": [
       "handoff_create",
       "handoff_dispatch",
       "handoff_progress",
       "repair_invalidate_event",
+      "repair_backfill_event",
       "repair_list",
       "handoff_get"
     ]

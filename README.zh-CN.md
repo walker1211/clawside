@@ -32,7 +32,7 @@
 - `cmd/openclaw-truth-plane-extract/`：从 OpenClaw trajectory 提取最小 truth-plane handoff/workflow/watch/ownership 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-progression-extract/`：从 OpenClaw trajectory 提取完整 handoff progression 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-mutation-extract/`：从 OpenClaw trajectory 提取 watch / ownership mutation 验收结果的本地只读 CLI
-- `cmd/openclaw-truth-plane-repair-extract/`：从 OpenClaw trajectory 提取 repair invalidate-event replay 验收结果的本地只读 CLI
+- `cmd/openclaw-truth-plane-repair-extract/`：从 OpenClaw trajectory 提取 repair invalidate/backfill replay 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-reopen-extract/`：从 OpenClaw trajectory 提取 divergence/candidate/reopen handoff 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-continuity-extract/`：从 OpenClaw trajectory 提取 truth-plane continuity reopen 后继续推进验收结果的本地只读 CLI
 - `cmd/a2a-delivery/`：A2A delivery bridge CLI
@@ -133,7 +133,7 @@ cp configs/config.example.toml configs/config.toml
 - `./scripts/extract_openclaw_truth_plane_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取最小 truth-plane 验收结果
 - `./scripts/extract_openclaw_truth_plane_progression_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取完整 progression 验收结果
 - `./scripts/extract_openclaw_truth_plane_mutation_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 watch / ownership mutation 验收结果
-- `./scripts/extract_openclaw_truth_plane_repair_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 repair invalidate-event replay 验收结果
+- `./scripts/extract_openclaw_truth_plane_repair_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 repair invalidate/backfill replay 验收结果
 - `./scripts/extract_openclaw_truth_plane_reopen_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 divergence/candidate/reopen handoff 验收结果
 - `./scripts/extract_openclaw_truth_plane_continuity_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 truth-plane continuity reopen 后继续推进验收结果
 
@@ -227,6 +227,7 @@ go run ./cmd/clawside-mcp \
 - `ownership_update`
 - `repair_list`
 - `repair_invalidate_event`
+- `repair_backfill_event`
 - `repair_reopen_handoff`
 - `repair_candidate_list`
 - `divergence_list`
@@ -252,6 +253,7 @@ go run ./cmd/clawside-mcp \
 - `ownership_update`：更新 handoff ownership 字段，并同步 ownership binding
 - `repair_list`：列出 repair 记录，可按 handoff 过滤
 - `repair_invalidate_event`：使已接受事件失效并重放 handoff truth
+- `repair_backfill_event`：补录 accepted event 并重放 handoff truth
 - `repair_reopen_handoff`：重新打开 terminal handoff 并重放 truth
 - `repair_candidate_list`：列出单个 handoff 的 repair candidates
 - `divergence_list`：列出单个 handoff 的 observer divergence hints
@@ -265,7 +267,7 @@ go run ./cmd/clawside-mcp \
 边界：
 
 - 这是一个最小可用 v1 tool surface，不是完整 truth-plane MCP 产品面
-- repair backfill 和更深层 truth-plane 操作仍不属于 v1 MCP surface
+- invalidate/backfill/reopen repair 之外的更深层 truth-plane 操作仍不属于 v1 MCP surface
 - `a2a_deliver` 和 `sender_*` observability tools 依赖本地 sender sidecar 正常运行
 - `sender_*` observability tools 只读，不暴露原始消息文本、raw idempotency key 或 Telegram bot token
 - `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
@@ -446,27 +448,28 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json
 ```
 
-### Stage 3 / 阶段 3 truth-plane repair 验收
+### Stage 3 / 阶段 3 truth-plane repair invalidate/backfill 验收
 
-如需验收 OpenClaw 真实 repair replay 能力，可让 main agent 创建 handoff、dispatch、receive，然后 invalidate 这次 receive 对应的 accepted event，再从 trajectory 提取并验收 repair 记录与最终 replayed truth：
+如需验收 OpenClaw 真实 repair replay 能力，可让 main agent 创建 handoff、dispatch、receive，然后 invalidate 这次 receive 对应的 accepted event，再 backfill 一条等价的 accepted receive event，最后从 trajectory 提取并验收两条 repair 记录与最终 replayed truth：
 
 ```text
-请通过已注册的 clawside MCP tools 创建一条测试 handoff，dispatch 后执行 receive，然后 invalidate 这次 receive 对应的 event，并查询 repair 与最终 handoff truth。
+请通过已注册的 clawside MCP tools 创建一条测试 handoff，dispatch 后执行 receive，invalidate 这次 receive 对应的 event，再 backfill 一条 replacement received event，并查询 repair 与最终 handoff truth。
 
 请按顺序调用：
 1. handoff_create
 2. handoff_dispatch
 3. handoff_progress action=receive
 4. repair_invalidate_event
-5. repair_list
-6. handoff_get
+5. repair_backfill_event
+6. repair_list
+7. handoff_get
 
 创建参数请使用：
 workflow_kind=manual_openclaw_truth_plane_repair_smoke
 sender=agent:main
 receiver=agent:planner
 task_kind=truth_plane_repair_smoke
-intent=verify OpenClaw can invalidate a clawside handoff event and observe replayed truth
+intent=verify OpenClaw can invalidate and backfill a clawside handoff event and observe replayed truth
 
 dispatch 参数请使用：
 handoff_id=<created handoff_id>
@@ -483,10 +486,19 @@ event_id=<receive event id>
 reason=manual repair smoke invalidate receive event
 actor=agent:main
 
+repair_backfill_event 请使用同一个 handoff 和 workflow，并设置：
+workflow_id=<created workflow_id>
+handoff_id=<created handoff_id>
+type=received
+subject_actor=agent:planner
+producer_actor=agent:planner
+requested_by=agent:main
+reason=manual repair smoke backfill receive event
+
 repair_list 请使用同一个 handoff_id。
 handoff_get 请使用同一个 handoff_id。
 
-调用完成后，请输出 handoff_id、workflow_id、invalidated event_id、repair_id、repair action、最终 handoff state。
+调用完成后，请输出 handoff_id、workflow_id、invalidated event_id、invalidate repair_id、backfill repair_id、两条 repair action、最终 handoff state。最终 handoff state 应为 received。
 ```
 
 ```bash
@@ -798,6 +810,12 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --deliver-main --chat-id <t
 ```bash
 ./scripts/verify_openclaw_mcp.sh --mcp-command ./scripts/start_mcp.sh
 ```
+
+### Stage 10 / 阶段 10 repair backfill MCP 验收
+
+Stage 10 复用既有 Stage 3 repair evidence 路径，不新增独立的 `truth_plane_backfill` 通道。同一个 `--openclaw-truth-plane-repair-results` verifier 现在会要求 `repair_invalidate_event` 之后出现 `repair_backfill_event` evidence，校验 `manual repair smoke backfill receive event`，并要求最终 handoff truth 回到 `received`。
+
+仓库内置 `fixtures` profile 已在 `testdata/openclaw-smoke/stage0-5/repair-results.json` 中包含这条 backfill replay evidence。
 
 ## A2A delivery bridge CLI
 

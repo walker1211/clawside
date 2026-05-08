@@ -7,13 +7,18 @@ import (
 	"strings"
 )
 
-const openClawTruthPlaneRepairResultsCheckName = "openclaw_truth_plane_repair_results"
+const (
+	openClawTruthPlaneRepairResultsCheckName = "openclaw_truth_plane_repair_results"
+	openClawTruthPlaneRepairReason           = "manual repair smoke invalidate receive event"
+	openClawTruthPlaneBackfillRepairReason   = "manual repair smoke backfill receive event"
+)
 
 var requiredOpenClawTruthPlaneRepairTools = []string{
 	"handoff_create",
 	"handoff_dispatch",
 	"handoff_progress",
 	"repair_invalidate_event",
+	"repair_backfill_event",
 	"repair_list",
 	"handoff_get",
 }
@@ -41,7 +46,7 @@ func checkOpenClawTruthPlaneRepairResults(opts Options) CheckResult {
 	return CheckResult{
 		Name:   openClawTruthPlaneRepairResultsCheckName,
 		Status: checkStatusOK,
-		Detail: "validated repair_invalidate_event replayed truth",
+		Detail: "validated repair_backfill_event replayed truth",
 	}
 }
 
@@ -69,12 +74,20 @@ func validateOpenClawTruthPlaneRepairResults(value any) (string, bool) {
 	if !ok {
 		return "truth-plane repair repair must be an object", false
 	}
-	if detail, ok := validateOpenClawTruthPlaneRepair(repair); !ok {
+	if detail, ok := validateOpenClawTruthPlaneRepair(repair, "repair", "invalidate_event", openClawTruthPlaneRepairReason); !ok {
 		return detail, false
 	}
 
-	if truthPlaneStringValue(repairRoot["final_handoff_state"]) != "dispatched" {
-		return "truth-plane repair final_handoff_state must be dispatched", false
+	backfillRepair, ok := repairRoot["backfill_repair"].(map[string]any)
+	if !ok {
+		return "truth-plane repair backfill_repair must be an object", false
+	}
+	if detail, ok := validateOpenClawTruthPlaneRepair(backfillRepair, "backfill_repair", "backfill_event", openClawTruthPlaneBackfillRepairReason); !ok {
+		return detail, false
+	}
+
+	if truthPlaneStringValue(repairRoot["final_handoff_state"]) != "received" {
+		return "truth-plane repair final_handoff_state must be received", false
 	}
 
 	tools, ok := repairRoot["tools"].([]any)
@@ -88,19 +101,19 @@ func validateOpenClawTruthPlaneRepairResults(value any) (string, bool) {
 	return "", true
 }
 
-func validateOpenClawTruthPlaneRepair(repair map[string]any) (string, bool) {
+func validateOpenClawTruthPlaneRepair(repair map[string]any, field string, action string, reason string) (string, bool) {
 	if strings.TrimSpace(truthPlaneStringValue(repair["id"])) == "" {
-		return "truth-plane repair id must be non-empty", false
+		return "truth-plane repair " + field + " id must be non-empty", false
 	}
-	if truthPlaneStringValue(repair["action"]) != "invalidate_event" {
-		return "truth-plane repair action must be invalidate_event", false
+	if truthPlaneStringValue(repair["action"]) != action {
+		return "truth-plane repair " + field + " action must be " + action, false
 	}
-	if truthPlaneStringValue(repair["reason"]) != "manual repair smoke invalidate receive event" {
-		return "truth-plane repair reason must be manual repair smoke invalidate receive event", false
+	if truthPlaneStringValue(repair["reason"]) != reason {
+		return "truth-plane repair " + field + " reason must be " + reason, false
 	}
 	actor, _ := repair["actor"].(map[string]any)
 	if truthPlaneStringValue(actor["type"]) != "agent" || truthPlaneStringValue(actor["id"]) != "main" {
-		return "truth-plane repair actor must be agent:main", false
+		return "truth-plane repair " + field + " actor must be agent:main", false
 	}
 	return "", true
 }

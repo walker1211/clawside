@@ -32,7 +32,7 @@ This version now productizes the minimal v1 into an installable, registerable, a
 - `cmd/openclaw-truth-plane-extract/`: local read-only CLI for extracting minimal truth-plane handoff/workflow/watch/ownership validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-progression-extract/`: local read-only CLI for extracting completed handoff progression validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-mutation-extract/`: local read-only CLI for extracting watch / ownership mutation validation results from OpenClaw trajectory.
-- `cmd/openclaw-truth-plane-repair-extract/`: local read-only CLI for extracting repair invalidate-event replay validation results from OpenClaw trajectory.
+- `cmd/openclaw-truth-plane-repair-extract/`: local read-only CLI for extracting repair invalidate/backfill replay validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-reopen-extract/`: local read-only CLI for extracting divergence/candidate/reopen handoff validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-continuity-extract/`: local read-only CLI for extracting truth-plane continuity validation results after reopening and continuing the same handoff from OpenClaw trajectory.
 - `cmd/a2a-delivery/`: A2A delivery bridge CLI.
@@ -133,7 +133,7 @@ Notes:
 - `./scripts/extract_openclaw_truth_plane_results.sh`: extracts minimal truth-plane validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_progression_results.sh`: extracts completed progression validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_mutation_results.sh`: extracts watch / ownership mutation validation results from OpenClaw trajectory `events.jsonl`.
-- `./scripts/extract_openclaw_truth_plane_repair_results.sh`: extracts repair invalidate-event replay validation results from OpenClaw trajectory `events.jsonl`.
+- `./scripts/extract_openclaw_truth_plane_repair_results.sh`: extracts repair invalidate/backfill replay validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_reopen_results.sh`: extracts divergence/candidate/reopen handoff validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_continuity_results.sh`: extracts truth-plane continuity validation results after reopening and continuing the same handoff from OpenClaw trajectory `events.jsonl`.
 
@@ -227,6 +227,7 @@ Current v1 tools:
 - `ownership_update`
 - `repair_list`
 - `repair_invalidate_event`
+- `repair_backfill_event`
 - `repair_reopen_handoff`
 - `repair_candidate_list`
 - `divergence_list`
@@ -252,6 +253,7 @@ Recommended reading:
 - `ownership_update`: updates handoff ownership fields and keeps the ownership binding synchronized.
 - `repair_list`: lists repair records, optionally filtered by handoff.
 - `repair_invalidate_event`: invalidates an accepted event and replays handoff truth.
+- `repair_backfill_event`: backfills an accepted event and replays handoff truth.
 - `repair_reopen_handoff`: reopens a terminal handoff and replays truth.
 - `repair_candidate_list`: lists repair candidates for a handoff.
 - `divergence_list`: lists observer divergence hints for a handoff.
@@ -265,7 +267,7 @@ Recommended reading:
 Boundaries:
 
 - This is a minimal v1 tool surface, not the full truth-plane MCP product surface.
-- Lower-level repair backfill and deeper truth-plane operations still live outside the v1 MCP surface.
+- Deeper truth-plane operations beyond invalidate/backfill/reopen repair still live outside the v1 MCP surface.
 - `a2a_deliver` and `sender_*` observability tools depend on the local sender sidecar.
 - `sender_*` observability tools are read-only and do not expose raw message text, raw idempotency keys, or Telegram bot tokens.
 - `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` depend on `--db` pointing to the same sqlite truth store.
@@ -446,27 +448,28 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json
 ```
 
-### Stage 3 truth-plane repair validation
+### Stage 3 truth-plane repair invalidate/backfill validation
 
-To validate that OpenClaw really performs repair replay, ask the main agent to create a handoff, dispatch it, receive it, invalidate that accepted receive event, then extract and validate the repair record plus final replayed truth from the trajectory:
+To validate that OpenClaw really performs repair replay, ask the main agent to create a handoff, dispatch it, receive it, invalidate that accepted receive event, backfill an equivalent accepted receive event, then extract and validate both repair records plus final replayed truth from the trajectory:
 
 ```text
-Please create one test handoff through the registered clawside MCP tools, dispatch it, run receive, then invalidate the event from that receive call and query repair plus final handoff truth.
+Please create one test handoff through the registered clawside MCP tools, dispatch it, run receive, invalidate the event from that receive call, backfill a replacement received event, and query repair plus final handoff truth.
 
 Call these tools in order:
 1. handoff_create
 2. handoff_dispatch
 3. handoff_progress action=receive
 4. repair_invalidate_event
-5. repair_list
-6. handoff_get
+5. repair_backfill_event
+6. repair_list
+7. handoff_get
 
 Use these creation parameters:
 workflow_kind=manual_openclaw_truth_plane_repair_smoke
 sender=agent:main
 receiver=agent:planner
 task_kind=truth_plane_repair_smoke
-intent=verify OpenClaw can invalidate a clawside handoff event and observe replayed truth
+intent=verify OpenClaw can invalidate and backfill a clawside handoff event and observe replayed truth
 
 Use these dispatch parameters:
 handoff_id=<created handoff_id>
@@ -483,10 +486,19 @@ event_id=<receive event id>
 reason=manual repair smoke invalidate receive event
 actor=agent:main
 
+For repair_backfill_event, use the same handoff and workflow and set:
+workflow_id=<created workflow_id>
+handoff_id=<created handoff_id>
+type=received
+subject_actor=agent:planner
+producer_actor=agent:planner
+requested_by=agent:main
+reason=manual repair smoke backfill receive event
+
 Call repair_list with the same handoff_id.
 Call handoff_get with the same handoff_id.
 
-After the calls complete, output handoff_id, workflow_id, invalidated event_id, repair_id, repair action, and final handoff state.
+After the calls complete, output handoff_id, workflow_id, invalidated event_id, invalidate repair_id, backfill repair_id, both repair actions, and final handoff state. The final handoff state should be received.
 ```
 
 ```bash
@@ -798,6 +810,12 @@ The wrapper defaults to `configs/config.toml`, `sender.db`, `http://127.0.0.1:87
 ```bash
 ./scripts/verify_openclaw_mcp.sh --mcp-command ./scripts/start_mcp.sh
 ```
+
+### Stage 10 repair backfill MCP validation
+
+Stage 10 extends the existing Stage 3 repair evidence path instead of adding a separate `truth_plane_backfill` channel. The same `--openclaw-truth-plane-repair-results` verifier now requires `repair_backfill_event` evidence after `repair_invalidate_event`, validates `manual repair smoke backfill receive event`, and expects final handoff truth to be `received`.
+
+The bundled fixtures profile includes this backfill replay evidence in `testdata/openclaw-smoke/stage0-5/repair-results.json`.
 
 ## A2A delivery bridge CLI
 

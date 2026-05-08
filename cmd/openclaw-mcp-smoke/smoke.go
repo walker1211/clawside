@@ -73,6 +73,7 @@ var expectedV1Tools = []string{
 	"ownership_update",
 	"repair_list",
 	"repair_invalidate_event",
+	"repair_backfill_event",
 	"repair_reopen_handoff",
 	"repair_candidate_list",
 	"divergence_list",

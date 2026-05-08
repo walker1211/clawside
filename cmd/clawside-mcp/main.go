@@ -216,6 +216,15 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return handlers.HandleRepairInvalidateEvent(ctx, args)
 	}))
 
+	repairBackfillEventTool := mcp.NewTool("repair_backfill_event",
+		mcp.WithDescription("Backfill an accepted event and rebuild handoff truth"),
+		mcp.WithInputSchema[toolserver.RepairBackfillEventInput](),
+		mcp.WithOutputSchema[orchestrator.RepairRecord](),
+	)
+	s.AddTool(repairBackfillEventTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.RepairBackfillEventInput) (orchestrator.RepairRecord, error) {
+		return handlers.HandleRepairBackfillEvent(ctx, args)
+	}))
+
 	repairReopenHandoffTool := mcp.NewTool("repair_reopen_handoff",
 		mcp.WithDescription("Reopen a terminal handoff and rebuild handoff truth"),
 		mcp.WithInputSchema[toolserver.RepairReopenHandoffInput](),
