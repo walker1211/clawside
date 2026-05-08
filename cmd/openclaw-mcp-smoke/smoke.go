@@ -56,6 +56,7 @@ type Options struct {
 	OpenClawTruthPlaneRepairResultsPath      string
 	OpenClawTruthPlaneReopenResultsPath      string
 	OpenClawTruthPlaneContinuityResultsPath  string
+	OpenClawTruthPlaneDivergenceResultsPath  string
 	ChatID                                   int64
 	Text                                     string
 }
@@ -150,6 +151,7 @@ func applyFixturesProfileDefaults(opts Options) Options {
 	opts.OpenClawTruthPlaneRepairResultsPath = filepath.Join(fixtureDir, "repair-results.json")
 	opts.OpenClawTruthPlaneReopenResultsPath = filepath.Join(fixtureDir, "reopen-results.json")
 	opts.OpenClawTruthPlaneContinuityResultsPath = filepath.Join(fixtureDir, "continuity-results.json")
+	opts.OpenClawTruthPlaneDivergenceResultsPath = filepath.Join(fixtureDir, "divergence-results.json")
 	return opts
 }
 
@@ -218,6 +220,7 @@ func truthPlaneFullEvidencePaths(opts Options) []requiredProfilePath {
 		{flagName: "openclaw-truth-plane-repair-results", value: opts.OpenClawTruthPlaneRepairResultsPath},
 		{flagName: "openclaw-truth-plane-reopen-results", value: opts.OpenClawTruthPlaneReopenResultsPath},
 		{flagName: "openclaw-truth-plane-continuity-results", value: opts.OpenClawTruthPlaneContinuityResultsPath},
+		{flagName: "openclaw-truth-plane-divergence-results", value: opts.OpenClawTruthPlaneDivergenceResultsPath},
 	}
 }
 
@@ -275,6 +278,7 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	report.addCheck(checkOpenClawTruthPlaneRepairResults(opts))
 	report.addCheck(checkOpenClawTruthPlaneReopenResults(opts))
 	report.addCheck(checkOpenClawTruthPlaneContinuityResults(opts))
+	report.addCheck(checkOpenClawTruthPlaneDivergenceResults(opts))
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
 	} else {

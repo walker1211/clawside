@@ -34,6 +34,7 @@ This version now productizes the minimal v1 into an installable, registerable, a
 - `cmd/openclaw-truth-plane-mutation-extract/`: local read-only CLI for extracting watch / ownership mutation validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-repair-extract/`: local read-only CLI for extracting repair invalidate/backfill replay validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-reopen-extract/`: local read-only CLI for extracting divergence/candidate/reopen handoff validation results from OpenClaw trajectory.
+- `cmd/openclaw-truth-plane-divergence-extract/`: local read-only CLI for extracting divergence/candidate/E2E completed truth validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-continuity-extract/`: local read-only CLI for extracting truth-plane continuity validation results after reopening and continuing the same handoff from OpenClaw trajectory.
 - `cmd/a2a-delivery/`: A2A delivery bridge CLI.
 - `internal/configbuilder/`: extracts the minimal sender config from OpenClaw source config.
@@ -114,6 +115,7 @@ Then fill in:
 ./scripts/extract_openclaw_truth_plane_mutation_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_repair_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_reopen_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
+./scripts/extract_openclaw_truth_plane_divergence_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_continuity_results.sh --events .openclaw/trajectory-exports/export-directory/events.jsonl
 ```
 
@@ -135,6 +137,7 @@ Notes:
 - `./scripts/extract_openclaw_truth_plane_mutation_results.sh`: extracts watch / ownership mutation validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_repair_results.sh`: extracts repair invalidate/backfill replay validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_reopen_results.sh`: extracts divergence/candidate/reopen handoff validation results from OpenClaw trajectory `events.jsonl`.
+- `./scripts/extract_openclaw_truth_plane_divergence_results.sh`: extracts divergence/candidate/E2E completed truth validation results from OpenClaw trajectory `events.jsonl`.
 - `./scripts/extract_openclaw_truth_plane_continuity_results.sh`: extracts truth-plane continuity validation results after reopening and continuing the same handoff from OpenClaw trajectory `events.jsonl`.
 
 `./start.sh` / `./stop.sh` / `./restart.sh` only manage the pidfile they write. If you started `./scripts/start.sh` manually in the foreground, stop that process manually.
@@ -681,10 +684,11 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
   --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
   --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-divergence-results /tmp/openclaw-truth-plane-divergence-results.json \
   --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
 ```
 
-`truth-plane-full` requires every Stage 0-5 OpenClaw trajectory extractor JSON path explicitly. Missing evidence fails the run instead of being treated as skipped.
+`truth-plane-full` requires every Stage 0-5 plus Stage 12 divergence OpenClaw trajectory extractor JSON path explicitly. Missing evidence fails the run instead of being treated as skipped.
 
 Release-grade read-only evidence gate:
 
@@ -697,6 +701,7 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
   --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
   --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-divergence-results /tmp/openclaw-truth-plane-divergence-results.json \
   --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
 ```
 
@@ -711,6 +716,7 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
   --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
   --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-divergence-results /tmp/openclaw-truth-plane-divergence-results.json \
   --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json \
   --deliver-main \
   --chat-id <telegram_chat_id>
@@ -738,7 +744,7 @@ These fixtures are for local / CI regression. They prove the verifier still acce
 
 Release or full acceptance still uses:
 
-- `truth-plane-full`: pass all seven JSON files extracted from real OpenClaw trajectory evidence explicitly;
+- `truth-plane-full`: pass all eight JSON files extracted from real OpenClaw trajectory evidence explicitly;
 - `release`: start from real evidence and explicitly enable `--deliver-main` and `--chat-id`.
 
 Real delivery still goes through the sender backend only and never calls the Telegram API directly.
@@ -845,10 +851,51 @@ SENDER_AUTH_KEY=... scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
   --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
   --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-divergence-results /tmp/openclaw-truth-plane-divergence-results.json \
   --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
 ```
 
 Only after explicit authorization, run the real delivery gate with `--profile release --deliver-main --chat-id <telegram_chat_id>`. That path still uses `scripts/verify_openclaw_mcp.sh`, goes through the sender backend, and does not call Telegram directly.
+
+### Stage 12 divergence / E2E closure validation
+
+Stage 12 splits divergence observation into its own read-only evidence path instead of relying only on reopen/continuity validation. One handoff is progressed all the way to `completed`; `divergence_list` then observes `transport_missing_received`, `repair_candidate_list` verifies a `missing_authoritative_progress` candidate, and final `handoff_get` plus `workflow_status` prove the E2E truth still closes at `completed`.
+
+```text
+Create one test handoff through the registered clawside MCP tools, dispatch it, progress it to completed according to the protocol, then query divergence, repair candidates, handoff truth, and workflow status.
+
+Call these tools in order:
+1. handoff_create
+2. handoff_dispatch
+3. handoff_progress action=receive
+4. handoff_progress action=claim
+5. handoff_progress action=start
+6. handoff_progress action=checkpoint
+7. handoff_progress action=complete
+8. divergence_list
+9. repair_candidate_list
+10. handoff_get
+11. workflow_status
+
+After the calls complete, output handoff_id, workflow_id, divergence_id, candidate_id, signal_type, candidate reason, final handoff state, and final workflow status.
+```
+
+```bash
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_truth_plane_divergence_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-truth-plane-divergence-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-truth-plane-divergence-results /tmp/openclaw-truth-plane-divergence-results.json
+```
+
+Expected result summary includes:
+
+```text
+openclaw_truth_plane_divergence_results: ok
+```
 
 ## A2A delivery bridge CLI
 

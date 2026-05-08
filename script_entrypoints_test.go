@@ -510,6 +510,51 @@ func TestOpenClawTruthPlaneReopenExtractScriptEntrypoint(t *testing.T) {
 	}
 }
 
+func TestOpenClawTruthPlaneDivergenceExtractScriptEntrypoint(t *testing.T) {
+	path := "scripts/extract_openclaw_truth_plane_divergence_results.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	if !strings.Contains(content, "go run -C \"$ROOT_DIR\" ./cmd/openclaw-truth-plane-divergence-extract --events \"$EVENTS_PATH\"") {
+		t.Fatalf("expected %s to invoke openclaw-truth-plane-divergence-extract with go run -C and --events", path)
+	}
+	for _, helpToken := range []string{"help", "--help", "-h"} {
+		if !strings.Contains(content, helpToken) {
+			t.Fatalf("expected %s to support help token %q", path, helpToken)
+		}
+	}
+	if !strings.Contains(content, "EVENTS_PATH=\"\"") {
+		t.Fatalf("expected %s to default events path to empty", path)
+	}
+	if !strings.Contains(content, "--events PATH") {
+		t.Fatalf("expected %s help to list --events", path)
+	}
+	if !strings.Contains(content, "--events)") || !strings.Contains(content, "EVENTS_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --events PATH", path)
+	}
+	if !strings.Contains(content, "OUTPUT_PATH=\"\"") {
+		t.Fatalf("expected %s to default output path to empty", path)
+	}
+	if !strings.Contains(content, "--output PATH") {
+		t.Fatalf("expected %s help to list --output", path)
+	}
+	if !strings.Contains(content, "--output)") || !strings.Contains(content, "OUTPUT_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --output PATH", path)
+	}
+	if !strings.Contains(content, "if [[ -n \"$OUTPUT_PATH\" ]]; then") || !strings.Contains(content, "set -- \"$@\" --output \"$OUTPUT_PATH\"") {
+		t.Fatalf("expected %s to forward --output only when set", path)
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") {
+		t.Fatalf("%s should avoid Bash arrays for Bash 3.2 with set -u", path)
+	}
+}
+
 func TestOpenClawTruthPlaneContinuityExtractScriptEntrypoint(t *testing.T) {
 	path := "scripts/extract_openclaw_truth_plane_continuity_results.sh"
 	info, err := os.Stat(path)
@@ -581,6 +626,25 @@ func TestReadmeDocumentsOpenClawTruthPlaneReopenValidation(t *testing.T) {
 			"divergence_list",
 			"repair_candidate_list",
 			"--openclaw-truth-plane-reopen-results",
+		} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", path, want)
+			}
+		}
+	}
+}
+
+func TestReadmeDocumentsOpenClawTruthPlaneDivergenceValidation(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		content := readTextFile(t, path)
+		for _, want := range []string{
+			"cmd/openclaw-truth-plane-divergence-extract/",
+			"scripts/extract_openclaw_truth_plane_divergence_results.sh",
+			"divergence_list",
+			"repair_candidate_list",
+			"--openclaw-truth-plane-divergence-results",
+			"transport_missing_received",
+			"missing_authoritative_progress",
 		} {
 			if !strings.Contains(content, want) {
 				t.Fatalf("expected %s to contain %q", path, want)
@@ -727,6 +791,41 @@ func TestReadmeStage9DocumentsRemoteCIRelease(t *testing.T) {
 		for _, want := range wantTokens {
 			if !strings.Contains(section, want) {
 				t.Fatalf("expected %s Stage 9 section to contain %q", tc.path, want)
+			}
+		}
+	}
+}
+
+func TestReadmeStage12DocumentsDivergenceE2EClosure(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		heading string
+	}{
+		{path: "README.zh-CN.md", heading: "### Stage 12 / 阶段 12 divergence / E2E 闭环验收"},
+		{path: "README.en.md", heading: "### Stage 12 divergence / E2E closure validation"},
+	} {
+		section := readReadmeSection(t, tc.path, tc.heading)
+		wantTokens := []string{
+			"Stage 12",
+			"scripts/extract_openclaw_truth_plane_divergence_results.sh",
+			"--openclaw-truth-plane-divergence-results",
+			"divergence_list",
+			"repair_candidate_list",
+			"handoff_get",
+			"workflow_status",
+			"transport_missing_received",
+			"missing_authoritative_progress",
+			"openclaw_truth_plane_divergence_results: ok",
+			"completed",
+		}
+		if tc.path == "README.zh-CN.md" {
+			wantTokens = append(wantTokens, "闭环", "只读")
+		} else {
+			wantTokens = append(wantTokens, "E2E closure", "read-only")
+		}
+		for _, want := range wantTokens {
+			if !strings.Contains(section, want) {
+				t.Fatalf("expected %s Stage 12 section to contain %q", tc.path, want)
 			}
 		}
 	}
@@ -1003,6 +1102,24 @@ func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
 			if strings.Contains(line, "printf ") || strings.Contains(line, "echo ") {
 				t.Fatalf("%s should not print SENDER_AUTH_KEY values", path)
 			}
+		}
+	}
+}
+
+func TestVerifyOpenClawMCPScriptSupportsDivergenceResultPath(t *testing.T) {
+	path := "scripts/verify_openclaw_mcp.sh"
+	content := readTextFile(t, path)
+
+	for _, want := range []string{
+		"--openclaw-truth-plane-divergence-results PATH",
+		"OPENCLAW_TRUTH_PLANE_DIVERGENCE_RESULTS_PATH=\"\"",
+		"--openclaw-truth-plane-divergence-results)",
+		"OPENCLAW_TRUTH_PLANE_DIVERGENCE_RESULTS_PATH=\"$2\"",
+		"if [[ -n \"$OPENCLAW_TRUTH_PLANE_DIVERGENCE_RESULTS_PATH\" ]]; then",
+		"set -- \"$@\" --openclaw-truth-plane-divergence-results \"$OPENCLAW_TRUTH_PLANE_DIVERGENCE_RESULTS_PATH\"",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
 		}
 	}
 }
