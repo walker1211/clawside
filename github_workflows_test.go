@@ -184,7 +184,7 @@ func TestGitHubReleaseWorkflow(t *testing.T) {
 		"actions/upload-artifact@v7",
 		"actions/download-artifact@v8",
 		"sha256sum",
-		"softprops/action-gh-release",
+		"softprops/action-gh-release@v3",
 		"GITHUB_TOKEN",
 	} {
 		if !strings.Contains(content, want) {
@@ -202,6 +202,7 @@ func TestGitHubReleaseWorkflow(t *testing.T) {
 		"git tag",
 		"git push",
 		"scripts/tag-release.sh",
+		"softprops/action-gh-release@v2",
 		"GoReleaser",
 		"goreleaser",
 	} {
