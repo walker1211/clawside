@@ -686,7 +686,21 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
 
 `truth-plane-full` 要求所有 Stage 0-5 的 OpenClaw trajectory extractor JSON 都显式传入；缺少任一项都会失败，不再把缺失 evidence 当成 skipped。
 
-发布前本地 gate：
+发布级只读 evidence gate：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --profile release-evidence \
+  --openclaw-tool-results /tmp/openclaw-tool-results.json \
+  --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json \
+  --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json \
+  --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
+  --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
+  --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
+```
+
+带真实投递的发布前本地 gate：
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
@@ -702,7 +716,7 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --chat-id <telegram_chat_id>
 ```
 
-`release` 会先执行本地 Go readiness 检查，再执行完整 OpenClaw MCP smoke；真实投递仍然只通过 sender 后端完成，不直接调用 Telegram API。
+`release-evidence` 会先执行本地 Go readiness 检查，再执行完整 OpenClaw MCP smoke，并保持只读。`release` 在此基础上增加显式真实投递 gate。真实投递仍然只通过 sender 后端完成，不直接调用 Telegram API。
 
 ### Stage 7 / 阶段 7 fixtures profile 回归验收
 
@@ -816,6 +830,25 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --deliver-main --chat-id <t
 Stage 10 复用既有 Stage 3 repair evidence 路径，不新增独立的 `truth_plane_backfill` 通道。同一个 `--openclaw-truth-plane-repair-results` verifier 现在会要求 `repair_invalidate_event` 之后出现 `repair_backfill_event` evidence，校验 `manual repair smoke backfill receive event`，并要求最终 handoff truth 回到 `received`。
 
 仓库内置 `fixtures` profile 已在 `testdata/openclaw-smoke/stage0-5/repair-results.json` 中包含这条 backfill replay evidence。
+
+### Stage 11 / 阶段 11 release evidence gate
+
+Stage 11 将 release acceptance 拆成只读的发布级 evidence gate，以及需要显式授权的真实投递 gate。`fixtures` 只用于回归，`truth-plane-full` 用于只验证真实 trajectory evidence，`release-evidence` 用于打 tag 前把真实 OpenClaw trajectory extracts 当成发布级 evidence 验收。
+
+```bash
+scripts/ci-local.sh clean
+SENDER_AUTH_KEY=... scripts/verify_openclaw_mcp.sh \
+  --profile release-evidence \
+  --openclaw-tool-results /tmp/openclaw-tool-results.json \
+  --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json \
+  --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json \
+  --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
+  --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
+  --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
+```
+
+只有在显式授权后，才运行带 `--profile release --deliver-main --chat-id <telegram_chat_id>` 的真实投递 gate。该路径仍然使用 `scripts/verify_openclaw_mcp.sh`，经 sender 后端完成，不直接调用 Telegram。
 
 ## A2A delivery bridge CLI
 

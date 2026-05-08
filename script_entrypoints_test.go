@@ -604,6 +604,7 @@ func TestReadmeStage6DocumentsSmokeProfiles(t *testing.T) {
 		wantTokens := []string{
 			"--profile quick",
 			"--profile truth-plane-full",
+			"--profile release-evidence",
 			"--profile release",
 			"--deliver-main",
 			"--chat-id",
@@ -726,6 +727,39 @@ func TestReadmeStage9DocumentsRemoteCIRelease(t *testing.T) {
 		for _, want := range wantTokens {
 			if !strings.Contains(section, want) {
 				t.Fatalf("expected %s Stage 9 section to contain %q", tc.path, want)
+			}
+		}
+	}
+}
+
+func TestReadmeStage11DocumentsReleaseEvidenceGate(t *testing.T) {
+	for _, tc := range []struct {
+		path    string
+		heading string
+	}{
+		{path: "README.zh-CN.md", heading: "### Stage 11 / 阶段 11 release evidence gate"},
+		{path: "README.en.md", heading: "### Stage 11 release evidence gate"},
+	} {
+		section := readReadmeSection(t, tc.path, tc.heading)
+		wantTokens := []string{
+			"--profile release-evidence",
+			"--profile release",
+			"--deliver-main",
+			"--chat-id",
+			"truth-plane-full",
+			"fixtures",
+			"trajectory",
+			"scripts/ci-local.sh clean",
+			"scripts/verify_openclaw_mcp.sh",
+		}
+		if tc.path == "README.zh-CN.md" {
+			wantTokens = append(wantTokens, "只读", "真实投递", "显式授权", "发布级 evidence")
+		} else {
+			wantTokens = append(wantTokens, "read-only", "real delivery", "explicit authorization", "release-grade evidence")
+		}
+		for _, want := range wantTokens {
+			if !strings.Contains(section, want) {
+				t.Fatalf("expected %s Stage 11 section to contain %q", tc.path, want)
 			}
 		}
 	}
@@ -980,12 +1014,13 @@ func TestVerifyOpenClawMCPScriptSupportsProfiles(t *testing.T) {
 	for _, want := range []string{
 		"PROFILE=\"\"",
 		"--profile PROFILE",
-		"quick, truth-plane-full, fixtures, release",
+		"quick, truth-plane-full, fixtures, release-evidence, release",
 		"--profile)",
 		"PROFILE=\"$2\"",
 		"set -- \"$@\" --profile \"$PROFILE\"",
 		"validate_profile",
 		"run_release_readiness",
+		"if [[ \"$PROFILE\" != \"release-evidence\" && \"$PROFILE\" != \"release\" ]]",
 		"gofmt -l",
 		"go -C \"$ROOT_DIR\" vet ./...",
 		"go -C \"$ROOT_DIR\" test -count=1 ./...",

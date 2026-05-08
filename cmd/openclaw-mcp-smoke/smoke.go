@@ -26,12 +26,13 @@ const (
 	reportStatusOK     = "ok"
 	reportStatusFailed = "failed"
 
-	profileQuick          = "quick"
-	profileTruthPlaneFull = "truth-plane-full"
-	profileFixtures       = "fixtures"
-	profileRelease        = "release"
+	profileQuick           = "quick"
+	profileTruthPlaneFull  = "truth-plane-full"
+	profileFixtures        = "fixtures"
+	profileReleaseEvidence = "release-evidence"
+	profileRelease         = "release"
 
-	supportedProfileValues = "quick, truth-plane-full, fixtures, release"
+	supportedProfileValues = "quick, truth-plane-full, fixtures, release-evidence, release"
 	defaultFixtureDir      = "testdata/openclaw-smoke/stage0-5"
 )
 
@@ -123,7 +124,7 @@ type requiredProfilePath struct {
 func normalizedProfile(profile string) (string, error) {
 	profile = strings.TrimSpace(profile)
 	switch profile {
-	case "", profileQuick, profileTruthPlaneFull, profileFixtures, profileRelease:
+	case "", profileQuick, profileTruthPlaneFull, profileFixtures, profileReleaseEvidence, profileRelease:
 		return profile, nil
 	default:
 		return "", fmt.Errorf("unsupported profile %s; supported profiles: %s", profile, supportedProfileValues)
@@ -173,9 +174,14 @@ func validateProfileOptions(opts Options) error {
 		if opts.DeliverMain {
 			return errors.New("profile fixtures does not support --deliver-main; use --profile release")
 		}
-		return requireTruthPlaneFullEvidence(opts)
+		return requireTruthPlaneFullEvidenceForProfile(opts, profileTruthPlaneFull)
+	case profileReleaseEvidence:
+		if opts.DeliverMain {
+			return errors.New("profile release-evidence is read-only; use --profile release for --deliver-main")
+		}
+		return requireTruthPlaneFullEvidenceForProfile(opts, profileReleaseEvidence)
 	case profileRelease:
-		if err := requireTruthPlaneFullEvidence(opts); err != nil {
+		if err := requireTruthPlaneFullEvidenceForProfile(opts, profileRelease); err != nil {
 			return err
 		}
 		if !opts.DeliverMain {
@@ -191,9 +197,13 @@ func validateProfileOptions(opts Options) error {
 }
 
 func requireTruthPlaneFullEvidence(opts Options) error {
+	return requireTruthPlaneFullEvidenceForProfile(opts, profileTruthPlaneFull)
+}
+
+func requireTruthPlaneFullEvidenceForProfile(opts Options, profile string) error {
 	for _, required := range truthPlaneFullEvidencePaths(opts) {
 		if strings.TrimSpace(required.value) == "" {
-			return fmt.Errorf("profile truth-plane-full requires --%s", required.flagName)
+			return fmt.Errorf("profile %s requires --%s", profile, required.flagName)
 		}
 	}
 	return nil

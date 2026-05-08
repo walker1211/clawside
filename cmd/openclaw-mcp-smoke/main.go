@@ -33,7 +33,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var jsonOnly bool
 	fs := flag.NewFlagSet("openclaw-mcp-smoke", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.StringVar(&defaults.Profile, "profile", defaults.Profile, "smoke profile: quick, truth-plane-full, fixtures, release")
+	fs.StringVar(&defaults.Profile, "profile", defaults.Profile, "smoke profile: quick, truth-plane-full, fixtures, release-evidence, release")
 	fs.StringVar(&defaults.ConfigPath, "config", defaults.ConfigPath, "path to clawside config TOML")
 	fs.StringVar(&defaults.DBPath, "db", defaults.DBPath, "path to sender SQLite database")
 	fs.StringVar(&defaults.SenderBaseURL, "sender-base-url", defaults.SenderBaseURL, "sender service base URL")

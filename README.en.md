@@ -686,7 +686,21 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
 
 `truth-plane-full` requires every Stage 0-5 OpenClaw trajectory extractor JSON path explicitly. Missing evidence fails the run instead of being treated as skipped.
 
-Pre-release local gate:
+Release-grade read-only evidence gate:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --profile release-evidence \
+  --openclaw-tool-results /tmp/openclaw-tool-results.json \
+  --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json \
+  --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json \
+  --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
+  --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
+  --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
+```
+
+Pre-release local gate with real delivery:
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
@@ -702,7 +716,7 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --chat-id <telegram_chat_id>
 ```
 
-`release` runs local Go readiness checks before the full OpenClaw MCP smoke check. Real delivery still goes through the sender backend only and never calls the Telegram API directly.
+`release-evidence` runs local Go readiness checks before the full OpenClaw MCP smoke check and stays read-only. `release` adds the explicit real delivery gate on top. Real delivery still goes through the sender backend only and never calls the Telegram API directly.
 
 ### Stage 7 fixtures profile regression validation
 
@@ -816,6 +830,25 @@ The wrapper defaults to `configs/config.toml`, `sender.db`, `http://127.0.0.1:87
 Stage 10 extends the existing Stage 3 repair evidence path instead of adding a separate `truth_plane_backfill` channel. The same `--openclaw-truth-plane-repair-results` verifier now requires `repair_backfill_event` evidence after `repair_invalidate_event`, validates `manual repair smoke backfill receive event`, and expects final handoff truth to be `received`.
 
 The bundled fixtures profile includes this backfill replay evidence in `testdata/openclaw-smoke/stage0-5/repair-results.json`.
+
+### Stage 11 release evidence gate
+
+Stage 11 splits release acceptance into a read-only release-grade evidence gate and an explicitly authorized real delivery gate. Use `fixtures` for regression only, use `truth-plane-full` when you want to validate real trajectory evidence without local readiness checks, and use `release-evidence` before tagging when the real OpenClaw trajectory extracts should be treated as release-grade evidence.
+
+```bash
+scripts/ci-local.sh clean
+SENDER_AUTH_KEY=... scripts/verify_openclaw_mcp.sh \
+  --profile release-evidence \
+  --openclaw-tool-results /tmp/openclaw-tool-results.json \
+  --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json \
+  --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json \
+  --openclaw-truth-plane-mutation-results /tmp/openclaw-truth-plane-mutation-results.json \
+  --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
+  --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
+```
+
+Only after explicit authorization, run the real delivery gate with `--profile release --deliver-main --chat-id <telegram_chat_id>`. That path still uses `scripts/verify_openclaw_mcp.sh`, goes through the sender backend, and does not call Telegram directly.
 
 ## A2A delivery bridge CLI
 

@@ -304,7 +304,7 @@ func TestRunSmokeReleaseProfileDoesNotUseFixtures(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected release profile to require explicit result paths")
 	}
-	if err.Error() != "profile truth-plane-full requires --openclaw-tool-results" {
+	if err.Error() != "profile release requires --openclaw-tool-results" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -359,6 +359,57 @@ func TestRunSmokeTruthPlaneFullProfileAcceptsAllResultPaths(t *testing.T) {
 	assertCheck(t, report, "a2a_main_delivery", checkStatusSkipped)
 }
 
+func TestRunSmokeReleaseEvidenceProfileAcceptsRealEvidenceWithoutDelivery(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+	opts := validProfileEvidenceOptions(t)
+	opts.Profile = profileReleaseEvidence
+	opts.ConfigPath = configPath
+	opts.DBPath = filepath.Join(dir, "sender.db")
+
+	report, err := RunSmoke(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("run smoke: %v", err)
+	}
+
+	if report.Profile != profileReleaseEvidence {
+		t.Fatalf("expected profile %q, got %q", profileReleaseEvidence, report.Profile)
+	}
+	assertCheck(t, report, "openclaw_tool_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_progression_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_mutation_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_repair_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_reopen_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_continuity_results", checkStatusOK)
+	assertCheck(t, report, "a2a_main_delivery", checkStatusSkipped)
+}
+
+func TestRunSmokeReleaseEvidenceProfileRequiresAllResultPaths(t *testing.T) {
+	_, err := RunSmoke(context.Background(), Options{Profile: profileReleaseEvidence})
+	if err == nil {
+		t.Fatalf("expected missing result path error")
+	}
+	if err.Error() != "profile release-evidence requires --openclaw-tool-results" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunSmokeReleaseEvidenceProfileRejectsDelivery(t *testing.T) {
+	opts := validProfileEvidenceOptions(t)
+	opts.Profile = profileReleaseEvidence
+	opts.DeliverMain = true
+	opts.ChatID = 1
+
+	_, err := RunSmoke(context.Background(), opts)
+	if err == nil {
+		t.Fatalf("expected release-evidence deliver-main error")
+	}
+	if err.Error() != "profile release-evidence is read-only; use --profile release for --deliver-main" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunSmokeReleaseProfileRequiresDelivery(t *testing.T) {
 	opts := validProfileEvidenceOptions(t)
 	opts.Profile = profileRelease
@@ -386,7 +437,7 @@ func TestRunSmokeRejectsUnknownProfile(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected unknown profile error")
 	}
-	if err.Error() != "unsupported profile nightly; supported profiles: quick, truth-plane-full, fixtures, release" {
+	if err.Error() != "unsupported profile nightly; supported profiles: quick, truth-plane-full, fixtures, release-evidence, release" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

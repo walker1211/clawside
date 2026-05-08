@@ -32,7 +32,7 @@ usage() {
   printf '  SENDER_AUTH_KEY   Sender auth key forwarded to the smoke verifier when set\n'
   printf '\n'
   printf 'Options:\n'
-  printf '  --profile PROFILE          Smoke profile: quick, truth-plane-full, fixtures, release\n'
+  printf '  --profile PROFILE          Smoke profile: quick, truth-plane-full, fixtures, release-evidence, release\n'
   printf '  --config PATH              Config path (default: ROOT_DIR/configs/config.toml)\n'
   printf '  --db PATH                  Sender DB path (default: ROOT_DIR/sender.db)\n'
   printf '  --sender-base-url URL      Sender service URL\n'
@@ -218,17 +218,17 @@ done
 
 validate_profile() {
   case "$PROFILE" in
-    ""|quick|truth-plane-full|fixtures|release)
+    ""|quick|truth-plane-full|fixtures|release-evidence|release)
       ;;
     *)
-      printf 'unsupported profile %s; supported profiles: quick, truth-plane-full, fixtures, release\n' "$PROFILE" >&2
+      printf 'unsupported profile %s; supported profiles: quick, truth-plane-full, fixtures, release-evidence, release\n' "$PROFILE" >&2
       exit 1
       ;;
   esac
 }
 
 run_release_readiness() {
-  if [[ "$PROFILE" != "release" ]]; then
+  if [[ "$PROFILE" != "release-evidence" && "$PROFILE" != "release" ]]; then
     return 0
   fi
 
