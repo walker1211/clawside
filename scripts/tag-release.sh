@@ -2,16 +2,13 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-TAG_NAME=""
-PUSH_TAG="false"
 
 usage() {
-  printf 'usage: %s TAG [--push]\n' "$0"
+  printf 'usage: %s TAG\n' "$0"
   printf '\n'
-  printf 'Create a local v* release tag after scripts/ci-local.sh clean passes.\n'
+  printf 'Create and push a v* release tag after scripts/ci-local.sh clean passes.\n'
   printf '\n'
   printf 'Options:\n'
-  printf '  --push   Push the tag to origin after creating it locally.\n'
   printf '  help, --help, -h   Show this help.\n'
 }
 
@@ -24,31 +21,12 @@ if [[ $# -eq 1 ]]; then
   esac
 fi
 
-while [[ $# -gt 0 ]]; do
-  case "$1" in
-    --push)
-      PUSH_TAG="true"
-      shift
-      ;;
-    help|--help|-h)
-      usage
-      exit 0
-      ;;
-    *)
-      if [[ -n "$TAG_NAME" ]]; then
-        usage >&2
-        exit 1
-      fi
-      TAG_NAME="$1"
-      shift
-      ;;
-  esac
-done
-
-if [[ -z "$TAG_NAME" ]]; then
+if [[ $# -ne 1 ]]; then
   usage >&2
   exit 1
 fi
+
+TAG_NAME="$1"
 
 case "$TAG_NAME" in
   v*)
@@ -83,6 +61,4 @@ fi
 git tag "$TAG_NAME"
 printf 'Created local tag %s\n' "$TAG_NAME"
 
-if [[ "$PUSH_TAG" == "true" ]]; then
-  CLAWSIDE_SKIP_PRE_PUSH_CI=1 git push origin "$TAG_NAME"
-fi
+CLAWSIDE_SKIP_PRE_PUSH_CI=1 git push origin "$TAG_NAME"

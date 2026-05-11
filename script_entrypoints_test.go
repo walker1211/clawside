@@ -240,7 +240,6 @@ func TestTagReleaseScriptEntrypoint(t *testing.T) {
 	content := readTextFile(t, path)
 	for _, want := range []string{
 		"help|--help|-h",
-		"--push",
 		"git status --porcelain",
 		"v*)",
 		"git rev-parse -q --verify \"refs/tags/$TAG_NAME\"",
@@ -251,6 +250,11 @@ func TestTagReleaseScriptEntrypoint(t *testing.T) {
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	for _, unwanted := range []string{"[--push]", "--push)", "PUSH_TAG"} {
+		if strings.Contains(content, unwanted) {
+			t.Fatalf("expected %s to push by default without %q", path, unwanted)
 		}
 	}
 	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") || strings.Contains(content, "BASH_SOURCE") {
@@ -734,14 +738,13 @@ func TestReadmeStage8DocumentsLocalReleaseGuard(t *testing.T) {
 			"scripts/ci-local.sh clean",
 			"scripts/install-hooks.sh",
 			"scripts/tag-release.sh",
-			"--push",
 			"GitHub Actions",
 			"release",
 		}
 		if tc.path == "README.zh-CN.md" {
-			wantTokens = append(wantTokens, "本地发布保护", "不会自动 push", "不会创建 GitHub Release")
+			wantTokens = append(wantTokens, "本地发布保护", "会自动 push", "不会直接创建 GitHub Release")
 		} else {
-			wantTokens = append(wantTokens, "local release guard", "does not push automatically", "does not create GitHub Releases")
+			wantTokens = append(wantTokens, "local release guard", "pushes the tag automatically", "does not directly create a GitHub Release")
 		}
 		for _, want := range wantTokens {
 			if !strings.Contains(section, want) {
@@ -769,7 +772,6 @@ func TestReadmeStage9DocumentsRemoteCIRelease(t *testing.T) {
 			"v*",
 			"scripts/ci-local.sh clean",
 			"scripts/tag-release.sh vX.Y.Z",
-			"scripts/tag-release.sh vX.Y.Z --push",
 			"GitHub Release",
 			"LICENSE",
 			"go test -count=1 ./...",
@@ -785,9 +787,9 @@ func TestReadmeStage9DocumentsRemoteCIRelease(t *testing.T) {
 			"checksums",
 		}
 		if tc.path == "README.zh-CN.md" {
-			wantTokens = append(wantTokens, "远端 CI", "显式授权", "实现和本地验收不执行 push、tag 或 release", "# 明确授权后才执行：", "数据库", "日志", "产物")
+			wantTokens = append(wantTokens, "远端 CI", "明确发布授权", "本地验收不执行 push、tag 或 release", "数据库", "日志", "产物")
 		} else {
-			wantTokens = append(wantTokens, "remote CI", "explicit authorization", "implementation and local verification do not run push, tag, or release", "# Run only after explicit authorization:", "databases", "logs", "artifacts")
+			wantTokens = append(wantTokens, "remote CI", "explicit release authorization", "implementation and local verification do not run push, tag, or release", "databases", "logs", "artifacts")
 		}
 		for _, want := range wantTokens {
 			if !strings.Contains(section, want) {

@@ -37,4 +37,4 @@ Use Conventional Commits, for example `feat(mcp): add read-only status tool` or 
 
 ## Releases
 
-Only maintainers should create or push release tags. Use `scripts/tag-release.sh vX.Y.Z` to create a local tag after the clean gate passes, and only use `scripts/tag-release.sh vX.Y.Z --push` after explicit release authorization.
+Only maintainers should create or push release tags. Use `scripts/tag-release.sh vX.Y.Z` only after explicit release authorization; it runs the clean gate, creates the tag, and pushes it to origin.

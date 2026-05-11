@@ -753,7 +753,7 @@ Real delivery still goes through the sender backend only and never calls the Tel
 
 ### Stage 8 local release guard
 
-Stage 8 adds a local release guard for repeating the same safety checks before tagging. It is not GitHub Actions, does not push automatically, and does not create GitHub Releases.
+Stage 8 adds a local release guard for repeating the same safety checks before tagging and pushing. It is not GitHub Actions, and it does not directly create a GitHub Release.
 
 Run clean local CI:
 
@@ -776,19 +776,13 @@ Install the pre-push hook:
 ./scripts/install-hooks.sh
 ```
 
-Create a local release tag:
+Create and push a release tag:
 
 ```bash
 ./scripts/tag-release.sh v0.1.0
 ```
 
-`tag-release.sh` requires a clean worktree, a tag name starting with `v`, a non-existing tag, and a passing `scripts/ci-local.sh clean` run before tag creation. By default it only creates a local tag. Pass `--push` explicitly to push the tag:
-
-```bash
-./scripts/tag-release.sh v0.1.0 --push
-```
-
-`--push` only pushes the tag; it does not create a GitHub Release. Stage 8 does not add a GitHub Actions release workflow.
+`tag-release.sh` requires a clean worktree, a tag name starting with `v`, a non-existing tag, and a passing `scripts/ci-local.sh clean` run before tag creation. After the clean CI gate passes, the script pushes the tag automatically. Pushing the tag does not directly create a GitHub Release; Stage 8 does not add a GitHub Actions release workflow.
 
 ### Stage 9 remote CI and release workflow
 
@@ -804,16 +798,14 @@ Remote CI runs on `push` and `pull_request`:
 
 The release workflow runs only on `v*` tags, builds linux amd64/arm64, darwin amd64/arm64, and windows amd64 artifacts, generates checksums, and creates or updates the GitHub Release. Each release archive includes the binary, `LICENSE`, root README, multilingual READMEs, `.example.env`, and `configs/config.example.toml`; it excludes `.env`, `configs/config.toml`, databases, logs, and `.openclaw/trajectory-exports`.
 
-Recommended release path:
+Recommended release path after explicit release authorization:
 
 ```bash
 scripts/ci-local.sh clean
 scripts/tag-release.sh vX.Y.Z
-# Run only after explicit authorization:
-scripts/tag-release.sh vX.Y.Z --push
 ```
 
-`--push` pushes the `v*` tag to GitHub, then the GitHub Actions release workflow builds artifacts remotely and creates or updates the GitHub Release. Stage 9 implementation and local verification do not run push, tag, or release; those shared-state operations still require explicit authorization.
+`tag-release.sh` creates and pushes the `v*` tag to GitHub after the local clean CI gate passes, then the GitHub Actions release workflow builds artifacts remotely and creates or updates the GitHub Release. Stage 9 implementation and local verification do not run push, tag, or release; those shared-state operations still require explicit authorization.
 
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
 

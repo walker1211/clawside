@@ -753,7 +753,7 @@ testdata/openclaw-smoke/stage0-5/
 
 ### Stage 8 / 阶段 8 本地发布保护
 
-Stage 8 增加本地 release guard，用于在打 tag 前重复执行同一组安全检查。它不是 GitHub Actions，也不会自动 push、不会创建 GitHub Release。
+Stage 8 增加本地 release guard，用于在打 tag 和 push 前重复执行同一组安全检查。它不是 GitHub Actions，也不会直接创建 GitHub Release。
 
 本地 clean CI：
 
@@ -776,19 +776,13 @@ Stage 8 增加本地 release guard，用于在打 tag 前重复执行同一组�
 ./scripts/install-hooks.sh
 ```
 
-创建本地 release tag：
+创建并推送 release tag：
 
 ```bash
 ./scripts/tag-release.sh v0.1.0
 ```
 
-`tag-release.sh` 要求工作树干净、tag 名以 `v` 开头、tag 不存在，并且会在创建 tag 前强制运行 `scripts/ci-local.sh clean`。默认只创建本地 tag；只有显式传入 `--push` 才会推送 tag：
-
-```bash
-./scripts/tag-release.sh v0.1.0 --push
-```
-
-`--push` 只表示推送 tag，不会创建 GitHub Release。Stage 8 不新增 GitHub Actions release workflow。
+`tag-release.sh` 要求工作树干净、tag 名以 `v` 开头、tag 不存在，并且会在创建 tag 前强制运行 `scripts/ci-local.sh clean`。clean CI 通过后脚本会自动 push tag；push tag 本身不会直接创建 GitHub Release，Stage 8 不新增 GitHub Actions release workflow。
 
 ### Stage 9 / 阶段 9 远端 CI 与 Release workflow
 
@@ -804,16 +798,14 @@ Stage 9 在 Stage 8 本地发布保护之上增加 GitHub Actions 远端 CI 和 
 
 Release workflow 只在 `v*` tag 上运行，构建 linux amd64/arm64、darwin amd64/arm64、windows amd64 五个平台产物，生成 checksums，并创建或更新 GitHub Release。每个 release 归档包含二进制、`LICENSE`、根 README、多语言 README、`.example.env` 和 `configs/config.example.toml`，不包含 `.env`、`configs/config.toml`、数据库、日志或 `.openclaw/trajectory-exports`。
 
-推荐发布路径：
+推荐发布路径是在明确发布授权后执行：
 
 ```bash
 scripts/ci-local.sh clean
 scripts/tag-release.sh vX.Y.Z
-# 明确授权后才执行：
-scripts/tag-release.sh vX.Y.Z --push
 ```
 
-`--push` 会把 `v*` tag 推送到 GitHub，然后由 GitHub Actions release workflow 远端构建并创建或更新 GitHub Release。Stage 9 的实现和本地验收不执行 push、tag 或 release；这些共享状态操作仍需要显式授权。
+`tag-release.sh` 会在本地 clean CI 通过后创建并 push `v*` tag 到 GitHub，然后由 GitHub Actions release workflow 远端构建并创建或更新 GitHub Release。Stage 9 的实现和本地验收不执行 push、tag 或 release；这些共享状态操作仍需要显式授权。
 
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
 
