@@ -156,6 +156,21 @@ func applyFixturesProfileDefaults(opts Options) Options {
 	return opts
 }
 
+func effectiveSenderAuthKey(opts Options) string {
+	if strings.TrimSpace(opts.SenderAuthKey) != "" {
+		return opts.SenderAuthKey
+	}
+	data, err := os.ReadFile(opts.ConfigPath)
+	if err != nil {
+		return ""
+	}
+	var cfg smokeConfig
+	if err := toml.Unmarshal(data, &cfg); err != nil {
+		return ""
+	}
+	return cfg.SenderAuthKey
+}
+
 func validateProfileOptions(opts Options) error {
 	switch opts.Profile {
 	case "":
@@ -232,6 +247,7 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	}
 	opts.Profile = profile
 	opts = applyProfileDefaults(opts)
+	opts.SenderAuthKey = effectiveSenderAuthKey(opts)
 	if err := validateProfileOptions(opts); err != nil {
 		return Report{}, err
 	}

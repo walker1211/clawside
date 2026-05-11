@@ -877,7 +877,7 @@ func TestRunReportsOpenClawTruthPlaneMutationResultsFromFile(t *testing.T) {
 	assertCheck(t, report, openClawTruthPlaneMutationResultsCheckName, checkStatusOK)
 }
 
-func TestRunDeliverMainCallsA2ADeliverThroughMCP(t *testing.T) {
+func TestRunDeliverMainUsesConfigSenderAuthKeyForMCP(t *testing.T) {
 	const secret = "super-secret-sender-key"
 	const chatID int64 = 7098285098
 	const text = "hello from smoke delivery"
@@ -924,7 +924,6 @@ func TestRunDeliverMainCallsA2ADeliverThroughMCP(t *testing.T) {
 		"--config", configPath,
 		"--db", filepath.Join(dir, "clawside.db"),
 		"--sender-base-url", server.URL,
-		"--sender-auth-key", secret,
 		"--mcp-command", "go",
 		"--mcp-arg", "run",
 		"--mcp-arg", "../clawside-mcp",
