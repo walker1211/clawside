@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT_DIR/scripts/load_env.sh"
+
 CONFIG_PATH="$ROOT_DIR/configs/config.toml"
 
 if [[ ! -f "$CONFIG_PATH" ]]; then

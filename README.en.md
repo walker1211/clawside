@@ -51,11 +51,12 @@ This version now productizes the minimal v1 into an installable, registerable, a
 Recommended setup from OpenClaw config:
 
 ```bash
-export SENDER_AUTH_KEY='your-local-sender-key'
+cp .example.env .env
+# edit .env and set SENDER_AUTH_KEY to a local random key
 ./scripts/config_builder.sh
 ```
 
-By default, this reads `~/.openclaw/openclaw.json` and writes:
+Local scripts load `.env` automatically without overriding explicit environment variables or CLI flags. By default, this reads `~/.openclaw/openclaw.json` and writes:
 
 ```text
 configs/config.toml

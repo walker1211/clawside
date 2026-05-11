@@ -51,11 +51,12 @@
 推荐从 OpenClaw 配置生成本地 sender 配置：
 
 ```bash
-export SENDER_AUTH_KEY='your-local-sender-key'
+cp .example.env .env
+# 编辑 .env，将 SENDER_AUTH_KEY 改成本地随机 key
 ./scripts/config_builder.sh
 ```
 
-默认会读取 `~/.openclaw/openclaw.json`，并生成：
+本地脚本会自动读取 `.env`，但不会覆盖显式传入的环境变量或命令行参数。默认会读取 `~/.openclaw/openclaw.json`，并生成：
 
 ```text
 configs/config.toml

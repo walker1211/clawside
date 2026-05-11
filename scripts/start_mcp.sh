@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT_DIR/scripts/load_env.sh"
+
 DB_PATH="${CLAWSIDE_DB_PATH:-$ROOT_DIR/sender.db}"
 SENDER_BASE_URL="${CLAWSIDE_SENDER_BASE_URL:-http://127.0.0.1:8787}"
 SENDER_AUTH_KEY="${SENDER_AUTH_KEY:-}"

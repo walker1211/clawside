@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+. "$ROOT_DIR/scripts/load_env.sh"
+
 LOG_DIR="$ROOT_DIR/logs"
 LOG_FILE="$LOG_DIR/sender.log"
 PID_FILE="$ROOT_DIR/logs/sender.pid"

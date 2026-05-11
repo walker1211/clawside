@@ -2,9 +2,11 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT_DIR/scripts/load_env.sh"
+
 CONFIG_PATH="$ROOT_DIR/configs/config.toml"
-DB_PATH="$ROOT_DIR/sender.db"
-SENDER_BASE_URL_VALUE="${SENDER_BASE_URL:-http://127.0.0.1:8787}"
+DB_PATH="${CLAWSIDE_DB_PATH:-$ROOT_DIR/sender.db}"
+SENDER_BASE_URL_VALUE="${SENDER_BASE_URL:-${CLAWSIDE_SENDER_BASE_URL:-http://127.0.0.1:8787}}"
 MCP_COMMAND="$ROOT_DIR/scripts/start_mcp.sh"
 REGISTRATION_CONFIG_PATH=""
 OPENCLAW_TOOL_CALL_CHECKLIST="false"

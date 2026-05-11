@@ -118,6 +118,11 @@ func newTempGitRepoWithScript(t *testing.T, scriptPath string) string {
 	repo := t.TempDir()
 	runGit(t, repo, "init", "-q")
 	copyRepoFile(t, scriptPath, filepath.Join(repo, scriptPath))
+	if _, err := os.Stat("scripts/load_env.sh"); err == nil && scriptPath != "scripts/load_env.sh" {
+		copyRepoFile(t, "scripts/load_env.sh", filepath.Join(repo, "scripts/load_env.sh"))
+	} else if err != nil && !os.IsNotExist(err) {
+		t.Fatalf("stat scripts/load_env.sh: %v", err)
+	}
 	if err := os.Chmod(filepath.Join(repo, scriptPath), 0o755); err != nil {
 		t.Fatalf("chmod %s: %v", scriptPath, err)
 	}

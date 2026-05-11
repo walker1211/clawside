@@ -9,7 +9,8 @@ It currently provides a local Telegram sender, handoff/workflow orchestration fo
 ## Quick Start
 
 ```bash
-export SENDER_AUTH_KEY='your-local-sender-key'
+cp .example.env .env
+# edit .env and set SENDER_AUTH_KEY to a local random key
 ./scripts/config_builder.sh
 ./build.sh
 ./start.sh
@@ -37,11 +38,12 @@ Optional A2A routing overrides use `target_agent=bot` pairs, for example `CLAWSI
 Recommended local setup:
 
 ```bash
-export SENDER_AUTH_KEY='your-local-sender-key'
+cp .example.env .env
+# edit .env and set SENDER_AUTH_KEY to a local random key
 ./scripts/config_builder.sh
 ```
 
-This reads `~/.openclaw/openclaw.json` and writes `configs/config.toml` with mode `600`.
+Local scripts load `.env` automatically without overriding explicit environment variables or CLI flags. `scripts/config_builder.sh` reads `~/.openclaw/openclaw.json` and writes `configs/config.toml` with mode `600`.
 
 A non-secret example is available at:
 

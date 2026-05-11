@@ -2,6 +2,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+. "$ROOT_DIR/scripts/load_env.sh"
+
 OUTPUT_PATH="$(pwd)/configs/config.toml"
 
 usage() {
