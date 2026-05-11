@@ -233,6 +233,7 @@ Current v1 tools:
 - `repair_backfill_event`
 - `repair_reopen_handoff`
 - `repair_candidate_list`
+- `divergence_record`
 - `divergence_list`
 - `sender_health`
 - `sender_ready`
@@ -259,6 +260,7 @@ Recommended reading:
 - `repair_backfill_event`: backfills an accepted event and replays handoff truth.
 - `repair_reopen_handoff`: reopens a terminal handoff and replays truth.
 - `repair_candidate_list`: lists repair candidates for a handoff.
+- `divergence_record`: records an observer divergence signal for a handoff.
 - `divergence_list`: lists observer divergence hints for a handoff.
 - `sender_health`: checks sender process health.
 - `sender_ready`: checks whether the sender is ready to process delivery work.
@@ -859,23 +861,26 @@ Only after explicit authorization, run the real delivery gate with `--profile re
 
 ### Stage 12 divergence / E2E closure validation
 
-Stage 12 splits divergence observation into its own read-only evidence path instead of relying only on reopen/continuity validation. One handoff is progressed all the way to `completed`; `divergence_list` then observes `transport_missing_received`, `repair_candidate_list` verifies a `missing_authoritative_progress` candidate, and final `handoff_get` plus `workflow_status` prove the E2E truth still closes at `completed`.
+Stage 12 splits divergence observation into its own evidence path instead of relying only on reopen/continuity validation. After dispatching one handoff, `divergence_record` records a `transport_accepted` observer signal, then the same handoff is progressed all the way to `completed`; `divergence_list` observes the `transport_accepted` divergence, `repair_candidate_list` verifies a `missing_authoritative_progress` candidate, and final `handoff_get` plus `workflow_status` prove the E2E truth still closes at `completed`. The export, extractor, and verifier steps remain read-only evidence handling.
 
 ```text
-Create one test handoff through the registered clawside MCP tools, dispatch it, progress it to completed according to the protocol, then query divergence, repair candidates, handoff truth, and workflow status.
+Create one test handoff through the registered clawside MCP tools, dispatch it, record one transport_accepted observer divergence signal, progress it to completed according to the protocol, then query divergence, repair candidates, handoff truth, and workflow status.
 
 Call these tools in order:
 1. handoff_create
 2. handoff_dispatch
-3. handoff_progress action=receive
-4. handoff_progress action=claim
-5. handoff_progress action=start
-6. handoff_progress action=checkpoint
-7. handoff_progress action=complete
-8. divergence_list
-9. repair_candidate_list
-10. handoff_get
-11. workflow_status
+3. divergence_record type=transport_accepted
+4. handoff_progress action=receive
+5. handoff_progress action=claim
+6. handoff_progress action=start
+7. handoff_progress action=checkpoint
+8. handoff_progress action=complete
+9. divergence_list
+10. repair_candidate_list
+11. handoff_get
+12. workflow_status
+
+For divergence_record, use the workflow_id / handoff_id returned by handoff_create, type=transport_accepted, and producer_actor=system:adapter.
 
 After the calls complete, output handoff_id, workflow_id, divergence_id, candidate_id, signal_type, candidate reason, final handoff state, and final workflow status.
 ```

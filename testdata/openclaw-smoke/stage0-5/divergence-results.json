@@ -6,13 +6,13 @@
       "id": "div_019e055f-e06a-704e-8fe2-84d3991e09a6",
       "handoff_id": "hf_019e055f-dfae-743d-ac10-4e0a8a11c1c9",
       "workflow_id": "wf_019e055f-dfae-742e-a771-00a9d7ab136d",
-      "signal_type": "transport_missing_received"
+      "signal_type": "transport_accepted"
     },
     "repair_candidate": {
       "id": "repaircand_019e055f-e06a-704e-8fe2-84d3991e09a6",
       "handoff_id": "hf_019e055f-dfae-743d-ac10-4e0a8a11c1c9",
       "workflow_id": "wf_019e055f-dfae-742e-a771-00a9d7ab136d",
-      "signal_id": "div_019e055f-e06a-704e-8fe2-84d3991e09a6",
+      "signal_id": "signal_019e055f-e06a-704e-8fe2-84d3991e09a6",
       "reason": "missing_authoritative_progress",
       "suggested_action": "review",
       "status": "open"
@@ -22,6 +22,7 @@
     "tools": [
       "handoff_create",
       "handoff_dispatch",
+      "divergence_record",
       "handoff_progress",
       "handoff_progress",
       "handoff_progress",

@@ -247,6 +247,15 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return mcp.NewToolResultStructured(toolserver.RepairCandidateListOutput{RepairCandidates: candidates}, "Listed repair candidates"), nil
 	}))
 
+	divergenceRecordTool := mcp.NewTool("divergence_record",
+		mcp.WithDescription("Record an observer divergence signal for a handoff"),
+		mcp.WithInputSchema[toolserver.DivergenceRecordInput](),
+		mcp.WithOutputSchema[toolserver.DivergenceRecordOutput](),
+	)
+	s.AddTool(divergenceRecordTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.DivergenceRecordInput) (toolserver.DivergenceRecordOutput, error) {
+		return handlers.HandleDivergenceRecord(ctx, args)
+	}))
+
 	divergenceListTool := mcp.NewTool("divergence_list",
 		mcp.WithDescription("List observer divergences for a handoff"),
 		mcp.WithInputSchema[toolserver.DivergenceListInput](),

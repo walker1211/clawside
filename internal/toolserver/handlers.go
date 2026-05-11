@@ -156,6 +156,19 @@ type RepairCandidateListOutput struct {
 	RepairCandidates []orchestrator.RepairCandidate `json:"repair_candidates"`
 }
 
+type DivergenceRecordInput struct {
+	WorkflowID    string        `json:"workflow_id"`
+	HandoffID     string        `json:"handoff_id"`
+	Type          string        `json:"type"`
+	ProducerActor ActorRefInput `json:"producer_actor"`
+	AttemptID     string        `json:"attempt_id,omitempty"`
+}
+
+type DivergenceRecordOutput struct {
+	Divergence       orchestrator.ObserverHint      `json:"divergence"`
+	RepairCandidates []orchestrator.RepairCandidate `json:"repair_candidates"`
+}
+
 type DivergenceListInput struct {
 	HandoffID string `json:"handoff_id"`
 }
@@ -474,6 +487,42 @@ func (h *Handlers) HandleRepairCandidateList(ctx context.Context, input RepairCa
 		return nil, err
 	}
 	return h.store.ListRepairCandidatesByHandoff(ctx, handoffID)
+}
+
+func (h *Handlers) HandleDivergenceRecord(ctx context.Context, input DivergenceRecordInput) (DivergenceRecordOutput, error) {
+	handoffID, err := requireHandoffID(input.HandoffID)
+	if err != nil {
+		return DivergenceRecordOutput{}, err
+	}
+	producerActor, err := toActorRef(input.ProducerActor)
+	if err != nil {
+		return DivergenceRecordOutput{}, err
+	}
+	signalType := strings.TrimSpace(input.Type)
+	if err := h.svc.RecordObservedSignal(ctx, orchestrator.RecordObserverHintInput{Event: orchestrator.EventRecord{
+		WorkflowID:    strings.TrimSpace(input.WorkflowID),
+		HandoffID:     handoffID,
+		Type:          orchestrator.EventType(signalType),
+		ProducerActor: producerActor,
+		AttemptID:     strings.TrimSpace(input.AttemptID),
+	}}); err != nil {
+		return DivergenceRecordOutput{}, err
+	}
+
+	divergences, err := h.store.ListDivergences(ctx, handoffID)
+	if err != nil {
+		return DivergenceRecordOutput{}, err
+	}
+	for i := len(divergences) - 1; i >= 0; i-- {
+		if divergences[i].SignalType == signalType {
+			candidates, err := h.store.ListRepairCandidatesByHandoff(ctx, handoffID)
+			if err != nil {
+				return DivergenceRecordOutput{}, err
+			}
+			return DivergenceRecordOutput{Divergence: divergences[i], RepairCandidates: candidates}, nil
+		}
+	}
+	return DivergenceRecordOutput{}, fmt.Errorf("recorded divergence was not found")
 }
 
 func (h *Handlers) HandleDivergenceList(ctx context.Context, input DivergenceListInput) ([]orchestrator.ObserverHint, error) {

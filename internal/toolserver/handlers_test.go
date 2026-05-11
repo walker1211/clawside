@@ -801,6 +801,50 @@ func TestHandleDivergenceListReturnsHints(t *testing.T) {
 	}
 }
 
+func TestHandleDivergenceRecordCreatesHintAndCandidate(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if _, err := h.HandleHandoffDispatch(context.Background(), HandoffDispatchInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "manual",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("HandleHandoffDispatch: %v", err)
+	}
+
+	result, err := h.HandleDivergenceRecord(context.Background(), DivergenceRecordInput{
+		WorkflowID:    created.Workflow.ID,
+		HandoffID:     created.Handoff.ID,
+		Type:          string(orchestrator.EventTransportAccepted),
+		ProducerActor: ActorRefInput{Type: string(orchestrator.ActorSystem), ID: "adapter"},
+		AttemptID:     "attempt-manual-smoke",
+	})
+	if err != nil {
+		t.Fatalf("HandleDivergenceRecord: %v", err)
+	}
+	if result.Divergence.HandoffID != created.Handoff.ID {
+		t.Fatalf("expected divergence handoff %s, got %s", created.Handoff.ID, result.Divergence.HandoffID)
+	}
+	if result.Divergence.SignalType != string(orchestrator.EventTransportAccepted) {
+		t.Fatalf("expected transport_accepted divergence, got %s", result.Divergence.SignalType)
+	}
+	if len(result.RepairCandidates) != 1 {
+		t.Fatalf("expected 1 repair candidate, got %d", len(result.RepairCandidates))
+	}
+	if result.RepairCandidates[0].Reason != orchestrator.RepairCandidateMissingAuthoritativeProgress {
+		t.Fatalf("expected missing_authoritative_progress candidate, got %s", result.RepairCandidates[0].Reason)
+	}
+}
+
 func TestHandleHandoffProgressAcceptsShortActionName(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{

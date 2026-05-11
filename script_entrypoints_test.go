@@ -640,10 +640,11 @@ func TestReadmeDocumentsOpenClawTruthPlaneDivergenceValidation(t *testing.T) {
 		for _, want := range []string{
 			"cmd/openclaw-truth-plane-divergence-extract/",
 			"scripts/extract_openclaw_truth_plane_divergence_results.sh",
+			"divergence_record",
 			"divergence_list",
 			"repair_candidate_list",
 			"--openclaw-truth-plane-divergence-results",
-			"transport_missing_received",
+			"transport_accepted",
 			"missing_authoritative_progress",
 		} {
 			if !strings.Contains(content, want) {
@@ -809,11 +810,12 @@ func TestReadmeStage12DocumentsDivergenceE2EClosure(t *testing.T) {
 			"Stage 12",
 			"scripts/extract_openclaw_truth_plane_divergence_results.sh",
 			"--openclaw-truth-plane-divergence-results",
+			"divergence_record",
 			"divergence_list",
 			"repair_candidate_list",
 			"handoff_get",
 			"workflow_status",
-			"transport_missing_received",
+			"transport_accepted",
 			"missing_authoritative_progress",
 			"openclaw_truth_plane_divergence_results: ok",
 			"completed",

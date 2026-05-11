@@ -37,13 +37,14 @@ func writeDivergenceResultJSON(t *testing.T, content string) string {
 }
 
 func validDivergenceResultJSON() string {
-	return `{"truth_plane_divergence":{"handoff_id":"hf-123","workflow_id":"wf-123","divergence":{"id":"div-1","handoff_id":"hf-123","workflow_id":"wf-123","signal_type":"transport_missing_received"},"repair_candidate":{"id":"repaircand-1","handoff_id":"hf-123","workflow_id":"wf-123","signal_id":"div-1","reason":"missing_authoritative_progress","suggested_action":"review","status":"open"},"final_handoff_state":"completed","final_workflow_status":"completed","tools":` + validDivergenceToolsJSON() + `}}`
+	return `{"truth_plane_divergence":{"handoff_id":"hf-123","workflow_id":"wf-123","divergence":{"id":"div-1","handoff_id":"hf-123","workflow_id":"wf-123","signal_type":"transport_accepted"},"repair_candidate":{"id":"repaircand-1","handoff_id":"hf-123","workflow_id":"wf-123","signal_id":"signal-1","reason":"missing_authoritative_progress","suggested_action":"review","status":"open"},"final_handoff_state":"completed","final_workflow_status":"completed","tools":` + validDivergenceToolsJSON() + `}}`
 }
 
 func validDivergenceToolsJSON() string {
 	return `[
 		"handoff_create",
 		"handoff_dispatch",
+		"divergence_record",
 		"handoff_progress",
 		"handoff_progress",
 		"handoff_progress",

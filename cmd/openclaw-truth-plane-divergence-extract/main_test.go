@@ -17,13 +17,14 @@ func TestRunExtractsDivergenceSummary(t *testing.T) {
 		divergenceToolResultEvent("handoff_create", `{"workflow":{"id":"wf-stale"},"handoff":{"id":"hf-stale","workflow_id":"wf-stale"}}`, false),
 		divergenceToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
 		divergenceToolResultEvent("handoff_dispatch", divergenceDispatchResultJSON("hf-123", "wf-123", true), false),
+		divergenceToolResultEvent("divergence_record", divergenceRecordResultJSON("hf-123", "wf-123", "transport_accepted"), false),
 		divergenceToolResultEvent("handoff_progress", divergenceProgressResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
 		divergenceToolResultEvent("handoff_progress", divergenceProgressResultJSON("handoff.claim", "claimed", true, "hf-123", "wf-123"), false),
 		divergenceToolResultEvent("handoff_progress", divergenceProgressResultJSON("handoff.start", "started", true, "hf-123", "wf-123"), false),
 		divergenceToolResultEvent("handoff_progress", divergenceProgressResultJSON("handoff.checkpoint", "checkpointed", true, "hf-123", "wf-123"), false),
 		divergenceToolResultEvent("handoff_progress", divergenceProgressResultJSON("handoff.complete", "completed", true, "hf-123", "wf-123"), false),
-		divergenceToolResultEvent("divergence_list", `{"divergences":[{"id":"div-123","handoff_id":"hf-123","workflow_id":"wf-123","signal_type":"transport_missing_received"}]}`, false),
-		divergenceToolResultEvent("repair_candidate_list", `{"repair_candidates":[{"id":"repaircand-123","handoff_id":"hf-123","workflow_id":"wf-123","signal_id":"div-123","reason":"missing_authoritative_progress","suggested_action":"review","status":"open"}]}`, false),
+		divergenceToolResultEvent("divergence_list", `{"divergences":[{"id":"div-123","handoff_id":"hf-123","workflow_id":"wf-123","signal_type":"transport_accepted"}]}`, false),
+		divergenceToolResultEvent("repair_candidate_list", `{"repair_candidates":[{"id":"repaircand-123","handoff_id":"hf-123","workflow_id":"wf-123","signal_id":"signal-123","reason":"missing_authoritative_progress","suggested_action":"review","status":"open"}]}`, false),
 		divergenceToolResultEvent("handoff_get", divergenceFinalHandoffJSON("completed"), false),
 		divergenceToolResultEvent("workflow_status", divergenceWorkflowStatusJSON("completed", "completed", true), false),
 	)
@@ -41,16 +42,16 @@ func TestRunExtractsDivergenceSummary(t *testing.T) {
 	if summary.HandoffID != "hf-123" || summary.WorkflowID != "wf-123" {
 		t.Fatalf("unexpected ids: %+v", summary)
 	}
-	if summary.Divergence.ID != "div-123" || summary.Divergence.SignalType != "transport_missing_received" {
+	if summary.Divergence.ID != "div-123" || summary.Divergence.SignalType != "transport_accepted" {
 		t.Fatalf("unexpected divergence: %+v", summary.Divergence)
 	}
-	if summary.RepairCandidate.ID != "repaircand-123" || summary.RepairCandidate.SignalID != "div-123" || summary.RepairCandidate.Reason != "missing_authoritative_progress" || summary.RepairCandidate.SuggestedAction != "review" || summary.RepairCandidate.Status != "open" {
+	if summary.RepairCandidate.ID != "repaircand-123" || summary.RepairCandidate.SignalID != "signal-123" || summary.RepairCandidate.Reason != "missing_authoritative_progress" || summary.RepairCandidate.SuggestedAction != "review" || summary.RepairCandidate.Status != "open" {
 		t.Fatalf("unexpected repair candidate: %+v", summary.RepairCandidate)
 	}
 	if summary.FinalHandoffState != "completed" || summary.FinalWorkflowStatus != "completed" {
 		t.Fatalf("unexpected finals: %+v", summary)
 	}
-	wantTools := []string{"handoff_create", "handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "divergence_list", "repair_candidate_list", "handoff_get", "workflow_status"}
+	wantTools := []string{"handoff_create", "handoff_dispatch", "divergence_record", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "divergence_list", "repair_candidate_list", "handoff_get", "workflow_status"}
 	assertDivergenceStringsEqual(t, summary.Tools, wantTools)
 }
 
@@ -68,6 +69,10 @@ func divergenceToolResultEvent(tool string, structured string, isError bool) str
 
 func divergenceDispatchResultJSON(handoffID string, workflowID string, accepted bool) string {
 	return `{"attempt":{"handoff_id":"` + handoffID + `"},"events":[{"handoff_id":"` + handoffID + `","workflow_id":"` + workflowID + `","type":"transport_requested","accepted":` + divergenceBoolJSON(accepted) + `}]}`
+}
+
+func divergenceRecordResultJSON(handoffID string, workflowID string, signalType string) string {
+	return `{"divergence":{"id":"div-123","handoff_id":"` + handoffID + `","workflow_id":"` + workflowID + `","signal_type":"` + signalType + `"},"repair_candidates":[{"id":"repaircand-123","handoff_id":"` + handoffID + `","workflow_id":"` + workflowID + `","signal_id":"signal-123","reason":"missing_authoritative_progress","suggested_action":"review","status":"open"}]}`
 }
 
 func divergenceProgressResultJSON(action string, state string, accepted bool, handoffID string, workflowID string) string {

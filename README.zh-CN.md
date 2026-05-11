@@ -233,6 +233,7 @@ go run ./cmd/clawside-mcp \
 - `repair_backfill_event`
 - `repair_reopen_handoff`
 - `repair_candidate_list`
+- `divergence_record`
 - `divergence_list`
 - `sender_health`
 - `sender_ready`
@@ -259,6 +260,7 @@ go run ./cmd/clawside-mcp \
 - `repair_backfill_event`：补录 accepted event 并重放 handoff truth
 - `repair_reopen_handoff`：重新打开 terminal handoff 并重放 truth
 - `repair_candidate_list`：列出单个 handoff 的 repair candidates
+- `divergence_record`：记录单个 handoff 的 observer divergence signal
 - `divergence_list`：列出单个 handoff 的 observer divergence hints
 - `sender_health`：检查 sender 进程健康状态
 - `sender_ready`：检查 sender 是否已准备好处理投递工作
@@ -859,23 +861,26 @@ SENDER_AUTH_KEY=... scripts/verify_openclaw_mcp.sh \
 
 ### Stage 12 / 阶段 12 divergence / E2E 闭环验收
 
-Stage 12 将 divergence 观察从 reopen/continuity 验收里拆成独立的只读 evidence：同一条 handoff 完整走到 `completed` 后，先用 `divergence_list` 观察 `transport_missing_received`，再用 `repair_candidate_list` 验证 `missing_authoritative_progress` candidate，最后用 `handoff_get` 和 `workflow_status` 证明 E2E truth 仍然闭环在 `completed`。
+Stage 12 将 divergence 观察从 reopen/continuity 验收里拆成独立 evidence：同一条 handoff dispatch 后，先用 `divergence_record` 记录 `transport_accepted` observer signal，再完整走到 `completed`。随后用 `divergence_list` 观察 `transport_accepted` divergence，用 `repair_candidate_list` 验证 `missing_authoritative_progress` candidate，最后用 `handoff_get` 和 `workflow_status` 证明 E2E truth 仍然闭环在 `completed`。导出、extractor 与 verifier 仍是只读 evidence 路径。
 
 ```text
-请通过已注册的 clawside MCP tools 创建一条测试 handoff，dispatch 后按协议推进到 completed，然后查询 divergence、repair candidate、handoff truth 与 workflow status。
+请通过已注册的 clawside MCP tools 创建一条测试 handoff，dispatch 后记录一条 transport_accepted observer divergence signal，再按协议推进到 completed，然后查询 divergence、repair candidate、handoff truth 与 workflow status。
 
 请按顺序调用：
 1. handoff_create
 2. handoff_dispatch
-3. handoff_progress action=receive
-4. handoff_progress action=claim
-5. handoff_progress action=start
-6. handoff_progress action=checkpoint
-7. handoff_progress action=complete
-8. divergence_list
-9. repair_candidate_list
-10. handoff_get
-11. workflow_status
+3. divergence_record type=transport_accepted
+4. handoff_progress action=receive
+5. handoff_progress action=claim
+6. handoff_progress action=start
+7. handoff_progress action=checkpoint
+8. handoff_progress action=complete
+9. divergence_list
+10. repair_candidate_list
+11. handoff_get
+12. workflow_status
+
+divergence_record 请使用 handoff_create 返回的 workflow_id / handoff_id，type=transport_accepted，producer_actor=system:adapter。
 
 调用完成后，请输出 handoff_id、workflow_id、divergence_id、candidate_id、signal_type、candidate reason、final handoff state 和 final workflow status。
 ```

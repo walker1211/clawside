@@ -12,6 +12,7 @@ const openClawTruthPlaneDivergenceResultsCheckName = "openclaw_truth_plane_diver
 var requiredOpenClawTruthPlaneDivergenceTools = []string{
 	"handoff_create",
 	"handoff_dispatch",
+	"divergence_record",
 	"handoff_progress",
 	"handoff_progress",
 	"handoff_progress",
@@ -113,8 +114,8 @@ func validateOpenClawTruthPlaneDivergenceHint(divergence map[string]any, handoff
 	if truthPlaneStringValue(divergence["workflow_id"]) != workflowID {
 		return "truth-plane divergence workflow_id must match root workflow_id", false
 	}
-	if truthPlaneStringValue(divergence["signal_type"]) != "transport_missing_received" {
-		return "truth-plane divergence signal_type must be transport_missing_received", false
+	if truthPlaneStringValue(divergence["signal_type"]) != "transport_accepted" {
+		return "truth-plane divergence signal_type must be transport_accepted", false
 	}
 	return "", true
 }

@@ -17,6 +17,7 @@ const clawsideMCPServerName = "clawside"
 var divergenceTools = []string{
 	"handoff_create",
 	"handoff_dispatch",
+	"divergence_record",
 	"handoff_progress",
 	"handoff_progress",
 	"handoff_progress",
@@ -216,7 +217,7 @@ func normalizeClawsideToolName(server, mcpTool, toolName string) (string, bool) 
 
 func isDivergenceTool(tool string) bool {
 	switch tool {
-	case "handoff_create", "handoff_dispatch", "handoff_progress", "divergence_list", "repair_candidate_list", "handoff_get", "workflow_status":
+	case "handoff_create", "handoff_dispatch", "divergence_record", "handoff_progress", "divergence_list", "repair_candidate_list", "handoff_get", "workflow_status":
 		return true
 	default:
 		return false
@@ -228,6 +229,7 @@ func summarizeDivergenceResults(results []divergenceToolResult) (extractedDiverg
 	var handoffID, workflowID string
 	progressIndex := 0
 	var dispatchSeen bool
+	var divergenceRecordSeen bool
 	var divergence divergenceRecord
 	var candidate repairCandidateRecord
 
@@ -242,6 +244,7 @@ func summarizeDivergenceResults(results []divergenceToolResult) (extractedDiverg
 			workflowID = wfID
 			progressIndex = 0
 			dispatchSeen = false
+			divergenceRecordSeen = false
 			divergence = divergenceRecord{}
 			candidate = repairCandidateRecord{}
 			payload.TruthPlaneDivergence.FinalHandoffState = ""
@@ -253,8 +256,16 @@ func summarizeDivergenceResults(results []divergenceToolResult) (extractedDiverg
 				return payload, err
 			}
 			dispatchSeen = true
+		case "divergence_record":
+			if !dispatchSeen || divergenceRecordSeen {
+				continue
+			}
+			if err := validateDivergenceRecord(result.StructuredContent, handoffID, workflowID); err != nil {
+				return payload, err
+			}
+			divergenceRecordSeen = true
 		case "handoff_progress":
-			if !dispatchSeen {
+			if !divergenceRecordSeen {
 				continue
 			}
 			if progressIndex >= len(divergenceProgressions) {
@@ -274,7 +285,7 @@ func summarizeDivergenceResults(results []divergenceToolResult) (extractedDiverg
 			}
 		case "repair_candidate_list":
 			if divergence.ID != "" && candidate.ID == "" {
-				observed, err := validateRepairCandidateList(result.StructuredContent, handoffID, workflowID, divergence.ID)
+				observed, err := validateRepairCandidateList(result.StructuredContent, handoffID, workflowID)
 				if err != nil {
 					return payload, err
 				}
@@ -312,6 +323,9 @@ func summarizeDivergenceResults(results []divergenceToolResult) (extractedDiverg
 	}
 	if !dispatchSeen {
 		return payload, errors.New("missing tool handoff_dispatch in OpenClaw trajectory events")
+	}
+	if !divergenceRecordSeen {
+		return payload, errors.New("missing tool divergence_record in OpenClaw trajectory events")
 	}
 	if progressIndex < len(divergenceProgressions) {
 		return payload, fmt.Errorf("missing handoff_progress action %s in OpenClaw trajectory events", divergenceProgressions[progressIndex].Action)
@@ -433,6 +447,21 @@ func progressionIDs(content map[string]any) (string, string) {
 	return handoffID, workflowID
 }
 
+func validateDivergenceRecord(content map[string]any, handoffID, workflowID string) error {
+	gotHandoffID, ok := nestedString(content, "divergence", "handoff_id")
+	if !ok || gotHandoffID != handoffID {
+		return errors.New("divergence_record handoff id does not match handoff_create")
+	}
+	gotWorkflowID, ok := nestedString(content, "divergence", "workflow_id")
+	if !ok || gotWorkflowID != workflowID {
+		return errors.New("divergence_record workflow id does not match handoff_create")
+	}
+	if signalType, _ := nestedString(content, "divergence", "signal_type"); signalType != "transport_accepted" {
+		return errors.New("divergence_record signal_type must be transport_accepted")
+	}
+	return nil
+}
+
 func validateDivergenceList(content map[string]any, handoffID, workflowID string) (divergenceRecord, error) {
 	entries, ok := content["divergences"].([]any)
 	if !ok {
@@ -459,8 +488,8 @@ func validateDivergenceList(content map[string]any, handoffID, workflowID string
 			if record.ID == "" {
 				return divergenceRecord{}, errors.New("divergence_list divergence id is required")
 			}
-			if record.SignalType != "transport_missing_received" {
-				return divergenceRecord{}, errors.New("divergence_list signal_type must be transport_missing_received")
+			if record.SignalType != "transport_accepted" {
+				return divergenceRecord{}, errors.New("divergence_list signal_type must be transport_accepted")
 			}
 			return record, nil
 		}
@@ -468,7 +497,7 @@ func validateDivergenceList(content map[string]any, handoffID, workflowID string
 	return divergenceRecord{}, errors.New("divergence_list did not include matching divergence")
 }
 
-func validateRepairCandidateList(content map[string]any, handoffID, workflowID, signalID string) (repairCandidateRecord, error) {
+func validateRepairCandidateList(content map[string]any, handoffID, workflowID string) (repairCandidateRecord, error) {
 	entries, ok := content["repair_candidates"].([]any)
 	if !ok {
 		return repairCandidateRecord{}, errors.New("repair_candidates must be an array")
@@ -497,8 +526,8 @@ func validateRepairCandidateList(content map[string]any, handoffID, workflowID, 
 			if record.ID == "" {
 				return repairCandidateRecord{}, errors.New("repair_candidate_list candidate id is required")
 			}
-			if record.SignalID != signalID {
-				return repairCandidateRecord{}, errors.New("repair_candidate_list signal_id must match divergence id")
+			if record.SignalID == "" {
+				return repairCandidateRecord{}, errors.New("repair_candidate_list signal_id is required")
 			}
 			if record.Reason != "missing_authoritative_progress" {
 				return repairCandidateRecord{}, errors.New("repair_candidate_list reason must be missing_authoritative_progress")

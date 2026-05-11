@@ -78,6 +78,7 @@ var expectedV1Tools = []string{
 	"repair_backfill_event",
 	"repair_reopen_handoff",
 	"repair_candidate_list",
+	"divergence_record",
 	"divergence_list",
 	"sender_health",
 	"sender_ready",
