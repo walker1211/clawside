@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -115,5 +116,40 @@ func TestProtocolActionRejectsMissingActor(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected missing actor to be rejected")
+	}
+}
+
+func TestProtocolActionRejectsUnsupportedActionWithSupportedActions(t *testing.T) {
+	svc := newTestService(t)
+	created := mustCreateTestHandoff(t, svc)
+
+	_, err := svc.ApplyProtocolAction(context.Background(), ProtocolRequest{
+		Action:     ProtocolAction("received"),
+		HandoffID:  created.Handoff.ID,
+		WorkflowID: created.Workflow.ID,
+		Actor:      created.Handoff.ReceiverActor,
+	})
+	if err == nil {
+		t.Fatalf("expected unsupported action to be rejected")
+	}
+
+	message := err.Error()
+	for _, want := range []string{
+		"unsupported protocol action received",
+		"supported actions:",
+		"receive (handoff.receive)",
+		"claim (handoff.claim)",
+		"start (handoff.start)",
+		"checkpoint (handoff.checkpoint)",
+		"submit (handoff.submit)",
+		"review (handoff.review)",
+		"request_revision (handoff.request_revision)",
+		"approve (handoff.approve)",
+		"complete (handoff.complete)",
+		"fail (handoff.fail)",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("expected error %q to contain %q", message, want)
+		}
 	}
 }

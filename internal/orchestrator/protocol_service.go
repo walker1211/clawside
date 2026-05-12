@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"strings"
 )
 
 func (s *Service) ApplyProtocolAction(ctx context.Context, req ProtocolRequest) (ProtocolResult, error) {
@@ -33,6 +34,19 @@ func (s *Service) ApplyProtocolAction(ctx context.Context, req ProtocolRequest) 
 		return result, err
 	}
 	return result, nil
+}
+
+var supportedProtocolActions = []ProtocolAction{
+	ProtocolActionReceive,
+	ProtocolActionClaim,
+	ProtocolActionStart,
+	ProtocolActionCheckpoint,
+	ProtocolActionSubmit,
+	ProtocolActionReview,
+	ProtocolActionRequestRevision,
+	ProtocolActionApprove,
+	ProtocolActionComplete,
+	ProtocolActionFail,
 }
 
 func protocolEventFromRequest(handoff Handoff, req ProtocolRequest) (EventRecord, error) {
@@ -78,8 +92,16 @@ func protocolEventFromRequest(handoff Handoff, req ProtocolRequest) (EventRecord
 	case ProtocolActionFail:
 		event.Type = EventFailed
 	default:
-		return EventRecord{}, fmt.Errorf("unsupported protocol action %s", req.Action)
+		return EventRecord{}, fmt.Errorf("unsupported protocol action %s; supported actions: %s", req.Action, formatSupportedProtocolActions())
 	}
 
 	return event, nil
+}
+
+func formatSupportedProtocolActions() string {
+	formatted := make([]string, 0, len(supportedProtocolActions))
+	for _, action := range supportedProtocolActions {
+		formatted = append(formatted, fmt.Sprintf("%s (%s)", strings.TrimPrefix(string(action), "handoff."), action))
+	}
+	return strings.Join(formatted, ", ")
 }
