@@ -1237,3 +1237,13 @@ func TestVerifyOpenClawMCPScriptSupportsProfiles(t *testing.T) {
 		t.Fatalf("%s should avoid Bash arrays for Bash 3.2 with set -u", path)
 	}
 }
+
+func TestVerifyOpenClawMCPScriptReleaseReadinessDoesNotLeakDotenvIntoTests(t *testing.T) {
+	path := "scripts/verify_openclaw_mcp.sh"
+	content := readTextFile(t, path)
+
+	want := "env -u SENDER_AUTH_KEY -u SENDER_BASE_URL -u CLAWSIDE_SENDER_BASE_URL -u CLAWSIDE_DB_PATH -u CLAWSIDE_TARGET_AGENT_BOT_MAP go -C \"$ROOT_DIR\" test -count=1 ./..."
+	if !strings.Contains(content, want) {
+		t.Fatalf("expected %s release readiness test command to avoid dotenv sender env; want %q", path, want)
+	}
+}
