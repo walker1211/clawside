@@ -85,6 +85,56 @@ func resolveTargetAgentBotMap(flagValue string) string {
 	return strings.TrimSpace(os.Getenv(targetAgentBotMapEnvName))
 }
 
+var handoffProgressActionValues = []string{
+	"receive",
+	"claim",
+	"start",
+	"checkpoint",
+	"submit",
+	"review",
+	"request_revision",
+	"approve",
+	"complete",
+	"fail",
+	"handoff.receive",
+	"handoff.claim",
+	"handoff.start",
+	"handoff.checkpoint",
+	"handoff.submit",
+	"handoff.review",
+	"handoff.request_revision",
+	"handoff.approve",
+	"handoff.complete",
+	"handoff.fail",
+}
+
+func withInputStringEnum(property string, values []string) mcp.ToolOption {
+	return func(t *mcp.Tool) {
+		var schema map[string]any
+		if err := json.Unmarshal(t.RawInputSchema, &schema); err != nil {
+			return
+		}
+		properties, ok := schema["properties"].(map[string]any)
+		if !ok {
+			return
+		}
+		propertySchema, ok := properties[property].(map[string]any)
+		if !ok {
+			return
+		}
+		enumValues := make([]any, 0, len(values))
+		for _, value := range values {
+			enumValues = append(enumValues, value)
+		}
+		propertySchema["enum"] = enumValues
+		rawSchema, err := json.Marshal(schema)
+		if err != nil {
+			return
+		}
+		t.RawInputSchema = rawSchema
+	}
+}
+
 func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	s := server.NewMCPServer("clawside", "0.1.0", server.WithToolCapabilities(false))
 
@@ -118,6 +168,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	handoffProgressTool := mcp.NewTool("handoff_progress",
 		mcp.WithDescription("Apply a protocol-driven handoff action. Use action values: receive (handoff.receive), claim (handoff.claim), start (handoff.start), checkpoint (handoff.checkpoint), submit (handoff.submit), review (handoff.review), request_revision (handoff.request_revision), approve (handoff.approve), complete (handoff.complete), fail (handoff.fail). Do not use state names like received, started, or completed."),
 		mcp.WithInputSchema[toolserver.HandoffProgressInput](),
+		withInputStringEnum("action", handoffProgressActionValues),
 		mcp.WithOutputSchema[orchestrator.ProtocolResult](),
 	)
 	s.AddTool(handoffProgressTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.HandoffProgressInput) (orchestrator.ProtocolResult, error) {

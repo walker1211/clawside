@@ -153,6 +153,59 @@ func TestServerHandoffProgressDescriptionListsShortActions(t *testing.T) {
 	}
 }
 
+func TestServerHandoffProgressActionSchemaListsAcceptedValues(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	tools, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	var actionSchema map[string]any
+	for _, tool := range tools.Tools {
+		if tool.Name != "handoff_progress" {
+			continue
+		}
+		actionProperty, ok := tool.InputSchema.Properties["action"].(map[string]any)
+		if !ok {
+			t.Fatalf("expected handoff_progress action property schema, got %+v", tool.InputSchema.Properties["action"])
+		}
+		actionSchema = actionProperty
+		break
+	}
+	if actionSchema == nil {
+		t.Fatalf("expected handoff_progress action schema")
+	}
+
+	enumValues, ok := actionSchema["enum"].([]any)
+	if !ok {
+		t.Fatalf("expected handoff_progress action enum, got %+v", actionSchema)
+	}
+	for _, want := range []string{
+		"receive",
+		"claim",
+		"start",
+		"checkpoint",
+		"submit",
+		"review",
+		"request_revision",
+		"approve",
+		"complete",
+		"fail",
+		"handoff.receive",
+		"handoff.complete",
+	} {
+		if !slices.ContainsFunc(enumValues, func(value any) bool { return value == want }) {
+			t.Fatalf("expected handoff_progress action enum %+v to contain %q", enumValues, want)
+		}
+	}
+}
+
 func TestServerNoInputV1ToolsExposeEmptyObjectSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "clawside.db")
 	c := newTestMCPClient(t, dbPath)
