@@ -12,6 +12,79 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func TestNewStoreConfiguresSQLiteForSerializedWrites(t *testing.T) {
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=memory&cache=shared", t.Name()))
+	if err != nil {
+		t.Fatalf("open sqlite db: %v", err)
+	}
+	defer db.Close()
+
+	if _, err := NewStore(context.Background(), db); err != nil {
+		t.Fatalf("NewStore: %v", err)
+	}
+
+	if got := db.Stats().MaxOpenConnections; got != 1 {
+		t.Fatalf("expected max open connections 1, got %d", got)
+	}
+
+	var busyTimeout int
+	if err := db.QueryRowContext(context.Background(), `PRAGMA busy_timeout`).Scan(&busyTimeout); err != nil {
+		t.Fatalf("query busy_timeout: %v", err)
+	}
+	if busyTimeout != sqliteBusyTimeoutMS {
+		t.Fatalf("expected busy_timeout %d, got %d", sqliteBusyTimeoutMS, busyTimeout)
+	}
+}
+
+func TestSingleConnectionListQueriesDoNotWaitOnOpenRows(t *testing.T) {
+	store, _ := newTestStore(t)
+	workflow, handoff := seedWorkflowAndHandoff(t, store)
+
+	tests := []struct {
+		name string
+		run  func(context.Context) error
+	}{
+		{
+			name: "ListHandoffs",
+			run: func(ctx context.Context) error {
+				_, err := store.ListHandoffs(ctx)
+				return err
+			},
+		},
+		{
+			name: "ListWorkflows",
+			run: func(ctx context.Context) error {
+				_, err := store.ListWorkflows(ctx)
+				return err
+			},
+		},
+		{
+			name: "ListWorkflowHandoffs",
+			run: func(ctx context.Context) error {
+				_, err := store.ListWorkflowHandoffs(ctx, workflow.ID)
+				return err
+			},
+		},
+		{
+			name: "EffectiveEvents",
+			run: func(ctx context.Context) error {
+				_, err := store.EffectiveEvents(ctx, handoff.ID)
+				return err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := tt.run(ctx); err != nil {
+				t.Fatalf("%s: %v", tt.name, err)
+			}
+		})
+	}
+}
+
 func TestStoreCreatesCoreTables(t *testing.T) {
 	store, db := newTestStore(t)
 	_ = store

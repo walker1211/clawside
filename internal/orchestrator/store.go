@@ -10,16 +10,31 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const sqliteBusyTimeoutMS = 5000
+
 type Store struct {
 	db *sql.DB
 }
 
 func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
+	if err := configureSQLiteDB(ctx, db); err != nil {
+		return nil, err
+	}
+
 	store := &Store{db: db}
 	if err := store.init(ctx); err != nil {
 		return nil, err
 	}
 	return store, nil
+}
+
+func configureSQLiteDB(ctx context.Context, db *sql.DB) error {
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	if _, err := db.ExecContext(ctx, fmt.Sprintf(`PRAGMA busy_timeout = %d`, sqliteBusyTimeoutMS)); err != nil {
+		return fmt.Errorf("set sqlite busy timeout: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) init(ctx context.Context) error {
@@ -466,6 +481,22 @@ func replaceWatchesExec(ctx context.Context, db execer, handoffID string, watche
 }
 
 func (s *Store) EffectiveEvents(ctx context.Context, handoffID string) ([]EventRecord, error) {
+	invalidatedIDs, err := queryStringColumn(ctx, s.db, "invalidated event ids", `
+		SELECT r.invalidates_id
+		FROM repairs r
+		JOIN accepted_events e ON e.id = r.invalidates_id
+		WHERE r.action = 'invalidate_event'
+			AND r.invalidates_id <> ''
+			AND e.handoff_id = ?
+	`, handoffID)
+	if err != nil {
+		return nil, err
+	}
+	invalidated := make(map[string]struct{}, len(invalidatedIDs))
+	for _, eventID := range invalidatedIDs {
+		invalidated[eventID] = struct{}{}
+	}
+
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT
 			id, workflow_id, handoff_id, type, producer_event_time, ingested_at,
@@ -480,23 +511,6 @@ func (s *Store) EffectiveEvents(ctx context.Context, handoffID string) ([]EventR
 		return nil, fmt.Errorf("query accepted events for %s: %w", handoffID, err)
 	}
 	defer rows.Close()
-
-	invalidated := map[string]struct{}{}
-	invalidatedRows, err := s.db.QueryContext(ctx, `SELECT invalidates_id FROM repairs WHERE action = 'invalidate_event' AND invalidates_id <> ''`)
-	if err != nil {
-		return nil, fmt.Errorf("query invalidated events: %w", err)
-	}
-	defer invalidatedRows.Close()
-	for invalidatedRows.Next() {
-		var eventID string
-		if err := invalidatedRows.Scan(&eventID); err != nil {
-			return nil, fmt.Errorf("scan invalidated event id: %w", err)
-		}
-		invalidated[eventID] = struct{}{}
-	}
-	if err := invalidatedRows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate invalidated event ids: %w", err)
-	}
 
 	var events []EventRecord
 	for rows.Next() {
@@ -1024,76 +1038,52 @@ func (s *Store) LoadWorkflow(ctx context.Context, workflowID string) (Workflow, 
 }
 
 func (s *Store) ListHandoffs(ctx context.Context) ([]Handoff, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM handoffs ORDER BY created_at, id`)
+	handoffIDs, err := queryStringColumn(ctx, s.db, "handoff ids", `SELECT id FROM handoffs ORDER BY created_at, id`)
 	if err != nil {
-		return nil, fmt.Errorf("list handoffs: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
 
 	var handoffs []Handoff
-	for rows.Next() {
-		var handoffID string
-		if err := rows.Scan(&handoffID); err != nil {
-			return nil, fmt.Errorf("scan handoff id: %w", err)
-		}
+	for _, handoffID := range handoffIDs {
 		handoff, err := loadHandoffTx(ctx, s.db, handoffID)
 		if err != nil {
 			return nil, err
 		}
 		handoffs = append(handoffs, handoff)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate handoffs: %w", err)
-	}
 	return handoffs, nil
 }
 
 func (s *Store) ListWorkflows(ctx context.Context) ([]Workflow, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM workflows ORDER BY created_at, id`)
+	workflowIDs, err := queryStringColumn(ctx, s.db, "workflow ids", `SELECT id FROM workflows ORDER BY created_at, id`)
 	if err != nil {
-		return nil, fmt.Errorf("list workflows: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
 
 	var workflows []Workflow
-	for rows.Next() {
-		var workflowID string
-		if err := rows.Scan(&workflowID); err != nil {
-			return nil, fmt.Errorf("scan workflow id: %w", err)
-		}
+	for _, workflowID := range workflowIDs {
 		workflow, err := s.LoadWorkflow(ctx, workflowID)
 		if err != nil {
 			return nil, err
 		}
 		workflows = append(workflows, workflow)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate workflows: %w", err)
-	}
 	return workflows, nil
 }
 
 func (s *Store) ListWorkflowHandoffs(ctx context.Context, workflowID string) ([]Handoff, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id FROM handoffs WHERE workflow_id = ? ORDER BY created_at, id`, workflowID)
+	handoffIDs, err := queryStringColumn(ctx, s.db, "workflow handoff ids", `SELECT id FROM handoffs WHERE workflow_id = ? ORDER BY created_at, id`, workflowID)
 	if err != nil {
-		return nil, fmt.Errorf("list workflow handoffs for %s: %w", workflowID, err)
+		return nil, err
 	}
-	defer rows.Close()
 
 	var handoffs []Handoff
-	for rows.Next() {
-		var handoffID string
-		if err := rows.Scan(&handoffID); err != nil {
-			return nil, fmt.Errorf("scan workflow handoff id: %w", err)
-		}
+	for _, handoffID := range handoffIDs {
 		handoff, err := loadHandoffTx(ctx, s.db, handoffID)
 		if err != nil {
 			return nil, err
 		}
 		handoffs = append(handoffs, handoff)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate workflow handoffs: %w", err)
 	}
 	return handoffs, nil
 }
@@ -1198,6 +1188,30 @@ type queryer interface {
 type queryerExecer interface {
 	queryer
 	execer
+}
+
+func queryStringColumn(ctx context.Context, db queryer, label, query string, args ...any) (values []string, err error) {
+	rows, err := db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query %s: %w", label, err)
+	}
+	defer func() {
+		if closeErr := rows.Close(); closeErr != nil && err == nil {
+			err = fmt.Errorf("close %s rows: %w", label, closeErr)
+		}
+	}()
+
+	for rows.Next() {
+		var value string
+		if err := rows.Scan(&value); err != nil {
+			return nil, fmt.Errorf("scan %s: %w", label, err)
+		}
+		values = append(values, value)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate %s: %w", label, err)
+	}
+	return values, nil
 }
 
 func saveDispatchAttemptExec(ctx context.Context, db execer, attempt DispatchAttempt) error {
