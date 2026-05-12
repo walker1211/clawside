@@ -116,7 +116,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	}))
 
 	handoffProgressTool := mcp.NewTool("handoff_progress",
-		mcp.WithDescription("Apply a protocol-driven handoff action"),
+		mcp.WithDescription("Apply a protocol-driven handoff action. Use action values: receive (handoff.receive), claim (handoff.claim), start (handoff.start), checkpoint (handoff.checkpoint), submit (handoff.submit), review (handoff.review), request_revision (handoff.request_revision), approve (handoff.approve), complete (handoff.complete), fail (handoff.fail). Do not use state names like received, started, or completed."),
 		mcp.WithInputSchema[toolserver.HandoffProgressInput](),
 		mcp.WithOutputSchema[orchestrator.ProtocolResult](),
 	)

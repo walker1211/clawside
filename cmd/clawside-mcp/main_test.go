@@ -109,6 +109,50 @@ func TestServerListsDocumentedV1Tools(t *testing.T) {
 	}
 }
 
+func TestServerHandoffProgressDescriptionListsShortActions(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	tools, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+
+	var description string
+	for _, tool := range tools.Tools {
+		if tool.Name == "handoff_progress" {
+			description = tool.Description
+			break
+		}
+	}
+	if description == "" {
+		t.Fatalf("expected handoff_progress description")
+	}
+
+	for _, want := range []string{
+		"receive",
+		"claim",
+		"start",
+		"checkpoint",
+		"submit",
+		"review",
+		"request_revision",
+		"approve",
+		"complete",
+		"fail",
+		"handoff.receive",
+		"handoff.complete",
+	} {
+		if !strings.Contains(description, want) {
+			t.Fatalf("expected handoff_progress description %q to contain %q", description, want)
+		}
+	}
+}
+
 func TestServerNoInputV1ToolsExposeEmptyObjectSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "clawside.db")
 	c := newTestMCPClient(t, dbPath)
