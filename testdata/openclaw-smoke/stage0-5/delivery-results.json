@@ -1,0 +1,14 @@
+{
+  "truth_plane_delivery": {
+    "handoff_id": "hf-stage13-delivery",
+    "workflow_id": "wf-stage13-delivery",
+    "dispatch_attempt": {"handoff_id":"hf-stage13-delivery","workflow_id":"wf-stage13-delivery"},
+    "delivery_result": {"status":"sent","job_id":77,"target_agent":"planner","bot":"planner","chat_id":123456789,"attempt_count":1,"last_error":""},
+    "sender_job": {"job_id":77,"status":"sent","attempt_count":1,"last_error":""},
+    "sender_jobs": [{"job_id":77,"bot":"planner","chat_id":123456789,"status":"sent","attempt_count":1,"last_error":""}],
+    "handoff": {"id":"hf-stage13-delivery","workflow_id":"wf-stage13-delivery","state":"dispatched"},
+    "timeline": [{"handoff_id":"hf-stage13-delivery","workflow_id":"wf-stage13-delivery","type":"transport_requested","accepted":true}],
+    "workflow": {"Workflow":{"id":"wf-stage13-delivery","status":"active"},"Handoffs":[{"id":"hf-stage13-delivery","workflow_id":"wf-stage13-delivery","state":"dispatched"}]},
+    "tools": ["handoff_create","handoff_dispatch","a2a_deliver","sender_job_get","sender_job_list","handoff_get","workflow_status"]
+  }
+}

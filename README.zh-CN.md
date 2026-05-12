@@ -36,6 +36,7 @@
 - `cmd/openclaw-truth-plane-reopen-extract/`：从 OpenClaw trajectory 提取 divergence/candidate/reopen handoff 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-divergence-extract/`：从 OpenClaw trajectory 提取 divergence/candidate/E2E completed truth 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-continuity-extract/`：从 OpenClaw trajectory 提取 truth-plane continuity reopen 后继续推进验收结果的本地只读 CLI
+- `cmd/openclaw-truth-plane-delivery-extract/`：从 OpenClaw trajectory 提取 handoff + A2A delivery sender job 验收结果的本地只读 CLI
 - `cmd/a2a-delivery/`：A2A delivery bridge CLI
 - `internal/configbuilder/`：从 OpenClaw 源配置提取 sender 所需最小配置
 - `internal/orchestrator/`：handoff、workflow、event、watch、repair、adapter 基础实现
@@ -117,7 +118,8 @@ cp configs/config.example.toml configs/config.toml
 ./scripts/extract_openclaw_truth_plane_repair_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_reopen_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ./scripts/extract_openclaw_truth_plane_divergence_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
-./scripts/extract_openclaw_truth_plane_continuity_results.sh --events .openclaw/trajectory-exports/export-directory/events.jsonl
+./scripts/extract_openclaw_truth_plane_continuity_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
+./scripts/extract_openclaw_truth_plane_delivery_results.sh --events .openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
 说明：
@@ -140,6 +142,7 @@ cp configs/config.example.toml configs/config.toml
 - `./scripts/extract_openclaw_truth_plane_reopen_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 divergence/candidate/reopen handoff 验收结果
 - `./scripts/extract_openclaw_truth_plane_divergence_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 divergence/candidate/E2E completed truth 验收结果
 - `./scripts/extract_openclaw_truth_plane_continuity_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 truth-plane continuity reopen 后继续推进验收结果
+- `./scripts/extract_openclaw_truth_plane_delivery_results.sh`：从 OpenClaw trajectory `events.jsonl` 提取 handoff + A2A delivery sender job 验收结果
 
 `./start.sh` / `./stop.sh` / `./restart.sh` 只管理自己写入的 pidfile。如果你是手动前台运行 `./scripts/start.sh`，请手动停止该进程。
 
@@ -688,10 +691,11 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
   --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
   --openclaw-truth-plane-divergence-results /tmp/openclaw-truth-plane-divergence-results.json \
-  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json \
+  --openclaw-truth-plane-delivery-results /tmp/openclaw-truth-plane-delivery-results.json
 ```
 
-`truth-plane-full` 要求 Stage 0-5 加 Stage 12 divergence 的 OpenClaw trajectory extractor JSON 都显式传入；缺少任一项都会失败，不再把缺失 evidence 当成 skipped。
+`truth-plane-full` 要求 Stage 0-5、Stage 12 divergence 和 Stage 13 delivery evidence 的 OpenClaw trajectory extractor JSON 都显式传入；缺少任一项都会失败，不再把缺失 evidence 当成 skipped。
 
 发布级只读 evidence gate：
 
@@ -705,7 +709,8 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
   --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
   --openclaw-truth-plane-divergence-results /tmp/openclaw-truth-plane-divergence-results.json \
-  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json \
+  --openclaw-truth-plane-delivery-results /tmp/openclaw-truth-plane-delivery-results.json
 ```
 
 带真实投递的发布前本地 gate：
@@ -721,6 +726,7 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
   --openclaw-truth-plane-divergence-results /tmp/openclaw-truth-plane-divergence-results.json \
   --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json \
+  --openclaw-truth-plane-delivery-results /tmp/openclaw-truth-plane-delivery-results.json \
   --deliver-main \
   --chat-id <telegram_chat_id>
 ```
@@ -747,7 +753,7 @@ testdata/openclaw-smoke/stage0-5/
 
 发布或完整验收仍然使用：
 
-- `truth-plane-full`：显式传入真实 OpenClaw trajectory extractor 输出的 8 个 JSON；
+- `truth-plane-full`：显式传入真实 OpenClaw trajectory extractor 输出的 9 个 JSON；
 - `release`：在真实 evidence 基础上再显式开启 `--deliver-main` 和 `--chat-id`。
 
 真实投递仍然只通过 sender 后端完成，不直接调用 Telegram API。
@@ -847,7 +853,8 @@ SENDER_AUTH_KEY=... scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-repair-results /tmp/openclaw-truth-plane-repair-results.json \
   --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
   --openclaw-truth-plane-divergence-results /tmp/openclaw-truth-plane-divergence-results.json \
-  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json
+  --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json \
+  --openclaw-truth-plane-delivery-results /tmp/openclaw-truth-plane-delivery-results.json
 ```
 
 只有在显式授权后，才运行带 `--profile release --deliver-main --chat-id <telegram_chat_id>` 的真实投递 gate。该路径仍然使用 `scripts/verify_openclaw_mcp.sh`，经 sender 后端完成，不直接调用 Telegram。
@@ -895,6 +902,53 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
 openclaw_truth_plane_divergence_results: ok
 ```
 
+### Stage 13 / 阶段 13 handoff + A2A delivery evidence 验收
+
+Stage 13 验证 OpenClaw 可以通过 MCP 可见的 sender job evidence，把一条 clawside handoff 和一条 A2A delivery sender job 关联起来。它不改变 handoff state machine，不把 delivery 记录成权威 progress，也不直接调用 Telegram API；投递 evidence 只来自 MCP 工具可见的 sender job 查询结果。
+
+```text
+请通过已注册的 clawside MCP tools 创建一条测试 handoff，dispatch 后发起一次 A2A delivery，再用 sender job 查询工具读取投递 evidence，最后查询 handoff truth 与 workflow status。
+
+请按顺序调用：
+1. handoff_create
+2. handoff_dispatch
+3. a2a_deliver
+4. sender_job_get
+5. sender_job_list
+6. handoff_get
+7. workflow_status
+
+参数：
+workflow_kind=manual_openclaw_truth_plane_delivery_smoke
+sender=agent:main
+receiver=agent:planner
+task_kind=truth_plane_delivery_smoke
+required_for_workflow_completion=false
+intent=verify OpenClaw can tie clawside handoff truth to A2A delivery evidence
+dispatch adapter=manual target=agent:planner
+a2a_deliver target_agent=planner text=manual Stage 13 delivery smoke for <created handoff_id> chat_id=<telegram_chat_id>
+sender_job_get 使用 a2a_deliver 返回的 job_id；sender_job_list 使用 status=sent limit=10；handoff_get / workflow_status 使用同一组 handoff_id / workflow_id。
+
+调用完成后，请输出 handoff_id、workflow_id、delivery job_id、sender job status、handoff state 和 workflow status。
+```
+
+```bash
+openclaw sessions export-trajectory --agent main --session-key '<session-key>' --json
+
+./scripts/extract_openclaw_truth_plane_delivery_results.sh \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output /tmp/openclaw-truth-plane-delivery-results.json
+
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-truth-plane-delivery-results /tmp/openclaw-truth-plane-delivery-results.json
+```
+
+预期结果摘要包含：
+
+```text
+openclaw_truth_plane_delivery_results: ok
+```
+
 ## A2A delivery bridge CLI
 
 sender sidecar 启动后，可以直接用本地 bridge 入口发起一次定向投递：
@@ -903,7 +957,7 @@ sender sidecar 启动后，可以直接用本地 bridge 入口发起一次定向
 go run ./cmd/a2a-delivery \
   --target-agent planner \
   --text "请直接把结果发给我" \
-  --chat-id 123456789 \
+  --chat-id <telegram_chat_id> \
   --sender-auth-key "$SENDER_AUTH_KEY"
 ```
 
@@ -913,7 +967,7 @@ go run ./cmd/a2a-delivery \
 go run ./cmd/a2a-delivery \
   --target-agent engineer \
   --text "请把当前状态同步给当前会话用户" \
-  --delivery-context-to 123456789 \
+  --delivery-context-to <telegram_chat_id> \
   --sender-auth-key "$SENDER_AUTH_KEY"
 ```
 

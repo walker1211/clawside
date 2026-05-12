@@ -16,6 +16,8 @@ func TestBundledOpenClawSmokeFixturesAreValid(t *testing.T) {
 		checkOpenClawTruthPlaneRepairResults(Options{OpenClawTruthPlaneRepairResultsPath: filepath.Join(fixtureDir, "repair-results.json")}),
 		checkOpenClawTruthPlaneReopenResults(Options{OpenClawTruthPlaneReopenResultsPath: filepath.Join(fixtureDir, "reopen-results.json")}),
 		checkOpenClawTruthPlaneContinuityResults(Options{OpenClawTruthPlaneContinuityResultsPath: filepath.Join(fixtureDir, "continuity-results.json")}),
+		checkOpenClawTruthPlaneDivergenceResults(Options{OpenClawTruthPlaneDivergenceResultsPath: filepath.Join(fixtureDir, "divergence-results.json")}),
+		checkOpenClawTruthPlaneDeliveryResults(Options{OpenClawTruthPlaneDeliveryResultsPath: filepath.Join(fixtureDir, "delivery-results.json")}),
 	}
 
 	for _, check := range checks {

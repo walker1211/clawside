@@ -187,10 +187,10 @@ func TestCheckRunSmokeReportContract(t *testing.T) {
 	if !strings.Contains(text, `"registration"`) || strings.Contains(text, "registration_guidance") {
 		t.Fatalf("unexpected registration JSON contract: %s", text)
 	}
-	if len(report.Checks) != 15 {
-		t.Fatalf("expected 15 checks, got %+v", report.Checks)
+	if len(report.Checks) != 16 {
+		t.Fatalf("expected 16 checks, got %+v", report.Checks)
 	}
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -257,6 +257,9 @@ func TestRunSmokeFixturesProfileUsesBundledEvidence(t *testing.T) {
 	if report.Profile != profileFixtures {
 		t.Fatalf("expected profile %q, got %q", profileFixtures, report.Profile)
 	}
+	if report.Status != reportStatusOK {
+		t.Fatalf("expected report status %q, got %q", reportStatusOK, report.Status)
+	}
 	assertCheck(t, report, "openclaw_tool_results", checkStatusOK)
 	assertCheck(t, report, "openclaw_truth_plane_results", checkStatusOK)
 	assertCheck(t, report, "openclaw_truth_plane_progression_results", checkStatusOK)
@@ -264,6 +267,7 @@ func TestRunSmokeFixturesProfileUsesBundledEvidence(t *testing.T) {
 	assertCheck(t, report, "openclaw_truth_plane_repair_results", checkStatusOK)
 	assertCheck(t, report, "openclaw_truth_plane_reopen_results", checkStatusOK)
 	assertCheck(t, report, "openclaw_truth_plane_continuity_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_delivery_results", checkStatusOK)
 	assertCheck(t, report, "a2a_main_delivery", checkStatusSkipped)
 }
 
@@ -333,6 +337,20 @@ func TestRunSmokeTruthPlaneFullProfileRequiresDivergenceResultPath(t *testing.T)
 	}
 }
 
+func TestRunSmokeTruthPlaneFullProfileRequiresDeliveryResultPath(t *testing.T) {
+	opts := validProfileEvidenceOptions(t)
+	opts.Profile = profileTruthPlaneFull
+	opts.OpenClawTruthPlaneDeliveryResultsPath = ""
+
+	_, err := RunSmoke(context.Background(), opts)
+	if err == nil {
+		t.Fatalf("expected missing delivery result path error")
+	}
+	if err.Error() != "profile truth-plane-full requires --openclaw-truth-plane-delivery-results" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunSmokeTruthPlaneFullProfileRequiresChatIDWhenDeliverMain(t *testing.T) {
 	opts := validProfileEvidenceOptions(t)
 	opts.Profile = profileTruthPlaneFull
@@ -371,10 +389,11 @@ func TestRunSmokeTruthPlaneFullProfileAcceptsAllResultPaths(t *testing.T) {
 	assertCheck(t, report, "openclaw_truth_plane_reopen_results", checkStatusOK)
 	assertCheck(t, report, "openclaw_truth_plane_continuity_results", checkStatusOK)
 	assertCheck(t, report, "openclaw_truth_plane_divergence_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_delivery_results", checkStatusOK)
 	assertCheck(t, report, "a2a_main_delivery", checkStatusSkipped)
 }
 
-func TestRunSmokeReleaseEvidenceProfileAcceptsRealEvidenceWithoutDelivery(t *testing.T) {
+func TestRunSmokeReleaseEvidenceProfileAcceptsRealEvidenceWithDelivery(t *testing.T) {
 	dir := t.TempDir()
 	configPath := writeValidSmokeConfig(t, dir)
 	opts := validProfileEvidenceOptions(t)
@@ -397,6 +416,8 @@ func TestRunSmokeReleaseEvidenceProfileAcceptsRealEvidenceWithoutDelivery(t *tes
 	assertCheck(t, report, "openclaw_truth_plane_repair_results", checkStatusOK)
 	assertCheck(t, report, "openclaw_truth_plane_reopen_results", checkStatusOK)
 	assertCheck(t, report, "openclaw_truth_plane_continuity_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_divergence_results", checkStatusOK)
+	assertCheck(t, report, "openclaw_truth_plane_delivery_results", checkStatusOK)
 	assertCheck(t, report, "a2a_main_delivery", checkStatusSkipped)
 }
 
@@ -479,6 +500,7 @@ func TestRunSmokeNoProfilePreservesSkippedEvidenceChecks(t *testing.T) {
 	assertCheck(t, report, "openclaw_truth_plane_repair_results", checkStatusSkipped)
 	assertCheck(t, report, "openclaw_truth_plane_reopen_results", checkStatusSkipped)
 	assertCheck(t, report, "openclaw_truth_plane_continuity_results", checkStatusSkipped)
+	assertCheck(t, report, "openclaw_truth_plane_delivery_results", checkStatusSkipped)
 }
 
 func validProfileEvidenceOptions(t *testing.T) Options {
@@ -507,6 +529,7 @@ func validProfileEvidenceOptions(t *testing.T) Options {
 		OpenClawTruthPlaneReopenResultsPath:      writeReopenResultJSON(t, validReopenResultJSON()),
 		OpenClawTruthPlaneContinuityResultsPath:  writeContinuityResultJSON(t, validContinuityResultJSON()),
 		OpenClawTruthPlaneDivergenceResultsPath:  writeDivergenceResultJSON(t, validDivergenceResultJSON()),
+		OpenClawTruthPlaneDeliveryResultsPath:    writeDeliveryResultJSON(t, validDeliveryResultJSON()),
 	}
 }
 
@@ -590,6 +613,7 @@ func TestRunReleaseProfileRequiresProfileSpecificChatIDError(t *testing.T) {
 		"--openclaw-truth-plane-reopen-results", opts.OpenClawTruthPlaneReopenResultsPath,
 		"--openclaw-truth-plane-continuity-results", opts.OpenClawTruthPlaneContinuityResultsPath,
 		"--openclaw-truth-plane-divergence-results", opts.OpenClawTruthPlaneDivergenceResultsPath,
+		"--openclaw-truth-plane-delivery-results", opts.OpenClawTruthPlaneDeliveryResultsPath,
 		"--deliver-main",
 	}, stdout, stderr)
 
@@ -705,7 +729,7 @@ func TestRunReportsMCPRegistrationFromConfig(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -750,7 +774,7 @@ func TestRunReportsOpenClawToolResultsFromFile(t *testing.T) {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
 	assertCheck(t, report, "openclaw_tool_results", checkStatusOK)
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -796,7 +820,7 @@ func TestRunReportsOpenClawTruthPlaneResultsFromFile(t *testing.T) {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
 	assertCheck(t, report, "openclaw_truth_plane_results", checkStatusOK)
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -842,7 +866,7 @@ func TestRunReportsOpenClawTruthPlaneProgressionResultsFromFile(t *testing.T) {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
 	assertCheck(t, report, "openclaw_truth_plane_progression_results", checkStatusOK)
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -879,7 +903,7 @@ func TestRunReportsOpenClawTruthPlaneMutationResultsFromFile(t *testing.T) {
 
 func TestRunDeliverMainUsesConfigSenderAuthKeyForMCP(t *testing.T) {
 	const secret = "super-secret-sender-key"
-	const chatID int64 = 7098285098
+	const chatID int64 = 700001
 	const text = "hello from smoke delivery"
 
 	dir := t.TempDir()
@@ -928,7 +952,7 @@ func TestRunDeliverMainUsesConfigSenderAuthKeyForMCP(t *testing.T) {
 		"--mcp-arg", "run",
 		"--mcp-arg", "../clawside-mcp",
 		"--deliver-main",
-		"--chat-id", "7098285098",
+		"--chat-id", "700001",
 		"--text", text,
 		"--json",
 	}, stdout, stderr)

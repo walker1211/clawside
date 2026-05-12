@@ -18,6 +18,7 @@ OPENCLAW_TRUTH_PLANE_REPAIR_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_REOPEN_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_CONTINUITY_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_DIVERGENCE_RESULTS_PATH=""
+OPENCLAW_TRUTH_PLANE_DELIVERY_RESULTS_PATH=""
 PROFILE=""
 DELIVER_MAIN="false"
 CHAT_ID=""
@@ -60,6 +61,8 @@ usage() {
   printf '                             Read-only JSON file with OpenClaw truth-plane continuity results to validate\n'
   printf '  --openclaw-truth-plane-divergence-results PATH\n'
   printf '                             Read-only JSON file with OpenClaw truth-plane divergence results to validate\n'
+  printf '  --openclaw-truth-plane-delivery-results PATH\n'
+  printf '                             Read-only JSON file with OpenClaw truth-plane delivery results to validate\n'
   printf '  --deliver-main             Perform real delivery through the main sender path\n'
   printf '  --chat-id ID               Chat ID used when delivery is enabled\n'
   printf '  --text TEXT                Smoke message text (default: OpenClaw MCP smoke test)\n'
@@ -194,6 +197,14 @@ while [[ $# -gt 0 ]]; do
       OPENCLAW_TRUTH_PLANE_DIVERGENCE_RESULTS_PATH="$2"
       shift 2
       ;;
+    --openclaw-truth-plane-delivery-results)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      OPENCLAW_TRUTH_PLANE_DELIVERY_RESULTS_PATH="$2"
+      shift 2
+      ;;
     --deliver-main)
       DELIVER_MAIN="true"
       shift
@@ -297,6 +308,9 @@ run_smoke() {
   fi
   if [[ -n "$OPENCLAW_TRUTH_PLANE_DIVERGENCE_RESULTS_PATH" ]]; then
     set -- "$@" --openclaw-truth-plane-divergence-results "$OPENCLAW_TRUTH_PLANE_DIVERGENCE_RESULTS_PATH"
+  fi
+  if [[ -n "$OPENCLAW_TRUTH_PLANE_DELIVERY_RESULTS_PATH" ]]; then
+    set -- "$@" --openclaw-truth-plane-delivery-results "$OPENCLAW_TRUTH_PLANE_DELIVERY_RESULTS_PATH"
   fi
   if [[ "$DELIVER_MAIN" == "true" ]]; then
     set -- "$@" --deliver-main
