@@ -204,7 +204,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultStructured(toolserver.RepairListOutput{Repairs: repairs}, "Listed repairs"), nil
+		return mcp.NewToolResultStructuredOnly(toolserver.RepairListOutput{Repairs: repairs}), nil
 	}))
 
 	repairInvalidateEventTool := mcp.NewTool("repair_invalidate_event",
@@ -244,7 +244,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultStructured(toolserver.RepairCandidateListOutput{RepairCandidates: candidates}, "Listed repair candidates"), nil
+		return mcp.NewToolResultStructuredOnly(toolserver.RepairCandidateListOutput{RepairCandidates: candidates}), nil
 	}))
 
 	divergenceRecordTool := mcp.NewTool("divergence_record",
@@ -266,7 +266,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		if err != nil {
 			return mcp.NewToolResultError(err.Error()), nil
 		}
-		return mcp.NewToolResultStructured(toolserver.DivergenceListOutput{Divergences: divergences}, "Listed divergences"), nil
+		return mcp.NewToolResultStructuredOnly(toolserver.DivergenceListOutput{Divergences: divergences}), nil
 	}))
 
 	senderHealthTool := mcp.NewTool("sender_health",

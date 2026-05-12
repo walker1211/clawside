@@ -508,6 +508,7 @@ func TestServerCallRepairListSucceeds(t *testing.T) {
 		t.Fatalf("expected repair_list success, got error result")
 	}
 	assertStructuredObject(t, result, "repairs")
+	assertTextContentObject(t, result, "repairs")
 }
 
 func TestServerCallRepairInvalidateEventSucceeds(t *testing.T) {
@@ -718,6 +719,7 @@ func TestServerCallRepairCandidateListSucceeds(t *testing.T) {
 		t.Fatalf("expected repair_candidate_list success, got error result")
 	}
 	assertStructuredObject(t, result, "repair_candidates")
+	assertTextContentObject(t, result, "repair_candidates")
 }
 
 func TestServerCallDivergenceListSucceeds(t *testing.T) {
@@ -762,6 +764,7 @@ func TestServerCallDivergenceListSucceeds(t *testing.T) {
 		t.Fatalf("expected divergence_list success, got error result")
 	}
 	assertStructuredObject(t, result, "divergences")
+	assertTextContentObject(t, result, "divergences")
 }
 
 func TestServerCallRepairCandidateListRejectsBlankHandoffID(t *testing.T) {
