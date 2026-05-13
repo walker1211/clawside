@@ -697,7 +697,7 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
 
 `truth-plane-full` 要求 Stage 0-5、Stage 12 divergence 和 Stage 13 delivery evidence 的 OpenClaw trajectory extractor JSON 都显式传入；缺少任一项都会失败，不再把缺失 evidence 当成 skipped。
 
-发布级只读 evidence gate：
+发布级只读 evidence gate：优先使用 Stage 11 的 bundle-first 流程生成 9 个 JSON 和 `verify-release-evidence.sh`；下面的长命令保留为高级手工 fallback。
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
@@ -754,6 +754,7 @@ testdata/openclaw-smoke/stage0-5/
 发布或完整验收仍然使用：
 
 - `truth-plane-full`：显式传入真实 OpenClaw trajectory extractor 输出的 9 个 JSON；
+- `release-evidence`：通过真实 trajectory evidence bundle 或显式 9 个 JSON 执行只读发布级验收；
 - `release`：在真实 evidence 基础上再显式开启 `--deliver-main` 和 `--chat-id`。
 
 真实投递仍然只通过 sender 后端完成，不直接调用 Telegram API。
@@ -841,6 +842,28 @@ Stage 10 复用既有 Stage 3 repair evidence 路径，不新增独立的 `truth
 ### Stage 11 / 阶段 11 release evidence gate
 
 Stage 11 将 release acceptance 拆成只读的发布级 evidence gate，以及需要显式授权的真实投递 gate。`fixtures` 只用于回归，`truth-plane-full` 用于只验证真实 trajectory evidence，`release-evidence` 用于打 tag 前把真实 OpenClaw trajectory extracts 当成发布级 evidence 验收。
+
+推荐的 bundle-first 路径先从真实 trajectory exports 生成本地 evidence bundle，再运行 bundle 内的只读验证脚本：
+
+```bash
+./scripts/build_openclaw_release_evidence_bundle.sh \
+  --output-dir ./release-evidence/openclaw-vX.Y.Z \
+  --tool-events <stage0-export>/events.jsonl \
+  --truth-plane-events <stage1-export>/events.jsonl \
+  --progression-events <stage2-export>/events.jsonl \
+  --mutation-events <stage3-export>/events.jsonl \
+  --repair-events <stage10-export>/events.jsonl \
+  --reopen-events <stage4-export>/events.jsonl \
+  --continuity-events <stage5-export>/events.jsonl \
+  --divergence-events <stage12-export>/events.jsonl \
+  --delivery-events <stage13-export>/events.jsonl
+
+./release-evidence/openclaw-vX.Y.Z/verify-release-evidence.sh
+```
+
+bundle 命令只调用已有 extractor，写出 `manifest.json`、9 个 results JSON 和 `verify-release-evidence.sh`。生成的验证脚本运行 `scripts/verify_openclaw_mcp.sh --profile release-evidence`，保持只读，不包含 `--deliver-main`、`--chat-id`，也不直接调用 Telegram API。
+
+高级手工 fallback 仍可显式传入 9 个 JSON：
 
 ```bash
 scripts/ci-local.sh clean

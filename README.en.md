@@ -697,7 +697,7 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
 
 `truth-plane-full` requires every Stage 0-5 plus Stage 12 divergence and Stage 13 delivery evidence OpenClaw trajectory extractor JSON path explicitly. Missing evidence fails the run instead of being treated as skipped.
 
-Release-grade read-only evidence gate:
+Release-grade read-only evidence gate: prefer the Stage 11 bundle-first flow to generate the nine JSON files and `verify-release-evidence.sh`; the long command below remains the advanced manual fallback.
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
@@ -754,6 +754,7 @@ These fixtures are for local / CI regression. They prove the verifier still acce
 Release or full acceptance still uses:
 
 - `truth-plane-full`: pass all nine JSON files extracted from real OpenClaw trajectory evidence explicitly;
+- `release-evidence`: run the read-only release-grade gate from a real trajectory evidence bundle or explicit nine JSON files;
 - `release`: start from real evidence and explicitly enable `--deliver-main` and `--chat-id`.
 
 Real delivery still goes through the sender backend only and never calls the Telegram API directly.
@@ -841,6 +842,28 @@ The bundled fixtures profile includes this backfill replay evidence in `testdata
 ### Stage 11 release evidence gate
 
 Stage 11 splits release acceptance into a read-only release-grade evidence gate and an explicitly authorized real delivery gate. Use `fixtures` for regression only, use `truth-plane-full` when you want to validate real trajectory evidence without local readiness checks, and use `release-evidence` before tagging when the real OpenClaw trajectory extracts should be treated as release-grade evidence.
+
+The recommended bundle-first path builds a local evidence bundle from real trajectory exports, then runs the read-only verifier script generated inside the bundle:
+
+```bash
+./scripts/build_openclaw_release_evidence_bundle.sh \
+  --output-dir ./release-evidence/openclaw-vX.Y.Z \
+  --tool-events <stage0-export>/events.jsonl \
+  --truth-plane-events <stage1-export>/events.jsonl \
+  --progression-events <stage2-export>/events.jsonl \
+  --mutation-events <stage3-export>/events.jsonl \
+  --repair-events <stage10-export>/events.jsonl \
+  --reopen-events <stage4-export>/events.jsonl \
+  --continuity-events <stage5-export>/events.jsonl \
+  --divergence-events <stage12-export>/events.jsonl \
+  --delivery-events <stage13-export>/events.jsonl
+
+./release-evidence/openclaw-vX.Y.Z/verify-release-evidence.sh
+```
+
+The bundle command only invokes existing extractors and writes `manifest.json`, the nine results JSON files, and `verify-release-evidence.sh`. The generated verifier runs `scripts/verify_openclaw_mcp.sh --profile release-evidence`, stays read-only, does not include `--deliver-main` or `--chat-id`, and never calls the Telegram API directly.
+
+Advanced manual fallback can still pass the nine JSON files explicitly:
 
 ```bash
 scripts/ci-local.sh clean

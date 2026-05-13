@@ -909,6 +909,12 @@ func TestReadmeStage11DocumentsReleaseEvidenceGate(t *testing.T) {
 	} {
 		section := readReadmeSection(t, tc.path, tc.heading)
 		wantTokens := []string{
+			"scripts/build_openclaw_release_evidence_bundle.sh",
+			"release-evidence/openclaw-vX.Y.Z",
+			"--output-dir",
+			"--tool-events",
+			"--delivery-events",
+			"verify-release-evidence.sh",
 			"--profile release-evidence",
 			"--profile release",
 			"--deliver-main",
@@ -1016,6 +1022,32 @@ func TestReadmeDocumentsOpenClawTruthPlaneContinuityValidation(t *testing.T) {
 			if !strings.Contains(content, want) {
 				t.Fatalf("expected %s to contain %q", path, want)
 			}
+		}
+	}
+}
+
+func TestOpenClawReleaseEvidenceBundleScriptEntrypoint(t *testing.T) {
+	path := "scripts/build_openclaw_release_evidence_bundle.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, want := range []string{
+		"go run -C \"$ROOT_DIR\" ./cmd/openclaw-release-evidence-bundle \"$@\"",
+		"help|--help|-h",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	for _, unwanted := range []string{"=()", "[@]", "BASH_SOURCE", "--deliver-main", "telegram"} {
+		if strings.Contains(content, unwanted) {
+			t.Fatalf("expected %s not to contain %q", path, unwanted)
 		}
 	}
 }
