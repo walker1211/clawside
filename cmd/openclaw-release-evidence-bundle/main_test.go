@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"os"
@@ -106,6 +108,16 @@ func TestBuildPlanOutputFilesMatchReleaseEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildPlanParsesVerify(t *testing.T) {
+	plan, err := buildPlan([]string{"--output-dir", "bundle", "--events", "events.jsonl", "--verify"})
+	if err != nil {
+		t.Fatalf("build plan: %v", err)
+	}
+	if !plan.Verify {
+		t.Fatalf("expected verify to be enabled")
+	}
+}
+
 func TestRunBundleCallsAllExtractors(t *testing.T) {
 	outputDir := filepath.Join(t.TempDir(), "bundle")
 	runner := &recordingRunner{}
@@ -145,6 +157,79 @@ func TestRunBundleStopsOnExtractorFailure(t *testing.T) {
 	}
 }
 
+func TestRunBundleVerifyRunsGeneratedVerifierAfterArtifacts(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "bundle")
+	runner := &recordingRunner{}
+	var stdout, stderr bytes.Buffer
+	if err := runWithRunner(context.Background(), []string{"--output-dir", outputDir, "--events", "events.jsonl", "--verify"}, &stdout, &stderr, runner); err != nil {
+		t.Fatalf("run bundle: %v\nstderr=%s", err, stderr.String())
+	}
+	if len(runner.calls) != len(evidenceSpecs) {
+		t.Fatalf("extract call count = %d, want %d", len(runner.calls), len(evidenceSpecs))
+	}
+	if len(runner.verifyRuns) != 1 {
+		t.Fatalf("verify run count = %d, want 1", len(runner.verifyRuns))
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "manifest.json")); err != nil {
+		t.Fatalf("expected manifest before verify: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outputDir, "verify-release-evidence.sh")); err != nil {
+		t.Fatalf("expected verify script before verify: %v", err)
+	}
+	verifyCommand := strings.Join(runner.verifyRuns[0], " ")
+	for _, want := range []string{"scripts/verify_openclaw_mcp.sh", "--profile", "release-evidence"} {
+		if !strings.Contains(verifyCommand, want) {
+			t.Fatalf("verify command missing %q: %v", want, runner.verifyRuns[0])
+		}
+	}
+}
+
+func TestRunBundleVerifyStopsOnVerifyFailure(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "bundle")
+	runner := &recordingRunner{failVerify: true}
+	var stdout, stderr bytes.Buffer
+	err := runWithRunner(context.Background(), []string{"--output-dir", outputDir, "--events", "events.jsonl", "--verify"}, &stdout, &stderr, runner)
+	if err == nil || !strings.Contains(err.Error(), "verify release evidence: verify boom") {
+		t.Fatalf("expected verify failure, got %v", err)
+	}
+}
+
+func TestRunBundleVerifyCommandIsReadOnly(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "bundle")
+	runner := &recordingRunner{}
+	var stdout, stderr bytes.Buffer
+	if err := runWithRunner(context.Background(), []string{"--output-dir", outputDir, "--events", "events.jsonl", "--verify"}, &stdout, &stderr, runner); err != nil {
+		t.Fatalf("run bundle: %v\nstderr=%s", err, stderr.String())
+	}
+	if len(runner.verifyRuns) != 1 {
+		t.Fatalf("verify run count = %d, want 1", len(runner.verifyRuns))
+	}
+	verifyCommand := strings.Join(runner.verifyRuns[0], " ")
+	for _, forbidden := range []string{"--deliver-main", "--chat-id", "SENDER_AUTH_KEY", "telegram"} {
+		if strings.Contains(verifyCommand, forbidden) {
+			t.Fatalf("verify command must not contain %q: %s", forbidden, verifyCommand)
+		}
+	}
+}
+
+func TestCommandRunnerRunVerifyForwardsOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "verify.sh")
+	if err := os.WriteFile(path, []byte("#!/usr/bin/env bash\nprintf 'verify stdout\\n'\nprintf 'verify stderr\\n' >&2\n"), 0o755); err != nil {
+		t.Fatalf("write verify script: %v", err)
+	}
+	var stdout, stderr bytes.Buffer
+	runner := commandRunner{stdout: &stdout, stderr: &stderr}
+	if err := runner.RunVerify(context.Background(), []string{path}); err != nil {
+		t.Fatalf("run verify: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "verify stdout") {
+		t.Fatalf("stdout = %q, want verify output", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "verify stderr") {
+		t.Fatalf("stderr = %q, want verify output", stderr.String())
+	}
+}
+
 func TestRunBundleWritesManifest(t *testing.T) {
 	outputDir := filepath.Join(t.TempDir(), "bundle")
 	runner := &recordingRunner{}
@@ -165,6 +250,7 @@ func TestRunBundleWritesManifest(t *testing.T) {
 			EventsPath string `json:"events_path"`
 			OutputFile string `json:"output_file"`
 			VerifyFlag string `json:"verify_flag"`
+			SHA256     string `json:"sha256"`
 		} `json:"evidence"`
 		VerifyCommand []string `json:"verify_command"`
 	}
@@ -181,6 +267,20 @@ func TestRunBundleWritesManifest(t *testing.T) {
 		if evidence.Name != evidenceSpecs[i].Name || evidence.EventsPath != "events.jsonl" || evidence.OutputFile != evidenceSpecs[i].OutputFile || evidence.VerifyFlag != evidenceSpecs[i].VerifyFlag {
 			t.Fatalf("manifest evidence[%d] = %+v", i, evidence)
 		}
+		if len(evidence.SHA256) != 64 {
+			t.Fatalf("manifest evidence[%d] sha256 length = %d, want 64", i, len(evidence.SHA256))
+		}
+		if _, err := hex.DecodeString(evidence.SHA256); err != nil {
+			t.Fatalf("manifest evidence[%d] sha256 is not hex: %v", i, err)
+		}
+	}
+	toolResults, err := os.ReadFile(filepath.Join(outputDir, "tool-results.json"))
+	if err != nil {
+		t.Fatalf("read tool results: %v", err)
+	}
+	toolResultsSHA256 := sha256.Sum256(toolResults)
+	if manifest.Evidence[0].SHA256 != hex.EncodeToString(toolResultsSHA256[:]) {
+		t.Fatalf("tool results sha256 = %q, want %q", manifest.Evidence[0].SHA256, hex.EncodeToString(toolResultsSHA256[:]))
 	}
 	manifestText := string(data)
 	for _, secretToken := range []string{"SENDER_AUTH_KEY", "--chat-id", "--deliver-main"} {
@@ -235,14 +335,24 @@ type runnerCall struct {
 }
 
 type recordingRunner struct {
-	calls    []runnerCall
-	failName string
+	calls      []runnerCall
+	verifyRuns [][]string
+	failName   string
+	failVerify bool
 }
 
 func (r *recordingRunner) Run(_ context.Context, spec evidenceSpec, eventsPath string, outputPath string) error {
 	r.calls = append(r.calls, runnerCall{spec: spec, eventsPath: eventsPath, outputPath: outputPath})
 	if spec.Name == r.failName {
 		return errors.New("boom")
+	}
+	return os.WriteFile(outputPath, []byte(`{"ok":true,"name":"`+spec.Name+`"}\n`), 0o600)
+}
+
+func (r *recordingRunner) RunVerify(_ context.Context, command []string) error {
+	r.verifyRuns = append(r.verifyRuns, append([]string(nil), command...))
+	if r.failVerify {
+		return errors.New("verify boom")
 	}
 	return nil
 }

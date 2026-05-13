@@ -843,7 +843,7 @@ Stage 10 复用既有 Stage 3 repair evidence 路径，不新增独立的 `truth
 
 Stage 11 将 release acceptance 拆成只读的发布级 evidence gate，以及需要显式授权的真实投递 gate。`fixtures` 只用于回归，`truth-plane-full` 用于只验证真实 trajectory evidence，`release-evidence` 用于打 tag 前把真实 OpenClaw trajectory extracts 当成发布级 evidence 验收。
 
-推荐的 bundle-first 路径先从真实 trajectory exports 生成本地 evidence bundle，再运行 bundle 内的只读验证脚本：
+推荐的 bundle-first 路径先从真实 trajectory exports 生成本地 evidence bundle，并用 `--verify` 立即运行只读发布级 verifier：
 
 ```bash
 ./scripts/build_openclaw_release_evidence_bundle.sh \
@@ -856,12 +856,17 @@ Stage 11 将 release acceptance 拆成只读的发布级 evidence gate，以及�
   --reopen-events <stage4-export>/events.jsonl \
   --continuity-events <stage5-export>/events.jsonl \
   --divergence-events <stage12-export>/events.jsonl \
-  --delivery-events <stage13-export>/events.jsonl
-
-./release-evidence/openclaw-vX.Y.Z/verify-release-evidence.sh
+  --delivery-events <stage13-export>/events.jsonl \
+  --verify
 ```
 
-bundle 命令只调用已有 extractor，写出 `manifest.json`、9 个 results JSON 和 `verify-release-evidence.sh`。生成的验证脚本运行 `scripts/verify_openclaw_mcp.sh --profile release-evidence`，保持只读，不包含 `--deliver-main`、`--chat-id`，也不直接调用 Telegram API。
+bundle 命令只调用已有 extractor，写出 `manifest.json`、9 个 results JSON 和 `verify-release-evidence.sh`。`--verify` 运行生成的 `scripts/verify_openclaw_mcp.sh --profile release-evidence` 命令，保持只读，不包含 `--deliver-main`、`--chat-id`，也不直接调用 Telegram API。`release-evidence/openclaw-vX.Y.Z` 是本地生成目录，默认被 git 忽略。
+
+如需拆成两步，也可以手工运行生成的验证脚本：
+
+```bash
+./release-evidence/openclaw-vX.Y.Z/verify-release-evidence.sh
+```
 
 高级手工 fallback 仍可显式传入 9 个 JSON：
 

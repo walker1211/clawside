@@ -843,7 +843,7 @@ The bundled fixtures profile includes this backfill replay evidence in `testdata
 
 Stage 11 splits release acceptance into a read-only release-grade evidence gate and an explicitly authorized real delivery gate. Use `fixtures` for regression only, use `truth-plane-full` when you want to validate real trajectory evidence without local readiness checks, and use `release-evidence` before tagging when the real OpenClaw trajectory extracts should be treated as release-grade evidence.
 
-The recommended bundle-first path builds a local evidence bundle from real trajectory exports, then runs the read-only verifier script generated inside the bundle:
+The recommended bundle-first path builds a local evidence bundle from real trajectory exports, then uses `--verify` to immediately run the read-only release-grade verifier:
 
 ```bash
 ./scripts/build_openclaw_release_evidence_bundle.sh \
@@ -856,12 +856,17 @@ The recommended bundle-first path builds a local evidence bundle from real traje
   --reopen-events <stage4-export>/events.jsonl \
   --continuity-events <stage5-export>/events.jsonl \
   --divergence-events <stage12-export>/events.jsonl \
-  --delivery-events <stage13-export>/events.jsonl
-
-./release-evidence/openclaw-vX.Y.Z/verify-release-evidence.sh
+  --delivery-events <stage13-export>/events.jsonl \
+  --verify
 ```
 
-The bundle command only invokes existing extractors and writes `manifest.json`, the nine results JSON files, and `verify-release-evidence.sh`. The generated verifier runs `scripts/verify_openclaw_mcp.sh --profile release-evidence`, stays read-only, does not include `--deliver-main` or `--chat-id`, and never calls the Telegram API directly.
+The bundle command only invokes existing extractors and writes `manifest.json`, the nine results JSON files, and `verify-release-evidence.sh`. `--verify` runs the generated `scripts/verify_openclaw_mcp.sh --profile release-evidence` command, stays read-only, does not include `--deliver-main` or `--chat-id`, and never calls the Telegram API directly. `release-evidence/openclaw-vX.Y.Z` is a local generated directory and is ignored by git by default.
+
+For a two-step flow, you can also run the generated verifier script manually:
+
+```bash
+./release-evidence/openclaw-vX.Y.Z/verify-release-evidence.sh
+```
 
 Advanced manual fallback can still pass the nine JSON files explicitly:
 

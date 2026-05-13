@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -29,6 +31,7 @@ type plannedEvidence struct {
 type bundlePlan struct {
 	OutputDir string
 	Evidence  []plannedEvidence
+	Verify    bool
 }
 
 var evidenceSpecs = []evidenceSpec{
@@ -108,15 +111,18 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 1 && isHelpArg(args[0]) {
 		return writeUsage(stdout)
 	}
-	return runWithRunner(context.Background(), args, stdout, stderr, commandRunner{rootDir: "."})
+	return runWithRunner(context.Background(), args, stdout, stderr, commandRunner{rootDir: ".", stdout: stdout, stderr: stderr})
 }
 
-type extractorRunner interface {
+type bundleRunner interface {
 	Run(ctx context.Context, spec evidenceSpec, eventsPath string, outputPath string) error
+	RunVerify(ctx context.Context, command []string) error
 }
 
 type commandRunner struct {
 	rootDir string
+	stdout  io.Writer
+	stderr  io.Writer
 }
 
 func (r commandRunner) Run(ctx context.Context, spec evidenceSpec, eventsPath string, outputPath string) error {
@@ -128,7 +134,24 @@ func (r commandRunner) Run(ctx context.Context, spec evidenceSpec, eventsPath st
 	return nil
 }
 
-func runWithRunner(ctx context.Context, args []string, stdout, stderr io.Writer, runner extractorRunner) error {
+func (r commandRunner) RunVerify(ctx context.Context, command []string) error {
+	if len(command) == 0 {
+		return errors.New("empty verify command")
+	}
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	if r.stdout != nil {
+		cmd.Stdout = r.stdout
+	}
+	if r.stderr != nil {
+		cmd.Stderr = r.stderr
+	}
+	if err := cmd.Run(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func runWithRunner(ctx context.Context, args []string, stdout, stderr io.Writer, runner bundleRunner) error {
 	_ = stdout
 	_ = stderr
 	plan, err := buildPlan(args)
@@ -144,7 +167,19 @@ func runWithRunner(ctx context.Context, args []string, stdout, stderr io.Writer,
 			return fmt.Errorf("extract %s: %w", evidence.Spec.Name, err)
 		}
 	}
-	return writeBundleArtifacts(plan)
+	if err := writeBundleArtifacts(plan); err != nil {
+		return err
+	}
+	if plan.Verify {
+		verifyCommand, err := releaseEvidenceVerifyCommand(plan)
+		if err != nil {
+			return err
+		}
+		if err := runner.RunVerify(ctx, verifyCommand); err != nil {
+			return fmt.Errorf("verify release evidence: %w", err)
+		}
+	}
+	return nil
 }
 
 type releaseEvidenceManifest struct {
@@ -159,6 +194,7 @@ type manifestEvidence struct {
 	EventsPath string `json:"events_path"`
 	OutputFile string `json:"output_file"`
 	VerifyFlag string `json:"verify_flag"`
+	SHA256     string `json:"sha256"`
 }
 
 func writeBundleArtifacts(plan bundlePlan) error {
@@ -172,11 +208,16 @@ func writeBundleArtifacts(plan bundlePlan) error {
 		VerifyCommand: verifyCommand,
 	}
 	for _, evidence := range plan.Evidence {
+		sha256Value, err := fileSHA256(filepath.Join(plan.OutputDir, evidence.Spec.OutputFile))
+		if err != nil {
+			return fmt.Errorf("checksum %s: %w", evidence.Spec.Name, err)
+		}
 		manifest.Evidence = append(manifest.Evidence, manifestEvidence{
 			Name:       evidence.Spec.Name,
 			EventsPath: evidence.EventsPath,
 			OutputFile: evidence.Spec.OutputFile,
 			VerifyFlag: evidence.Spec.VerifyFlag,
+			SHA256:     sha256Value,
 		})
 	}
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
@@ -188,6 +229,15 @@ func writeBundleArtifacts(plan bundlePlan) error {
 		return fmt.Errorf("write manifest: %w", err)
 	}
 	return writeVerifyScript(filepath.Join(plan.OutputDir, "verify-release-evidence.sh"), verifyCommand)
+}
+
+func fileSHA256(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]), nil
 }
 
 func releaseEvidenceVerifyCommand(plan bundlePlan) ([]string, error) {
@@ -238,6 +288,7 @@ func buildPlan(args []string) (bundlePlan, error) {
 	flags.SetOutput(io.Discard)
 	outputDir := flags.String("output-dir", "", "directory to write release evidence bundle")
 	sharedEvents := flags.String("events", "", "events.jsonl path to use for evidence channels without an explicit override")
+	verify := flags.Bool("verify", false, "run generated release-evidence verifier after building the bundle")
 	eventPaths := make(map[string]*string, len(evidenceSpecs))
 	for _, spec := range evidenceSpecs {
 		eventPaths[spec.EventFlag] = flags.String(spec.EventFlag, "", "events.jsonl path for "+spec.Name)
@@ -256,6 +307,7 @@ func buildPlan(args []string) (bundlePlan, error) {
 	}
 
 	plan.OutputDir = *outputDir
+	plan.Verify = *verify
 	for _, spec := range evidenceSpecs {
 		eventsPath := *eventPaths[spec.EventFlag]
 		if eventsPath == "" {
@@ -270,7 +322,7 @@ func buildPlan(args []string) (bundlePlan, error) {
 }
 
 func writeUsage(w io.Writer) error {
-	_, err := fmt.Fprintln(w, "Usage: openclaw-release-evidence-bundle --output-dir DIR [--events PATH] [--tool-events PATH ...]")
+	_, err := fmt.Fprintln(w, "Usage: openclaw-release-evidence-bundle --output-dir DIR [--events PATH] [--tool-events PATH ...] [--verify]")
 	return err
 }
 

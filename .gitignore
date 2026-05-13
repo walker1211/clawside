@@ -20,6 +20,7 @@ sender.db
 *.db
 *.sqlite
 .openclaw/
+/release-evidence/
 
 # Build artifacts
 /output/

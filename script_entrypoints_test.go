@@ -914,6 +914,7 @@ func TestReadmeStage11DocumentsReleaseEvidenceGate(t *testing.T) {
 			"--output-dir",
 			"--tool-events",
 			"--delivery-events",
+			"--verify",
 			"verify-release-evidence.sh",
 			"--profile release-evidence",
 			"--profile release",
@@ -926,9 +927,9 @@ func TestReadmeStage11DocumentsReleaseEvidenceGate(t *testing.T) {
 			"scripts/verify_openclaw_mcp.sh",
 		}
 		if tc.path == "README.zh-CN.md" {
-			wantTokens = append(wantTokens, "只读", "真实投递", "显式授权", "发布级 evidence")
+			wantTokens = append(wantTokens, "只读", "真实投递", "显式授权", "发布级 evidence", "默认被 git 忽略")
 		} else {
-			wantTokens = append(wantTokens, "read-only", "real delivery", "explicit authorization", "release-grade evidence")
+			wantTokens = append(wantTokens, "read-only", "real delivery", "explicit authorization", "release-grade evidence", "ignored by git by default")
 		}
 		for _, want := range wantTokens {
 			if !strings.Contains(section, want) {
@@ -1023,6 +1024,13 @@ func TestReadmeDocumentsOpenClawTruthPlaneContinuityValidation(t *testing.T) {
 				t.Fatalf("expected %s to contain %q", path, want)
 			}
 		}
+	}
+}
+
+func TestGitignoreIgnoresReleaseEvidenceBundles(t *testing.T) {
+	content := readTextFile(t, ".gitignore")
+	if !strings.Contains(content, "/release-evidence/") {
+		t.Fatalf("expected .gitignore to ignore local release evidence bundles")
 	}
 }
 
