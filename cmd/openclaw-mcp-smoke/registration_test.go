@@ -43,6 +43,8 @@ func TestCheckMCPRegistrationSkippedByFlag(t *testing.T) {
 func TestCheckMCPRegistrationFindsNestedMCPServerCommand(t *testing.T) {
 	dir := t.TempDir()
 	command := filepath.Join(dir, "scripts", "start_mcp.sh")
+	dbPath := filepath.Join(dir, "sender.db")
+	secret := "super-secret-sender-key"
 	_ = writeExecutableForRegistrationTest(t, command)
 
 	configPath := filepath.Join(dir, "mcp.json")
@@ -50,9 +52,9 @@ func TestCheckMCPRegistrationFindsNestedMCPServerCommand(t *testing.T) {
 		"mcpServers": map[string]any{
 			"clawside": map[string]any{
 				"command": command,
-				"args":    []any{"--db", filepath.Join(dir, "sender.db")},
+				"args":    []any{"--db", dbPath},
 				"env": map[string]any{
-					"SENDER_AUTH_KEY": "super-secret-sender-key",
+					"SENDER_AUTH_KEY": secret,
 				},
 			},
 		},
@@ -60,16 +62,16 @@ func TestCheckMCPRegistrationFindsNestedMCPServerCommand(t *testing.T) {
 
 	check := checkMCPRegistration(Options{
 		RegistrationConfigPath: configPath,
-		SenderAuthKey:          "super-secret-sender-key",
-	}, RegistrationGuidance{Command: command})
+		SenderAuthKey:          secret,
+	}, buildRegistrationGuidance(command, dbPath))
 
 	if check.Status != checkStatusOK {
 		t.Fatalf("expected ok, got %+v", check)
 	}
-	if !strings.Contains(check.Detail, "registration config contains expected MCP command") || !strings.Contains(check.Detail, command) {
-		t.Fatalf("expected safe found-command detail, got %q", check.Detail)
+	if !strings.Contains(check.Detail, "safe MCP registration") || !strings.Contains(check.Detail, command) {
+		t.Fatalf("expected safe registration detail, got %q", check.Detail)
 	}
-	if strings.Contains(check.Detail, "super-secret-sender-key") || strings.Contains(check.Detail, "SECRET_TOKEN") {
+	if strings.Contains(check.Detail, secret) || strings.Contains(check.Detail, "SECRET_TOKEN") {
 		t.Fatalf("registration check leaked secrets: %q", check.Detail)
 	}
 }
@@ -77,6 +79,7 @@ func TestCheckMCPRegistrationFindsNestedMCPServerCommand(t *testing.T) {
 func TestCheckMCPRegistrationFindsArrayCommandWithRelativePath(t *testing.T) {
 	dir := t.TempDir()
 	command := filepath.Join(dir, "scripts", "start_mcp.sh")
+	dbPath := filepath.Join(dir, "sender.db")
 	_ = writeExecutableForRegistrationTest(t, command)
 
 	configPath := filepath.Join(dir, "mcp.json")
@@ -85,19 +88,239 @@ func TestCheckMCPRegistrationFindsArrayCommandWithRelativePath(t *testing.T) {
 			map[string]any{
 				"name":    "clawside",
 				"command": "scripts/start_mcp.sh",
+				"args":    []any{"--db", "sender.db"},
+				"env": map[string]any{
+					"SENDER_AUTH_KEY": "set-locally",
+				},
 			},
 		},
 	})
 
 	check := checkMCPRegistration(Options{
 		RegistrationConfigPath: configPath,
-	}, RegistrationGuidance{Command: command})
+	}, buildRegistrationGuidance(command, dbPath))
 
 	if check.Status != checkStatusOK {
 		t.Fatalf("expected ok for relative path command, got %+v", check)
 	}
-	if !strings.Contains(check.Detail, "registration config contains expected MCP command") || !strings.Contains(check.Detail, command) {
-		t.Fatalf("expected safe found-command detail, got %q", check.Detail)
+	if !strings.Contains(check.Detail, "safe MCP registration") || !strings.Contains(check.Detail, command) {
+		t.Fatalf("expected safe registration detail, got %q", check.Detail)
+	}
+}
+
+func TestCheckMCPRegistrationRequiresExpectedArgs(t *testing.T) {
+	dir := t.TempDir()
+	command := filepath.Join(dir, "scripts", "start_mcp.sh")
+	dbPath := filepath.Join(dir, "sender.db")
+	secret := "super-secret-sender-key"
+	_ = writeExecutableForRegistrationTest(t, command)
+
+	configPath := filepath.Join(dir, "mcp.json")
+	writeJSONForRegistrationTest(t, configPath, map[string]any{
+		"mcpServers": map[string]any{
+			"clawside": map[string]any{
+				"command": command,
+				"env": map[string]any{
+					"SENDER_AUTH_KEY": secret,
+				},
+			},
+		},
+	})
+
+	check := checkMCPRegistration(Options{
+		RegistrationConfigPath: configPath,
+		SenderAuthKey:          secret,
+	}, buildRegistrationGuidance(command, dbPath))
+
+	if check.Status != checkStatusFailed {
+		t.Fatalf("expected failed, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "expected args") {
+		t.Fatalf("expected missing args detail, got %q", check.Detail)
+	}
+	if strings.Contains(check.Detail, secret) {
+		t.Fatalf("registration check leaked secret: %q", check.Detail)
+	}
+}
+
+func TestCheckMCPRegistrationRequiresSenderAuthEnv(t *testing.T) {
+	dir := t.TempDir()
+	command := filepath.Join(dir, "scripts", "start_mcp.sh")
+	dbPath := filepath.Join(dir, "sender.db")
+	_ = writeExecutableForRegistrationTest(t, command)
+
+	configPath := filepath.Join(dir, "mcp.json")
+	writeJSONForRegistrationTest(t, configPath, map[string]any{
+		"mcpServers": map[string]any{
+			"clawside": map[string]any{
+				"command": command,
+				"args":    []any{"--db", dbPath},
+			},
+		},
+	})
+
+	check := checkMCPRegistration(Options{RegistrationConfigPath: configPath}, buildRegistrationGuidance(command, dbPath))
+
+	if check.Status != checkStatusFailed {
+		t.Fatalf("expected failed, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "SENDER_AUTH_KEY") {
+		t.Fatalf("expected missing sender auth env detail, got %q", check.Detail)
+	}
+}
+
+func TestCheckMCPRegistrationFailsForWrongDBArg(t *testing.T) {
+	dir := t.TempDir()
+	command := filepath.Join(dir, "scripts", "start_mcp.sh")
+	dbPath := filepath.Join(dir, "sender.db")
+	_ = writeExecutableForRegistrationTest(t, command)
+
+	configPath := filepath.Join(dir, "mcp.json")
+	writeJSONForRegistrationTest(t, configPath, map[string]any{
+		"mcpServers": map[string]any{
+			"clawside": map[string]any{
+				"command": command,
+				"args":    []any{"--db", filepath.Join(dir, "other.db")},
+				"env": map[string]any{
+					"SENDER_AUTH_KEY": "set-locally",
+				},
+			},
+		},
+	})
+
+	check := checkMCPRegistration(Options{RegistrationConfigPath: configPath}, buildRegistrationGuidance(command, dbPath))
+
+	if check.Status != checkStatusFailed {
+		t.Fatalf("expected failed, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "--db") || !strings.Contains(check.Detail, dbPath) {
+		t.Fatalf("expected wrong DB detail, got %q", check.Detail)
+	}
+}
+
+func TestCheckMCPRegistrationAcceptsRelativeDBArg(t *testing.T) {
+	dir := t.TempDir()
+	command := filepath.Join(dir, "scripts", "start_mcp.sh")
+	dbPath := filepath.Join(dir, "sender.db")
+	_ = writeExecutableForRegistrationTest(t, command)
+
+	configPath := filepath.Join(dir, "mcp.json")
+	writeJSONForRegistrationTest(t, configPath, map[string]any{
+		"mcpServers": map[string]any{
+			"clawside": map[string]any{
+				"command": "scripts/start_mcp.sh",
+				"args":    []any{"--db=sender.db"},
+				"env": map[string]any{
+					"SENDER_AUTH_KEY": "set-locally",
+				},
+			},
+		},
+	})
+
+	check := checkMCPRegistration(Options{RegistrationConfigPath: configPath}, buildRegistrationGuidance(command, dbPath))
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected ok for relative DB path, got %+v", check)
+	}
+}
+
+func TestCheckMCPRegistrationRejectsSenderAuthOnArgv(t *testing.T) {
+	dir := t.TempDir()
+	command := filepath.Join(dir, "scripts", "start_mcp.sh")
+	dbPath := filepath.Join(dir, "sender.db")
+	secret := "super-secret-sender-key"
+	_ = writeExecutableForRegistrationTest(t, command)
+
+	configPath := filepath.Join(dir, "mcp.json")
+	writeJSONForRegistrationTest(t, configPath, map[string]any{
+		"mcpServers": map[string]any{
+			"clawside": map[string]any{
+				"command": command,
+				"args":    []any{"--db", dbPath, "--sender-auth-key", secret},
+				"env": map[string]any{
+					"SENDER_AUTH_KEY": secret,
+				},
+			},
+		},
+	})
+
+	check := checkMCPRegistration(Options{
+		RegistrationConfigPath: configPath,
+		SenderAuthKey:          secret,
+	}, buildRegistrationGuidance(command, dbPath))
+
+	if check.Status != checkStatusFailed {
+		t.Fatalf("expected failed, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "secrets on argv") {
+		t.Fatalf("expected argv secret detail, got %q", check.Detail)
+	}
+	if strings.Contains(check.Detail, secret) {
+		t.Fatalf("registration check leaked secret: %q", check.Detail)
+	}
+}
+
+func TestCheckMCPRegistrationRejectsTokenArgs(t *testing.T) {
+	dir := t.TempDir()
+	command := filepath.Join(dir, "scripts", "start_mcp.sh")
+	dbPath := filepath.Join(dir, "sender.db")
+	token := "bot123456:SECRET_TOKEN"
+	_ = writeExecutableForRegistrationTest(t, command)
+
+	configPath := filepath.Join(dir, "mcp.json")
+	writeJSONForRegistrationTest(t, configPath, map[string]any{
+		"mcpServers": map[string]any{
+			"clawside": map[string]any{
+				"command": command,
+				"args":    []any{"--db", dbPath, "--bot-token=" + token},
+				"env": map[string]any{
+					"SENDER_AUTH_KEY": "set-locally",
+				},
+			},
+		},
+	})
+
+	check := checkMCPRegistration(Options{RegistrationConfigPath: configPath}, buildRegistrationGuidance(command, dbPath))
+
+	if check.Status != checkStatusFailed {
+		t.Fatalf("expected failed, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "secrets on argv") {
+		t.Fatalf("expected argv secret detail, got %q", check.Detail)
+	}
+	for _, leaked := range []string{token, "SECRET_TOKEN"} {
+		if strings.Contains(check.Detail, leaked) {
+			t.Fatalf("registration check leaked token %q: %q", leaked, check.Detail)
+		}
+	}
+}
+
+func TestCheckMCPRegistrationAcceptsOneSafeCandidateAmongUnsafeMatches(t *testing.T) {
+	dir := t.TempDir()
+	command := filepath.Join(dir, "scripts", "start_mcp.sh")
+	dbPath := filepath.Join(dir, "sender.db")
+	_ = writeExecutableForRegistrationTest(t, command)
+
+	configPath := filepath.Join(dir, "mcp.json")
+	writeJSONForRegistrationTest(t, configPath, map[string]any{
+		"mcpServers": map[string]any{
+			"unsafe": map[string]any{
+				"command": command,
+			},
+			"safe": map[string]any{
+				"command": command,
+				"args":    []any{"--db", dbPath},
+				"env": map[string]any{
+					"SENDER_AUTH_KEY": "set-locally",
+				},
+			},
+		},
+	})
+
+	check := checkMCPRegistration(Options{RegistrationConfigPath: configPath}, buildRegistrationGuidance(command, dbPath))
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected ok when one matching candidate is safe, got %+v", check)
 	}
 }
 

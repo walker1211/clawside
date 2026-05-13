@@ -9,6 +9,7 @@ DB_PATH="${CLAWSIDE_DB_PATH:-$ROOT_DIR/sender.db}"
 SENDER_BASE_URL_VALUE="${SENDER_BASE_URL:-${CLAWSIDE_SENDER_BASE_URL:-http://127.0.0.1:8787}}"
 MCP_COMMAND="$ROOT_DIR/scripts/start_mcp.sh"
 REGISTRATION_CONFIG_PATH=""
+SKIP_REGISTRATION_CHECK="false"
 OPENCLAW_TOOL_CALL_CHECKLIST="false"
 OPENCLAW_TOOL_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_RESULTS_PATH=""
@@ -42,7 +43,8 @@ usage() {
   printf '  --sender-base-url URL      Sender service URL\n'
   printf '  --mcp-command PATH_OR_COMMAND\n'
   printf '                             MCP command to launch (default: ROOT_DIR/scripts/start_mcp.sh)\n'
-  printf '  --registration-config PATH  Read-only JSON MCP registration config to inspect\n'
+  printf '  --registration-config PATH  Read-only JSON MCP registration config to inspect for safe start_mcp.sh registration\n'
+  printf '  --skip-registration-check  Skip read-only MCP registration safety inspection\n'
   printf '  --openclaw-tool-call-checklist\n'
   printf '                             Include OpenClaw-side read-only tool call checklist\n'
   printf '  --openclaw-tool-results PATH\n'
@@ -128,6 +130,10 @@ while [[ $# -gt 0 ]]; do
       fi
       REGISTRATION_CONFIG_PATH="$2"
       shift 2
+      ;;
+    --skip-registration-check)
+      SKIP_REGISTRATION_CHECK="true"
+      shift
       ;;
     --openclaw-tool-call-checklist)
       OPENCLAW_TOOL_CALL_CHECKLIST="true"
@@ -281,6 +287,9 @@ run_smoke() {
 
   if [[ -n "$REGISTRATION_CONFIG_PATH" ]]; then
     set -- "$@" --registration-config "$REGISTRATION_CONFIG_PATH"
+  fi
+  if [[ "$SKIP_REGISTRATION_CHECK" == "true" ]]; then
+    set -- "$@" --skip-registration-check
   fi
   if [[ "$OPENCLAW_TOOL_CALL_CHECKLIST" == "true" ]]; then
     set -- "$@" --openclaw-tool-call-checklist

@@ -559,7 +559,7 @@ func buildRegistrationGuidance(command, dbPath string) RegistrationGuidance {
 		Env: map[string]string{
 			"SENDER_AUTH_KEY": "set this in the OpenClaw environment; do not paste it into shared logs",
 		},
-		Note: "Use this command and args when registering the local MCP server; this smoke verifier does not write OpenClaw or Claude config.",
+		Note: "Use this command and args when registering the local MCP server; this read-only smoke verifier does not write OpenClaw or Claude config, and secrets must stay in env rather than argv.",
 	}
 }
 

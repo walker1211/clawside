@@ -1085,6 +1085,11 @@ func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
 	if !strings.Contains(content, "--registration-config PATH") {
 		t.Fatalf("expected %s help to list --registration-config", path)
 	}
+	for _, want := range []string{"--skip-registration-check", "read-only", "start_mcp.sh"} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s registration safety help to contain %q", path, want)
+		}
+	}
 	if !strings.Contains(content, "REGISTRATION_CONFIG_PATH=\"\"") {
 		t.Fatalf("expected %s to default registration config path to empty", path)
 	}
@@ -1093,6 +1098,15 @@ func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
 	}
 	if !strings.Contains(content, "if [[ -n \"$REGISTRATION_CONFIG_PATH\" ]]; then") || !strings.Contains(content, "set -- \"$@\" --registration-config \"$REGISTRATION_CONFIG_PATH\"") {
 		t.Fatalf("expected %s to forward --registration-config only when set", path)
+	}
+	if !strings.Contains(content, "SKIP_REGISTRATION_CHECK=\"false\"") {
+		t.Fatalf("expected %s to default skip registration check to false", path)
+	}
+	if !strings.Contains(content, "--skip-registration-check)") || !strings.Contains(content, "SKIP_REGISTRATION_CHECK=\"true\"") {
+		t.Fatalf("expected %s to parse --skip-registration-check", path)
+	}
+	if !strings.Contains(content, "if [[ \"$SKIP_REGISTRATION_CHECK\" == \"true\" ]]; then") || !strings.Contains(content, "set -- \"$@\" --skip-registration-check") {
+		t.Fatalf("expected %s to forward --skip-registration-check only when set", path)
 	}
 	if !strings.Contains(content, "--openclaw-tool-call-checklist") {
 		t.Fatalf("expected %s help to list --openclaw-tool-call-checklist", path)

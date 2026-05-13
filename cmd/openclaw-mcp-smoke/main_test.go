@@ -88,6 +88,11 @@ func TestBuildRegistrationGuidanceUsesAbsoluteCommandAndNoSecrets(t *testing.T) 
 	if !strings.Contains(text, "SENDER_AUTH_KEY") {
 		t.Fatalf("expected env guidance to mention SENDER_AUTH_KEY: %s", text)
 	}
+	for _, want := range []string{"read-only", "argv"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected registration guidance to mention %q: %s", want, text)
+		}
+	}
 	if strings.Contains(text, "super-secret") || strings.Contains(text, "sender-secret") {
 		t.Fatalf("registration guidance leaked a concrete secret: %s", text)
 	}
@@ -704,7 +709,13 @@ func TestRunReportsMCPRegistrationFromConfig(t *testing.T) {
 	registrationConfigPath := filepath.Join(dir, "mcp.json")
 	writeJSONForRegistrationTest(t, registrationConfigPath, map[string]any{
 		"mcpServers": map[string]any{
-			"clawside": map[string]any{"command": "go"},
+			"clawside": map[string]any{
+				"command": "go",
+				"args":    []any{"run", "../clawside-mcp"},
+				"env": map[string]any{
+					"SENDER_AUTH_KEY": "super-secret-sender-key",
+				},
+			},
 		},
 	})
 
