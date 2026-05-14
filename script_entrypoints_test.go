@@ -97,6 +97,9 @@ func TestStartScriptWaitsForSenderReadiness(t *testing.T) {
 	if strings.Contains(content, "sleep 0.2") {
 		t.Fatalf("start.sh should not rely on a fixed sleep before reporting readiness")
 	}
+	if strings.Contains(content, "! kill -0 \"$pid\" 2>/dev/null || ! process_matches_sender \"$pid\"") {
+		t.Fatalf("start.sh should not treat a transient command mismatch during nohup exec as early exit")
+	}
 	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") || strings.Contains(content, "BASH_SOURCE") {
 		t.Fatalf("start.sh should avoid Bash arrays and BASH_SOURCE for Bash 3.2 compatibility")
 	}

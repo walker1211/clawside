@@ -24,13 +24,13 @@ wait_for_sender_ready() {
   local elapsed=0
 
   while [[ "$elapsed" -lt "$SENDER_READY_TIMEOUT_SECONDS" ]]; do
-    if ! kill -0 "$pid" 2>/dev/null || ! process_matches_sender "$pid"; then
+    if ! kill -0 "$pid" 2>/dev/null; then
       rm -f "$PID_FILE"
       printf 'clawside sender exited before becoming ready; recent logs:\n' >&2
       tail -n 20 "$LOG_FILE" >&2 || true
       return 1
     fi
-    if curl -fsS "$SENDER_READY_URL" >/dev/null 2>&1; then
+    if curl -fsS "$SENDER_READY_URL" >/dev/null 2>&1 && process_matches_sender "$pid"; then
       return 0
     fi
     sleep 1
