@@ -899,6 +899,34 @@ func TestReadmeStage12DocumentsDivergenceE2EClosure(t *testing.T) {
 	}
 }
 
+func TestReadmeDocumentsDiagnosticBundle(t *testing.T) {
+	for _, tc := range []struct {
+		path  string
+		terms []string
+	}{
+		{path: "README.zh-CN.md", terms: []string{"只读", "不执行真实投递", "不写 OpenClaw 或 Claude 配置", "secrets 会被 redacted"}},
+		{path: "README.en.md", terms: []string{"read-only", "does not perform real delivery", "does not write OpenClaw or Claude config", "secrets are redacted"}},
+	} {
+		content := readTextFile(t, tc.path)
+		wantTokens := []string{
+			"scripts/build_openclaw_diagnostic_bundle.sh",
+			"diagnostic-bundles/",
+			"--output-dir",
+			"manifest.json",
+			"smoke-report.json",
+			"sender-health.json",
+			"sender-stats.json",
+			"verify-diagnostic-bundle.sh",
+		}
+		wantTokens = append(wantTokens, tc.terms...)
+		for _, want := range wantTokens {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", tc.path, want)
+			}
+		}
+	}
+}
+
 func TestReadmeStage11DocumentsReleaseEvidenceGate(t *testing.T) {
 	for _, tc := range []struct {
 		path    string
@@ -1054,6 +1082,39 @@ func TestOpenClawReleaseEvidenceBundleScriptEntrypoint(t *testing.T) {
 		}
 	}
 	for _, unwanted := range []string{"=()", "[@]", "BASH_SOURCE", "--deliver-main", "telegram"} {
+		if strings.Contains(content, unwanted) {
+			t.Fatalf("expected %s not to contain %q", path, unwanted)
+		}
+	}
+}
+
+func TestGitignoreIgnoresDiagnosticBundles(t *testing.T) {
+	content := readTextFile(t, ".gitignore")
+	if !strings.Contains(content, "/diagnostic-bundles/") {
+		t.Fatalf("expected .gitignore to ignore local diagnostic bundles")
+	}
+}
+
+func TestOpenClawDiagnosticBundleScriptEntrypoint(t *testing.T) {
+	path := "scripts/build_openclaw_diagnostic_bundle.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, want := range []string{
+		"go run -C \"$ROOT_DIR\" ./cmd/openclaw-diagnostic-bundle \"$@\"",
+		"help|--help|-h",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	for _, unwanted := range []string{"=()", "[@]", "BASH_SOURCE", "--deliver-main", "--chat-id", "--sender-auth-key", "SENDER_AUTH_KEY", "telegram", "load_env.sh"} {
 		if strings.Contains(content, unwanted) {
 			t.Fatalf("expected %s not to contain %q", path, unwanted)
 		}

@@ -887,6 +887,19 @@ SENDER_AUTH_KEY=... scripts/verify_openclaw_mcp.sh \
 
 Only after explicit authorization, run the real delivery gate with `--profile release --deliver-main --chat-id <telegram_chat_id>`. That path still uses `scripts/verify_openclaw_mcp.sh`, goes through the sender backend, and does not call Telegram directly.
 
+### Diagnostic support bundle
+
+When a reviewer or operator needs local readiness diagnostics, build a read-only diagnostic bundle:
+
+```bash
+./scripts/build_openclaw_diagnostic_bundle.sh \
+  --output-dir ./diagnostic-bundles/local
+
+./diagnostic-bundles/local/verify-diagnostic-bundle.sh
+```
+
+The command writes `manifest.json`, `smoke-report.json`, `sender-health.json`, `sender-ready.json`, `sender-stats.json`, `sender-jobs.json`, `registration-guidance.json`, `environment-summary.json`, and `verify-diagnostic-bundle.sh`. It only reads smoke, registration guidance, and sender observability; it does not perform real delivery and does not write OpenClaw or Claude config. `SENDER_AUTH_KEY` is inherited only from the local environment, secrets are redacted, and `diagnostic-bundles/` is a local generated directory ignored by git by default.
+
 ### Stage 12 divergence / E2E closure validation
 
 Stage 12 splits divergence observation into its own evidence path instead of relying only on reopen/continuity validation. After dispatching one handoff, `divergence_record` records a `transport_accepted` observer signal, then the same handoff is progressed all the way to `completed`; `divergence_list` observes the `transport_accepted` divergence, `repair_candidate_list` verifies a `missing_authoritative_progress` candidate, and final `handoff_get` plus `workflow_status` prove the E2E truth still closes at `completed`. The export, extractor, and verifier steps remain read-only evidence handling.

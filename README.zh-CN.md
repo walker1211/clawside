@@ -887,6 +887,19 @@ SENDER_AUTH_KEY=... scripts/verify_openclaw_mcp.sh \
 
 只有在显式授权后，才运行带 `--profile release --deliver-main --chat-id <telegram_chat_id>` 的真实投递 gate。该路径仍然使用 `scripts/verify_openclaw_mcp.sh`，经 sender 后端完成，不直接调用 Telegram。
 
+### Diagnostic support bundle / 诊断支持包
+
+需要给 reviewer 或 operator 收集本地 readiness 线索时，使用只读 diagnostic bundle：
+
+```bash
+./scripts/build_openclaw_diagnostic_bundle.sh \
+  --output-dir ./diagnostic-bundles/local
+
+./diagnostic-bundles/local/verify-diagnostic-bundle.sh
+```
+
+该命令写出 `manifest.json`、`smoke-report.json`、`sender-health.json`、`sender-ready.json`、`sender-stats.json`、`sender-jobs.json`、`registration-guidance.json`、`environment-summary.json` 和 `verify-diagnostic-bundle.sh`。它只读取 smoke、registration guidance 和 sender observability；不执行真实投递，不写 OpenClaw 或 Claude 配置。`SENDER_AUTH_KEY` 只从本地环境继承，secrets 会被 redacted，`diagnostic-bundles/` 是本地生成目录并默认被 git 忽略。
+
 ### Stage 12 / 阶段 12 divergence / E2E 闭环验收
 
 Stage 12 将 divergence 观察从 reopen/continuity 验收里拆成独立 evidence：同一条 handoff dispatch 后，先用 `divergence_record` 记录 `transport_accepted` observer signal，再完整走到 `completed`。随后用 `divergence_list` 观察 `transport_accepted` divergence，用 `repair_candidate_list` 验证 `missing_authoritative_progress` candidate，最后用 `handoff_get` 和 `workflow_status` 证明 E2E truth 仍然闭环在 `completed`。导出、extractor 与 verifier 仍是只读 evidence 路径。

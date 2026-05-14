@@ -21,6 +21,7 @@ sender.db
 *.sqlite
 .openclaw/
 /release-evidence/
+/diagnostic-bundles/
 
 # Build artifacts
 /output/
