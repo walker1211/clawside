@@ -70,6 +70,38 @@ func TestRootLifecycleScriptsAreProductEntrypoints(t *testing.T) {
 	}
 }
 
+func TestStartScriptWaitsForSenderReadiness(t *testing.T) {
+	content := readTextFile(t, "start.sh")
+	for _, want := range []string{
+		"SENDER_READY_URL=\"http://127.0.0.1:8787/healthz\"",
+		"SENDER_READY_TIMEOUT_SECONDS=10",
+		"wait_for_sender_ready()",
+		"curl -fsS \"$SENDER_READY_URL\"",
+		"kill -0 \"$pid\"",
+		"process_matches_sender \"$pid\"",
+		"clawside sender exited before becoming ready; recent logs:",
+		"clawside sender did not become ready within",
+		"tail -n 20 \"$LOG_FILE\"",
+		"wait_for_sender_ready \"$NEW_PID\"",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected start.sh to contain %q", want)
+		}
+	}
+
+	waitCall := strings.Index(content, "wait_for_sender_ready \"$NEW_PID\"")
+	startedMessage := strings.Index(content, "clawside sender started")
+	if waitCall == -1 || startedMessage == -1 || waitCall > startedMessage {
+		t.Fatalf("expected start.sh to wait for readiness before reporting started")
+	}
+	if strings.Contains(content, "sleep 0.2") {
+		t.Fatalf("start.sh should not rely on a fixed sleep before reporting readiness")
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") || strings.Contains(content, "BASH_SOURCE") {
+		t.Fatalf("start.sh should avoid Bash arrays and BASH_SOURCE for Bash 3.2 compatibility")
+	}
+}
+
 func assertFileContains(t *testing.T, path string, want string) {
 	t.Helper()
 	content := readTextFile(t, path)

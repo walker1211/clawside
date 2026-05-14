@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 . "$ROOT_DIR/scripts/load_env.sh"
 
 LOG_DIR="$ROOT_DIR/logs"
@@ -9,12 +9,38 @@ LOG_FILE="$LOG_DIR/sender.log"
 PID_FILE="$ROOT_DIR/logs/sender.pid"
 CONFIG_PATH="$ROOT_DIR/configs/config.toml"
 BINARY_PATH="$ROOT_DIR/clawside"
+SENDER_READY_URL="http://127.0.0.1:8787/healthz"
+SENDER_READY_TIMEOUT_SECONDS=10
 
 process_matches_sender() {
   local pid="$1"
   local command
   command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   [[ "$command" == "$BINARY_PATH"* ]]
+}
+
+wait_for_sender_ready() {
+  local pid="$1"
+  local elapsed=0
+
+  while [[ "$elapsed" -lt "$SENDER_READY_TIMEOUT_SECONDS" ]]; do
+    if ! kill -0 "$pid" 2>/dev/null || ! process_matches_sender "$pid"; then
+      rm -f "$PID_FILE"
+      printf 'clawside sender exited before becoming ready; recent logs:\n' >&2
+      tail -n 20 "$LOG_FILE" >&2 || true
+      return 1
+    fi
+    if curl -fsS "$SENDER_READY_URL" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+
+  rm -f "$PID_FILE"
+  printf 'clawside sender did not become ready within %s seconds; recent logs:\n' "$SENDER_READY_TIMEOUT_SECONDS" >&2
+  tail -n 20 "$LOG_FILE" >&2 || true
+  return 1
 }
 
 if [[ ! -f "$CONFIG_PATH" ]]; then
@@ -43,12 +69,8 @@ cd "$ROOT_DIR"
 nohup "$ROOT_DIR/clawside" > "$LOG_FILE" 2>&1 &
 NEW_PID="$!"
 printf '%s\n' "$NEW_PID" > "$PID_FILE"
-sleep 0.2
 
-if ! kill -0 "$NEW_PID" 2>/dev/null || ! process_matches_sender "$NEW_PID"; then
-  rm -f "$PID_FILE"
-  printf 'clawside sender failed to start; recent logs:\n' >&2
-  tail -n 20 "$LOG_FILE" >&2 || true
+if ! wait_for_sender_ready "$NEW_PID"; then
   exit 1
 fi
 
