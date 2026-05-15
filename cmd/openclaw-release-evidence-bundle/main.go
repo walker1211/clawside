@@ -198,14 +198,10 @@ type manifestEvidence struct {
 }
 
 func writeBundleArtifacts(plan bundlePlan) error {
-	verifyCommand, err := releaseEvidenceVerifyCommand(plan)
-	if err != nil {
-		return err
-	}
 	manifest := releaseEvidenceManifest{
 		SchemaVersion: 1,
 		Profile:       "release-evidence",
-		VerifyCommand: verifyCommand,
+		VerifyCommand: []string{"./verify-release-evidence.sh"},
 	}
 	for _, evidence := range plan.Evidence {
 		sha256Value, err := fileSHA256(filepath.Join(plan.OutputDir, evidence.Spec.OutputFile))
@@ -228,7 +224,7 @@ func writeBundleArtifacts(plan bundlePlan) error {
 	if err := os.WriteFile(filepath.Join(plan.OutputDir, "manifest.json"), manifestData, 0o600); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
-	return writeVerifyScript(filepath.Join(plan.OutputDir, "verify-release-evidence.sh"), verifyCommand)
+	return writePortableVerifyScript(filepath.Join(plan.OutputDir, "verify-release-evidence.sh"), plan.Evidence)
 }
 
 func fileSHA256(path string) (string, error) {
@@ -256,30 +252,25 @@ func releaseEvidenceVerifyCommand(plan bundlePlan) ([]string, error) {
 	return command, nil
 }
 
-func writeVerifyScript(path string, command []string) error {
+func writePortableVerifyScript(path string, evidence []plannedEvidence) error {
 	var b strings.Builder
 	b.WriteString("#!/usr/bin/env bash\n")
 	b.WriteString("set -euo pipefail\n\n")
-	for i, arg := range command {
-		if i == 0 {
-			b.WriteString(shellQuote(arg))
-		} else {
-			b.WriteString(" \\\n  ")
-			b.WriteString(shellQuote(arg))
-		}
+	b.WriteString("BUNDLE_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n")
+	b.WriteString("REPO_ROOT=\"$(git -C \"$BUNDLE_DIR\" rev-parse --show-toplevel)\"\n\n")
+	b.WriteString("\"$REPO_ROOT/scripts/verify_openclaw_mcp.sh\" \\\n  --profile release-evidence")
+	for _, item := range evidence {
+		b.WriteString(" \\\n  --")
+		b.WriteString(item.Spec.VerifyFlag)
+		b.WriteString(" \"$BUNDLE_DIR/")
+		b.WriteString(item.Spec.OutputFile)
+		b.WriteString("\"")
 	}
 	b.WriteByte('\n')
 	if err := os.WriteFile(path, []byte(b.String()), 0o755); err != nil {
 		return fmt.Errorf("write verify script: %w", err)
 	}
 	return nil
-}
-
-func shellQuote(value string) string {
-	if value == "" {
-		return "''"
-	}
-	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }
 
 func buildPlan(args []string) (bundlePlan, error) {

@@ -860,7 +860,7 @@ The recommended bundle-first path builds a local evidence bundle from real traje
   --verify
 ```
 
-The bundle command only invokes existing extractors and writes `manifest.json`, the nine results JSON files, and `verify-release-evidence.sh`. `--verify` runs the generated `scripts/verify_openclaw_mcp.sh --profile release-evidence` command, stays read-only, does not include `--deliver-main` or `--chat-id`, and never calls the Telegram API directly. `release-evidence/openclaw-vX.Y.Z` is a local generated directory and is ignored by git by default.
+The bundle command only invokes existing extractors and writes `manifest.json`, the nine results JSON files, and `verify-release-evidence.sh`. `--verify` runs the generated `scripts/verify_openclaw_mcp.sh --profile release-evidence` command, stays read-only, does not include `--deliver-main` or `--chat-id`, and never calls the Telegram API directly. `verify-release-evidence.sh` locates the nine JSON files from the script directory and re-runs the verifier from the current repository, so the bundle can be moved within the same repository and verified again. `release-evidence/openclaw-vX.Y.Z` is a local generated directory and is ignored by git by default.
 
 For a two-step flow, you can also run the generated verifier script manually:
 

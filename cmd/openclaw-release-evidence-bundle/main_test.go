@@ -282,6 +282,13 @@ func TestRunBundleWritesManifest(t *testing.T) {
 	if manifest.Evidence[0].SHA256 != hex.EncodeToString(toolResultsSHA256[:]) {
 		t.Fatalf("tool results sha256 = %q, want %q", manifest.Evidence[0].SHA256, hex.EncodeToString(toolResultsSHA256[:]))
 	}
+	if len(manifest.VerifyCommand) != 1 || manifest.VerifyCommand[0] != "./verify-release-evidence.sh" {
+		t.Fatalf("manifest verify_command = %#v, want [./verify-release-evidence.sh]", manifest.VerifyCommand)
+	}
+	verifyCommand := strings.Join(manifest.VerifyCommand, " ")
+	if strings.Contains(verifyCommand, outputDir) {
+		t.Fatalf("manifest verify_command should not contain generated output dir %q: %#v", outputDir, manifest.VerifyCommand)
+	}
 	manifestText := string(data)
 	for _, secretToken := range []string{"SENDER_AUTH_KEY", "--chat-id", "--deliver-main"} {
 		if strings.Contains(manifestText, secretToken) {
@@ -311,14 +318,23 @@ func TestRunBundleWritesReadOnlyVerifyScript(t *testing.T) {
 		t.Fatalf("read verify script: %v", err)
 	}
 	script := string(data)
-	for _, want := range []string{"scripts/verify_openclaw_mcp.sh", "--profile", "release-evidence"} {
+	for _, want := range []string{
+		"BUNDLE_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"",
+		"REPO_ROOT=\"$(git -C \"$BUNDLE_DIR\" rev-parse --show-toplevel)\"",
+		"\"$REPO_ROOT/scripts/verify_openclaw_mcp.sh\"",
+		"--profile",
+		"release-evidence",
+	} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("verify script missing %q:\n%s", want, script)
 		}
 	}
+	if strings.Contains(script, outputDir) {
+		t.Fatalf("verify script should not contain generated output dir %q:\n%s", outputDir, script)
+	}
 	for _, spec := range evidenceSpecs {
-		if !strings.Contains(script, "--"+spec.VerifyFlag) || !strings.Contains(script, spec.OutputFile) {
-			t.Fatalf("verify script missing %s evidence:\n%s", spec.Name, script)
+		if !strings.Contains(script, "--"+spec.VerifyFlag) || !strings.Contains(script, "\"$BUNDLE_DIR/"+spec.OutputFile+"\"") {
+			t.Fatalf("verify script missing portable %s evidence:\n%s", spec.Name, script)
 		}
 	}
 	for _, forbidden := range []string{"SENDER_AUTH_KEY", "--chat-id", "--deliver-main"} {
