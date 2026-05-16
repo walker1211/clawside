@@ -787,10 +787,10 @@ Install the pre-push hook:
 Create and push a release tag:
 
 ```bash
-./scripts/tag-release.sh v0.1.0
+./scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-v0.1.0 v0.1.0
 ```
 
-`tag-release.sh` requires a clean worktree, a tag name starting with `v`, a non-existing tag, and a passing `scripts/ci-local.sh clean` run before tag creation. After the clean CI gate passes, the script pushes the tag automatically. Pushing the tag does not directly create a GitHub Release; Stage 8 does not add a GitHub Actions release workflow.
+`tag-release.sh` requires a clean worktree, a tag name starting with `v`, a non-existing tag, and an explicit release evidence bundle through `--evidence-bundle DIR` or `CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=DIR`. The script first re-verifies the bundle manifest and `verify-release-evidence.sh` read-only, then runs `scripts/ci-local.sh clean`, then creates and pushes the tag automatically. Pushing the tag does not directly create a GitHub Release; Stage 8 does not add a GitHub Actions release workflow.
 
 ### Stage 9 remote CI and release workflow
 
@@ -810,10 +810,10 @@ Recommended release path after explicit release authorization:
 
 ```bash
 scripts/ci-local.sh clean
-scripts/tag-release.sh vX.Y.Z
+scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
 ```
 
-`tag-release.sh` creates and pushes the `v*` tag to GitHub after the local clean CI gate passes, then the GitHub Actions release workflow builds artifacts remotely and creates or updates the GitHub Release. Stage 9 implementation and local verification do not run push, tag, or release; those shared-state operations still require explicit authorization.
+`tag-release.sh` first read-only re-verifies the provided release evidence bundle, then runs the local clean CI gate, then creates and pushes the `v*` tag to GitHub. The GitHub Actions release workflow then builds artifacts remotely and creates or updates the GitHub Release. Stage 9 implementation and local verification do not run push, tag, or release; those shared-state operations still require explicit authorization.
 
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
 
@@ -866,6 +866,18 @@ For a two-step flow, you can also run the generated verifier script manually:
 
 ```bash
 ./release-evidence/openclaw-vX.Y.Z/verify-release-evidence.sh
+```
+
+Before tagging, the release script re-verifies the same bundle:
+
+```bash
+scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
+```
+
+You can also pass the same directory through the environment:
+
+```bash
+CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=./release-evidence/openclaw-vX.Y.Z scripts/tag-release.sh vX.Y.Z
 ```
 
 Advanced manual fallback can still pass the nine JSON files explicitly:

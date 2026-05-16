@@ -37,4 +37,4 @@ Use Conventional Commits, for example `feat(mcp): add read-only status tool` or 
 
 ## Releases
 
-Only maintainers should create or push release tags. Use `scripts/tag-release.sh vX.Y.Z` only after explicit release authorization; it runs the clean gate, creates the tag, and pushes it to origin.
+Only maintainers should create or push release tags. Use `scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z` only after explicit release authorization and read-only release evidence verification; it runs the evidence gate, clean gate, creates the tag, and pushes it to origin.

@@ -113,6 +113,75 @@ func TestInstallHooksInstallsIntoRepoWhenRunOutsideRoot(t *testing.T) {
 	}
 }
 
+func TestTagReleaseRequiresEvidenceBundleBeforeTagging(t *testing.T) {
+	repo := newTempGitRepoWithTagRelease(t, "#!/usr/bin/env bash\nset -euo pipefail\n")
+
+	stdout, stderr, err := runScript(t, repo, "scripts/tag-release.sh", "v1.2.3")
+	if err == nil {
+		t.Fatalf("expected tag-release.sh to require release evidence bundle")
+	}
+	output := stdout + stderr
+	if !strings.Contains(output, "release evidence bundle is required") {
+		t.Fatalf("expected missing evidence bundle error, got:\n%s", output)
+	}
+	if tagExists(t, repo, "v1.2.3") {
+		t.Fatalf("tag-release.sh created tag before evidence bundle passed")
+	}
+}
+
+func TestTagReleaseRunsEvidenceGateBeforeCleanCI(t *testing.T) {
+	repo := newTempGitRepoWithTagRelease(t, "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'ci-local\\n' >> \"$TAG_RELEASE_ORDER_LOG\"\n")
+	bundleDir := filepath.Join(t.TempDir(), "release-evidence", "openclaw-v1.2.3")
+	writeFile(t, filepath.Join(bundleDir, "verify-release-evidence.sh"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'verify-release-evidence\\n' >> \"$TAG_RELEASE_ORDER_LOG\"\n")
+	if err := os.Chmod(filepath.Join(bundleDir, "verify-release-evidence.sh"), 0o755); err != nil {
+		t.Fatalf("chmod verify-release-evidence.sh: %v", err)
+	}
+	binDir := t.TempDir()
+	writeFile(t, filepath.Join(binDir, "go"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'verify-manifest\\n' >> \"$TAG_RELEASE_ORDER_LOG\"\n")
+	if err := os.Chmod(filepath.Join(binDir, "go"), 0o755); err != nil {
+		t.Fatalf("chmod go stub: %v", err)
+	}
+	orderLog := filepath.Join(t.TempDir(), "order.log")
+	env := []string{
+		"TAG_RELEASE_ORDER_LOG=" + orderLog,
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/tag-release.sh", env, "--evidence-bundle", bundleDir, "v1.2.3")
+	if err == nil {
+		t.Fatalf("expected push to fail without origin while still exercising gates")
+	}
+	output := stdout + stderr
+	if strings.Contains(output, "release evidence bundle is required") {
+		t.Fatalf("tag-release.sh ignored --evidence-bundle:\n%s", output)
+	}
+	order, err := os.ReadFile(orderLog)
+	if err != nil {
+		t.Fatalf("read order log: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if string(order) != "verify-manifest\nverify-release-evidence\nci-local\n" {
+		t.Fatalf("unexpected gate order:\n%s", order)
+	}
+}
+
+func newTempGitRepoWithTagRelease(t *testing.T, ciLocalScript string) string {
+	t.Helper()
+	repo := newTempGitRepoWithScript(t, "scripts/tag-release.sh")
+	writeFile(t, filepath.Join(repo, "scripts", "ci-local.sh"), ciLocalScript)
+	if err := os.Chmod(filepath.Join(repo, "scripts", "ci-local.sh"), 0o755); err != nil {
+		t.Fatalf("chmod scripts/ci-local.sh: %v", err)
+	}
+	runGit(t, repo, "add", "scripts")
+	runGit(t, repo, "-c", "user.email=test@example.invalid", "-c", "user.name=Test User", "commit", "-m", "init")
+	return repo
+}
+
+func tagExists(t *testing.T, repo string, tag string) bool {
+	t.Helper()
+	cmd := exec.Command("git", "-C", repo, "rev-parse", "-q", "--verify", "refs/tags/"+tag)
+	return cmd.Run() == nil
+}
+
 func newTempGitRepoWithScript(t *testing.T, scriptPath string) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -158,12 +227,33 @@ func runGit(t *testing.T, repo string, args ...string) {
 
 func runScript(t *testing.T, repo string, script string, args ...string) (string, string, error) {
 	t.Helper()
+	return runScriptWithEnv(t, repo, script, nil, args...)
+}
+
+func runScriptWithEnv(t *testing.T, repo string, script string, env []string, args ...string) (string, string, error) {
+	t.Helper()
 	cmd := exec.Command(filepath.Join(repo, script), args...)
 	cmd.Dir = repo
+	cmd.Env = mergeEnv(os.Environ(), env)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 	err := cmd.Run()
 	return stdout.String(), stderr.String(), err
+}
+
+func mergeEnv(base []string, overrides []string) []string {
+	merged := append([]string(nil), base...)
+	for _, override := range overrides {
+		key := strings.SplitN(override, "=", 2)[0]
+		filtered := merged[:0]
+		for _, item := range merged {
+			if strings.SplitN(item, "=", 2)[0] != key {
+				filtered = append(filtered, item)
+			}
+		}
+		merged = append(filtered, override)
+	}
+	return merged
 }

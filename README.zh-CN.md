@@ -787,10 +787,10 @@ Stage 8 增加本地 release guard，用于在打 tag 和 push 前重复执行�
 创建并推送 release tag：
 
 ```bash
-./scripts/tag-release.sh v0.1.0
+./scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-v0.1.0 v0.1.0
 ```
 
-`tag-release.sh` 要求工作树干净、tag 名以 `v` 开头、tag 不存在，并且会在创建 tag 前强制运行 `scripts/ci-local.sh clean`。clean CI 通过后脚本会自动 push tag；push tag 本身不会直接创建 GitHub Release，Stage 8 不新增 GitHub Actions release workflow。
+`tag-release.sh` 要求工作树干净、tag 名以 `v` 开头、tag 不存在，并且必须通过 `--evidence-bundle DIR` 或 `CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=DIR` 显式提供 release evidence bundle。脚本会先只读复验 bundle manifest 和 `verify-release-evidence.sh`，再运行 `scripts/ci-local.sh clean`，最后创建 tag 并会自动 push tag；push tag 本身不会直接创建 GitHub Release，Stage 8 不新增 GitHub Actions release workflow。
 
 ### Stage 9 / 阶段 9 远端 CI 与 Release workflow
 
@@ -810,10 +810,10 @@ Release workflow 只在 `v*` tag 上运行，构建 linux amd64/arm64、darwin a
 
 ```bash
 scripts/ci-local.sh clean
-scripts/tag-release.sh vX.Y.Z
+scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
 ```
 
-`tag-release.sh` 会在本地 clean CI 通过后创建并 push `v*` tag 到 GitHub，然后由 GitHub Actions release workflow 远端构建并创建或更新 GitHub Release。Stage 9 的实现和本地验收不执行 push、tag 或 release；这些共享状态操作仍需要显式授权。
+`tag-release.sh` 会先只读复验传入的 release evidence bundle，再运行本地 clean CI，之后创建并 push `v*` tag 到 GitHub，然后由 GitHub Actions release workflow 远端构建并创建或更新 GitHub Release。Stage 9 的实现和本地验收不执行 push、tag 或 release；这些共享状态操作仍需要显式授权。
 
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
 
@@ -866,6 +866,18 @@ bundle 命令只调用已有 extractor，写出 `manifest.json`、9 个 results 
 
 ```bash
 ./release-evidence/openclaw-vX.Y.Z/verify-release-evidence.sh
+```
+
+打 tag 前，发布脚本会强制复验同一个 bundle：
+
+```bash
+scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
+```
+
+也可以用环境变量传入同一个目录：
+
+```bash
+CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=./release-evidence/openclaw-vX.Y.Z scripts/tag-release.sh vX.Y.Z
 ```
 
 高级手工 fallback 仍可显式传入 9 个 JSON：
