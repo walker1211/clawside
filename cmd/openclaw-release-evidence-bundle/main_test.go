@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -434,6 +435,107 @@ func TestRunBundleWritesReadOnlyVerifyScript(t *testing.T) {
 			t.Fatalf("verify script must not contain %q", forbidden)
 		}
 	}
+}
+
+func TestReleaseEvidenceFixturesBuildVerifiableBundle(t *testing.T) {
+	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatalf("resolve repo root: %v", err)
+	}
+	bundleDir := filepath.Join(t.TempDir(), "bundle")
+	fixtureDir := filepath.Join(repoRoot, "testdata", "openclaw-smoke", "stage0-5")
+	writeFixtureReleaseEvidenceBundle(t, fixtureDir, bundleDir)
+	if err := verifyBundleManifest(bundleDir); err != nil {
+		t.Fatalf("verify bundle manifest: %v", err)
+	}
+
+	configPath := writeFixtureSmokeConfig(t)
+	args := []string{
+		"run", "./cmd/openclaw-mcp-smoke",
+		"--profile", "release-evidence",
+		"--config", configPath,
+		"--sender-base-url", "",
+		"--mcp-command", "",
+		"--skip-registration-check",
+		"--json",
+	}
+	for _, spec := range evidenceSpecs {
+		args = append(args, "--"+spec.VerifyFlag, filepath.Join(bundleDir, spec.OutputFile))
+	}
+	cmd := exec.Command("go", args...)
+	cmd.Dir = repoRoot
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("verify release evidence fixtures: %v\n%s", err, output)
+	}
+	var report struct {
+		Status string `json:"status"`
+		Checks []struct {
+			Name   string `json:"name"`
+			Status string `json:"status"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal(output, &report); err != nil {
+		t.Fatalf("decode smoke report: %v\n%s", err, output)
+	}
+	if report.Status != "ok" {
+		t.Fatalf("release evidence fixture report status = %q, want ok\n%s", report.Status, output)
+	}
+	for _, checkName := range []string{"sender_health", "mcp_tools", "mcp_registration", "a2a_main_delivery"} {
+		if !hasCheckStatus(report.Checks, checkName, "skipped") {
+			t.Fatalf("expected %s to stay skipped: %+v", checkName, report.Checks)
+		}
+	}
+}
+
+func writeFixtureReleaseEvidenceBundle(t *testing.T, fixtureDir, bundleDir string) {
+	t.Helper()
+	if err := os.MkdirAll(bundleDir, 0o755); err != nil {
+		t.Fatalf("create fixture bundle dir: %v", err)
+	}
+	plan := bundlePlan{OutputDir: bundleDir}
+	for _, spec := range evidenceSpecs {
+		sourcePath := filepath.Join(fixtureDir, spec.OutputFile)
+		data, err := os.ReadFile(sourcePath)
+		if err != nil {
+			t.Fatalf("read fixture %s: %v", spec.OutputFile, err)
+		}
+		if err := os.WriteFile(filepath.Join(bundleDir, spec.OutputFile), data, 0o600); err != nil {
+			t.Fatalf("write fixture evidence %s: %v", spec.OutputFile, err)
+		}
+		plan.Evidence = append(plan.Evidence, plannedEvidence{Spec: spec, EventsPath: sourcePath})
+	}
+	if err := writeBundleArtifacts(plan); err != nil {
+		t.Fatalf("write fixture bundle artifacts: %v", err)
+	}
+}
+
+func writeFixtureSmokeConfig(t *testing.T) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "config.toml")
+	config := `sender_auth_key = "test-sender-auth-key"
+
+[telegram.bots.main]
+enabled = true
+account_id = "main"
+token = "replace-with-telegram-bot-token"
+`
+	if err := os.WriteFile(path, []byte(config), 0o600); err != nil {
+		t.Fatalf("write fixture smoke config: %v", err)
+	}
+	return path
+}
+
+func hasCheckStatus(checks []struct {
+	Name   string `json:"name"`
+	Status string `json:"status"`
+}, name, status string) bool {
+	for _, check := range checks {
+		if check.Name == name && check.Status == status {
+			return true
+		}
+	}
+	return false
 }
 
 type runnerCall struct {
