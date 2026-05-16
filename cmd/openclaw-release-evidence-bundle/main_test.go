@@ -23,6 +23,9 @@ func TestRunBundleHelp(t *testing.T) {
 			if !strings.Contains(stdout.String(), "openclaw-release-evidence-bundle") {
 				t.Fatalf("unexpected help output: %q", stdout.String())
 			}
+			if !strings.Contains(stdout.String(), "verify-manifest") {
+				t.Fatalf("help output should mention verify-manifest: %q", stdout.String())
+			}
 			if stderr.Len() != 0 {
 				t.Fatalf("expected empty stderr, got %q", stderr.String())
 			}
@@ -115,6 +118,89 @@ func TestBuildPlanParsesVerify(t *testing.T) {
 	}
 	if !plan.Verify {
 		t.Fatalf("expected verify to be enabled")
+	}
+}
+
+func TestRunVerifyManifestAcceptsGeneratedBundle(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "bundle")
+	runner := &recordingRunner{}
+	var buildStdout, buildStderr bytes.Buffer
+	if err := runWithRunner(context.Background(), []string{"--output-dir", outputDir, "--events", "events.jsonl"}, &buildStdout, &buildStderr, runner); err != nil {
+		t.Fatalf("run bundle: %v\nstderr=%s", err, buildStderr.String())
+	}
+
+	var verifyStdout, verifyStderr bytes.Buffer
+	if err := run([]string{"verify-manifest", "--bundle-dir", outputDir}, &verifyStdout, &verifyStderr); err != nil {
+		t.Fatalf("verify manifest: %v\nstderr=%s", err, verifyStderr.String())
+	}
+}
+
+func TestRunVerifyManifestRejectsTamperedEvidence(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "bundle")
+	runner := &recordingRunner{}
+	var buildStdout, buildStderr bytes.Buffer
+	if err := runWithRunner(context.Background(), []string{"--output-dir", outputDir, "--events", "events.jsonl"}, &buildStdout, &buildStderr, runner); err != nil {
+		t.Fatalf("run bundle: %v\nstderr=%s", err, buildStderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "tool-results.json"), []byte(`{"ok":false}`), 0o600); err != nil {
+		t.Fatalf("tamper evidence: %v", err)
+	}
+
+	var verifyStdout, verifyStderr bytes.Buffer
+	err := run([]string{"verify-manifest", "--bundle-dir", outputDir}, &verifyStdout, &verifyStderr)
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch for tool-results.json") {
+		t.Fatalf("expected sha256 mismatch, got %v\nstderr=%s", err, verifyStderr.String())
+	}
+}
+
+func TestRunVerifyManifestRejectsMissingEvidence(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "bundle")
+	runner := &recordingRunner{}
+	var buildStdout, buildStderr bytes.Buffer
+	if err := runWithRunner(context.Background(), []string{"--output-dir", outputDir, "--events", "events.jsonl"}, &buildStdout, &buildStderr, runner); err != nil {
+		t.Fatalf("run bundle: %v\nstderr=%s", err, buildStderr.String())
+	}
+	if err := os.Remove(filepath.Join(outputDir, "tool-results.json")); err != nil {
+		t.Fatalf("remove evidence: %v", err)
+	}
+
+	var verifyStdout, verifyStderr bytes.Buffer
+	err := run([]string{"verify-manifest", "--bundle-dir", outputDir}, &verifyStdout, &verifyStderr)
+	if err == nil || !strings.Contains(err.Error(), "missing evidence tool-results.json") {
+		t.Fatalf("expected missing evidence error, got %v\nstderr=%s", err, verifyStderr.String())
+	}
+}
+
+func TestRunVerifyManifestRejectsIncompleteManifest(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "bundle")
+	runner := &recordingRunner{}
+	var buildStdout, buildStderr bytes.Buffer
+	if err := runWithRunner(context.Background(), []string{"--output-dir", outputDir, "--events", "events.jsonl"}, &buildStdout, &buildStderr, runner); err != nil {
+		t.Fatalf("run bundle: %v\nstderr=%s", err, buildStderr.String())
+	}
+	manifestPath := filepath.Join(outputDir, "manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	var manifest releaseEvidenceManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		t.Fatalf("unmarshal manifest: %v", err)
+	}
+	manifest.Evidence = manifest.Evidence[:len(manifest.Evidence)-1]
+	data, err = json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(manifestPath, data, 0o600); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	var verifyStdout, verifyStderr bytes.Buffer
+	err = run([]string{"verify-manifest", "--bundle-dir", outputDir}, &verifyStdout, &verifyStderr)
+	if err == nil || !strings.Contains(err.Error(), "manifest evidence count = 8, want 9") {
+		t.Fatalf("expected incomplete manifest error, got %v\nstderr=%s", err, verifyStderr.String())
 	}
 }
 
@@ -321,6 +407,7 @@ func TestRunBundleWritesReadOnlyVerifyScript(t *testing.T) {
 	for _, want := range []string{
 		"BUNDLE_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"",
 		"REPO_ROOT=\"$(git -C \"$BUNDLE_DIR\" rev-parse --show-toplevel)\"",
+		"go run -C \"$REPO_ROOT\" ./cmd/openclaw-release-evidence-bundle verify-manifest --bundle-dir \"$BUNDLE_DIR\"",
 		"\"$REPO_ROOT/scripts/verify_openclaw_mcp.sh\"",
 		"--profile",
 		"release-evidence",
@@ -328,6 +415,11 @@ func TestRunBundleWritesReadOnlyVerifyScript(t *testing.T) {
 		if !strings.Contains(script, want) {
 			t.Fatalf("verify script missing %q:\n%s", want, script)
 		}
+	}
+	preflightIndex := strings.Index(script, "verify-manifest --bundle-dir \"$BUNDLE_DIR\"")
+	verifierIndex := strings.Index(script, "\"$REPO_ROOT/scripts/verify_openclaw_mcp.sh\"")
+	if preflightIndex == -1 || verifierIndex == -1 || preflightIndex > verifierIndex {
+		t.Fatalf("manifest preflight should run before release-evidence verifier:\n%s", script)
 	}
 	if strings.Contains(script, outputDir) {
 		t.Fatalf("verify script should not contain generated output dir %q:\n%s", outputDir, script)

@@ -111,7 +111,68 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 1 && isHelpArg(args[0]) {
 		return writeUsage(stdout)
 	}
+	if len(args) > 0 && args[0] == "verify-manifest" {
+		return runVerifyManifest(args[1:])
+	}
 	return runWithRunner(context.Background(), args, stdout, stderr, commandRunner{rootDir: ".", stdout: stdout, stderr: stderr})
+}
+
+func runVerifyManifest(args []string) error {
+	flags := flag.NewFlagSet("openclaw-release-evidence-bundle verify-manifest", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	bundleDir := flags.String("bundle-dir", "", "release evidence bundle directory")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() > 0 {
+		return errors.New("unexpected positional argument")
+	}
+	if *bundleDir == "" {
+		return errors.New("bundle-dir is required")
+	}
+	return verifyBundleManifest(*bundleDir)
+}
+
+func verifyBundleManifest(bundleDir string) error {
+	data, err := os.ReadFile(filepath.Join(bundleDir, "manifest.json"))
+	if err != nil {
+		return fmt.Errorf("read manifest: %w", err)
+	}
+	var manifest releaseEvidenceManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fmt.Errorf("decode manifest: %w", err)
+	}
+	if manifest.SchemaVersion != 1 {
+		return fmt.Errorf("manifest schema_version = %d, want 1", manifest.SchemaVersion)
+	}
+	if manifest.Profile != "release-evidence" {
+		return fmt.Errorf("manifest profile = %q, want release-evidence", manifest.Profile)
+	}
+	if len(manifest.VerifyCommand) != 1 || manifest.VerifyCommand[0] != "./verify-release-evidence.sh" {
+		return fmt.Errorf("manifest verify_command = %#v, want [./verify-release-evidence.sh]", manifest.VerifyCommand)
+	}
+	if len(manifest.Evidence) != len(evidenceSpecs) {
+		return fmt.Errorf("manifest evidence count = %d, want %d", len(manifest.Evidence), len(evidenceSpecs))
+	}
+	for i, evidence := range manifest.Evidence {
+		spec := evidenceSpecs[i]
+		if evidence.Name != spec.Name || evidence.OutputFile != spec.OutputFile || evidence.VerifyFlag != spec.VerifyFlag {
+			return fmt.Errorf("manifest evidence[%d] metadata mismatch", i)
+		}
+	}
+	for _, evidence := range manifest.Evidence {
+		sha256Value, err := fileSHA256(filepath.Join(bundleDir, evidence.OutputFile))
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("missing evidence %s", evidence.OutputFile)
+			}
+			return fmt.Errorf("checksum %s: %w", evidence.OutputFile, err)
+		}
+		if sha256Value != evidence.SHA256 {
+			return fmt.Errorf("sha256 mismatch for %s: got %s want %s", evidence.OutputFile, sha256Value, evidence.SHA256)
+		}
+	}
+	return nil
 }
 
 type bundleRunner interface {
@@ -258,6 +319,7 @@ func writePortableVerifyScript(path string, evidence []plannedEvidence) error {
 	b.WriteString("set -euo pipefail\n\n")
 	b.WriteString("BUNDLE_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n")
 	b.WriteString("REPO_ROOT=\"$(git -C \"$BUNDLE_DIR\" rev-parse --show-toplevel)\"\n\n")
+	b.WriteString("go run -C \"$REPO_ROOT\" ./cmd/openclaw-release-evidence-bundle verify-manifest --bundle-dir \"$BUNDLE_DIR\"\n\n")
 	b.WriteString("\"$REPO_ROOT/scripts/verify_openclaw_mcp.sh\" \\\n  --profile release-evidence")
 	for _, item := range evidence {
 		b.WriteString(" \\\n  --")
@@ -314,6 +376,10 @@ func buildPlan(args []string) (bundlePlan, error) {
 
 func writeUsage(w io.Writer) error {
 	_, err := fmt.Fprintln(w, "Usage: openclaw-release-evidence-bundle --output-dir DIR [--events PATH] [--tool-events PATH ...] [--verify]")
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(w, "       openclaw-release-evidence-bundle verify-manifest --bundle-dir DIR")
 	return err
 }
 

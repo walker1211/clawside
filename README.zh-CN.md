@@ -860,7 +860,7 @@ Stage 11 将 release acceptance 拆成只读的发布级 evidence gate，以及�
   --verify
 ```
 
-bundle 命令只调用已有 extractor，写出 `manifest.json`、9 个 results JSON 和 `verify-release-evidence.sh`。`--verify` 运行生成的 `scripts/verify_openclaw_mcp.sh --profile release-evidence` 命令，保持只读，不包含 `--deliver-main`、`--chat-id`，也不直接调用 Telegram API。`verify-release-evidence.sh` 会用脚本自身目录定位 9 个 JSON，并用当前仓库的 verifier 复验；因此 bundle 可以在同一仓库内移动后继续复验。`release-evidence/openclaw-vX.Y.Z` 是本地生成目录，默认被 git 忽略。
+bundle 命令只调用已有 extractor，写出 `manifest.json`、9 个 results JSON 和 `verify-release-evidence.sh`。`--verify` 运行只读发布级复验，保持只读，不包含 `--deliver-main`、`--chat-id`，也不直接调用 Telegram API。`verify-release-evidence.sh` 会用脚本自身目录定位 9 个 JSON，先通过 `openclaw-release-evidence-bundle verify-manifest` 校验 manifest 中 9 个 evidence 文件的存在性、元数据和 SHA256，再用当前仓库的 `scripts/verify_openclaw_mcp.sh --profile release-evidence` 复验；因此 bundle 可以在同一仓库内移动后继续复验。`release-evidence/openclaw-vX.Y.Z` 是本地生成目录，默认被 git 忽略。
 
 如需拆成两步，也可以手工运行生成的验证脚本：
 
