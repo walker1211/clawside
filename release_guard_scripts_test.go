@@ -131,6 +131,38 @@ func TestTagReleaseRequiresEvidenceBundleBeforeTagging(t *testing.T) {
 
 func TestTagReleaseRunsEvidenceGateBeforeCleanCI(t *testing.T) {
 	repo := newTempGitRepoWithTagRelease(t, "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'ci-local\\n' >> \"$TAG_RELEASE_ORDER_LOG\"\n")
+	bundleDir, env := newStubReleaseEvidenceBundle(t)
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/tag-release.sh", env, "--evidence-bundle", bundleDir, "v1.2.3")
+	if err == nil {
+		t.Fatalf("expected push to fail without origin while still exercising gates")
+	}
+	output := stdout + stderr
+	if strings.Contains(output, "release evidence bundle is required") {
+		t.Fatalf("tag-release.sh ignored --evidence-bundle:\n%s", output)
+	}
+	assertOrderLog(t, env, "verify-manifest\nverify-release-evidence\nci-local\n", stdout, stderr)
+}
+
+func TestTagReleaseVerifyOnlyRunsGatesWithoutTagging(t *testing.T) {
+	repo := newTempGitRepoWithTagRelease(t, "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'ci-local\\n' >> \"$TAG_RELEASE_ORDER_LOG\"\n")
+	bundleDir, env := newStubReleaseEvidenceBundle(t)
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/tag-release.sh", env, "--verify-only", "--evidence-bundle", bundleDir, "v1.2.3")
+	if err != nil {
+		t.Fatalf("verify-only tag-release.sh failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	assertOrderLog(t, env, "verify-manifest\nverify-release-evidence\nci-local\n", stdout, stderr)
+	if tagExists(t, repo, "v1.2.3") {
+		t.Fatalf("verify-only created tag")
+	}
+	if !strings.Contains(stdout+stderr, "Verify-only release checks passed") {
+		t.Fatalf("expected verify-only success message, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+func newStubReleaseEvidenceBundle(t *testing.T) (string, []string) {
+	t.Helper()
 	bundleDir := filepath.Join(t.TempDir(), "release-evidence", "openclaw-v1.2.3")
 	writeFile(t, filepath.Join(bundleDir, "verify-release-evidence.sh"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'verify-release-evidence\\n' >> \"$TAG_RELEASE_ORDER_LOG\"\n")
 	if err := os.Chmod(filepath.Join(bundleDir, "verify-release-evidence.sh"), 0o755); err != nil {
@@ -146,20 +178,25 @@ func TestTagReleaseRunsEvidenceGateBeforeCleanCI(t *testing.T) {
 		"TAG_RELEASE_ORDER_LOG=" + orderLog,
 		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
 	}
+	return bundleDir, env
+}
 
-	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/tag-release.sh", env, "--evidence-bundle", bundleDir, "v1.2.3")
-	if err == nil {
-		t.Fatalf("expected push to fail without origin while still exercising gates")
+func assertOrderLog(t *testing.T, env []string, want string, stdout string, stderr string) {
+	t.Helper()
+	orderLog := ""
+	for _, item := range env {
+		if value, ok := strings.CutPrefix(item, "TAG_RELEASE_ORDER_LOG="); ok {
+			orderLog = value
+		}
 	}
-	output := stdout + stderr
-	if strings.Contains(output, "release evidence bundle is required") {
-		t.Fatalf("tag-release.sh ignored --evidence-bundle:\n%s", output)
+	if orderLog == "" {
+		t.Fatalf("missing TAG_RELEASE_ORDER_LOG env")
 	}
 	order, err := os.ReadFile(orderLog)
 	if err != nil {
 		t.Fatalf("read order log: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if string(order) != "verify-manifest\nverify-release-evidence\nci-local\n" {
+	if string(order) != want {
 		t.Fatalf("unexpected gate order:\n%s", order)
 	}
 }

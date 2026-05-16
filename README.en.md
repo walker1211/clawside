@@ -868,16 +868,16 @@ For a two-step flow, you can also run the generated verifier script manually:
 ./release-evidence/openclaw-vX.Y.Z/verify-release-evidence.sh
 ```
 
-Before tagging, the release script re-verifies the same bundle:
+Before release, you can run the safe check that does not create a tag or push:
 
 ```bash
-scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
+scripts/tag-release.sh --verify-only --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
 ```
 
 You can also pass the same directory through the environment:
 
 ```bash
-CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=./release-evidence/openclaw-vX.Y.Z scripts/tag-release.sh vX.Y.Z
+CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=./release-evidence/openclaw-vX.Y.Z scripts/tag-release.sh --verify-only vX.Y.Z
 ```
 
 Advanced manual fallback can still pass the nine JSON files explicitly:

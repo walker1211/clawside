@@ -868,16 +868,16 @@ bundle 命令只调用已有 extractor，写出 `manifest.json`、9 个 results 
 ./release-evidence/openclaw-vX.Y.Z/verify-release-evidence.sh
 ```
 
-打 tag 前，发布脚本会强制复验同一个 bundle：
+发布前可以先跑不会创建 tag、不会 push 的安全验收：
 
 ```bash
-scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
+scripts/tag-release.sh --verify-only --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
 ```
 
 也可以用环境变量传入同一个目录：
 
 ```bash
-CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=./release-evidence/openclaw-vX.Y.Z scripts/tag-release.sh vX.Y.Z
+CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=./release-evidence/openclaw-vX.Y.Z scripts/tag-release.sh --verify-only vX.Y.Z
 ```
 
 高级手工 fallback 仍可显式传入 9 个 JSON：

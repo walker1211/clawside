@@ -280,6 +280,7 @@ func TestTagReleaseScriptEntrypoint(t *testing.T) {
 		"git rev-parse -q --verify \"refs/tags/$TAG_NAME\"",
 		"git ls-remote --exit-code --tags origin \"refs/tags/$TAG_NAME\"",
 		"scripts/ci-local.sh clean",
+		"--verify-only",
 		"--evidence-bundle",
 		"CLAWSIDE_RELEASE_EVIDENCE_BUNDLE",
 		"verify-manifest",

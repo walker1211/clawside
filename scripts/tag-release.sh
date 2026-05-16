@@ -4,17 +4,19 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 usage() {
-  printf 'usage: %s --evidence-bundle DIR TAG\n' "$0"
-  printf '       CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=DIR %s TAG\n' "$0"
+  printf 'usage: %s [--verify-only] --evidence-bundle DIR TAG\n' "$0"
+  printf '       CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=DIR %s [--verify-only] TAG\n' "$0"
   printf '\n'
   printf 'Create and push a v* release tag after release evidence and scripts/ci-local.sh clean pass.\n'
   printf '\n'
   printf 'Options:\n'
+  printf '  --verify-only           Run release evidence and clean CI checks without tagging or pushing.\n'
   printf '  --evidence-bundle DIR   Release evidence bundle directory to verify before tagging.\n'
   printf '  help, --help, -h        Show this help.\n'
 }
 
 TAG_NAME=""
+VERIFY_ONLY="0"
 EVIDENCE_BUNDLE="${CLAWSIDE_RELEASE_EVIDENCE_BUNDLE:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -22,6 +24,10 @@ while [[ $# -gt 0 ]]; do
     help|--help|-h)
       usage
       exit 0
+      ;;
+    --verify-only)
+      VERIFY_ONLY="1"
+      shift
       ;;
     --evidence-bundle)
       if [[ $# -lt 2 ]]; then
@@ -101,6 +107,11 @@ go run -C "$ROOT_DIR" ./cmd/openclaw-release-evidence-bundle verify-manifest --b
 "$EVIDENCE_BUNDLE/verify-release-evidence.sh"
 
 "$ROOT_DIR/scripts/ci-local.sh" clean
+
+if [[ "$VERIFY_ONLY" = "1" ]]; then
+  printf 'Verify-only release checks passed for %s\n' "$TAG_NAME"
+  exit 0
+fi
 
 git tag "$TAG_NAME"
 printf 'Created local tag %s\n' "$TAG_NAME"
