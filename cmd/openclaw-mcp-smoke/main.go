@@ -30,6 +30,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	var mcpArgs repeatedStringFlag
+	var openClawArgs repeatedStringFlag
 	var jsonOnly bool
 	fs := flag.NewFlagSet("openclaw-mcp-smoke", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -42,6 +43,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.Var(&mcpArgs, "mcp-arg", "MCP server argument; repeat for multiple args")
 	fs.StringVar(&defaults.RegistrationConfigPath, "registration-config", defaults.RegistrationConfigPath, "read-only JSON MCP registration config to inspect for safe command, args, and env; never writes config")
 	fs.BoolVar(&defaults.SkipRegistrationCheck, "skip-registration-check", false, "skip read-only MCP registration readiness check")
+	fs.BoolVar(&defaults.OpenClawDispatchSmoke, "openclaw-dispatch-smoke", false, "run an OpenClaw handoff_dispatch smoke through the configured MCP OpenClaw command")
+	fs.StringVar(&defaults.OpenClawCommand, "openclaw-command", defaults.OpenClawCommand, "server-authorized OpenClaw dispatch command passed to clawside-mcp")
+	fs.Var(&openClawArgs, "openclaw-arg", "argument for the configured OpenClaw dispatch command; repeat for multiple args")
 	fs.BoolVar(&defaults.IncludeOpenClawToolCallChecklist, "openclaw-tool-call-checklist", false, "include OpenClaw-side read-only tool call checklist")
 	fs.StringVar(&defaults.OpenClawToolResultsPath, "openclaw-tool-results", defaults.OpenClawToolResultsPath, "read-only JSON file containing OpenClaw-side tool results to validate")
 	fs.StringVar(&defaults.OpenClawTruthPlaneResultsPath, "openclaw-truth-plane-results", defaults.OpenClawTruthPlaneResultsPath, "read-only JSON file containing OpenClaw-side truth-plane results to validate")
@@ -62,6 +66,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	if len(mcpArgs) > 0 {
 		defaults.MCPArgs = []string(mcpArgs)
+	}
+	if len(openClawArgs) > 0 {
+		defaults.OpenClawArgs = []string(openClawArgs)
 	}
 	profile, err := normalizedProfile(defaults.Profile)
 	if err != nil {

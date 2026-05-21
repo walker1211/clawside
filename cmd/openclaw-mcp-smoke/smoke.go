@@ -46,6 +46,9 @@ type Options struct {
 	MCPArgs                                  []string
 	RegistrationConfigPath                   string
 	SkipRegistrationCheck                    bool
+	OpenClawDispatchSmoke                    bool
+	OpenClawCommand                          string
+	OpenClawArgs                             []string
 	DeliverMain                              bool
 	IncludeOpenClawToolCallChecklist         bool
 	OpenClawFixtureDir                       string
@@ -95,8 +98,19 @@ type Report struct {
 	Checks                    []CheckResult                    `json:"checks"`
 	Tools                     []string                         `json:"tools"`
 	DeliveryResult            *a2adelivery.DeliveryResult      `json:"delivery_result,omitempty"`
+	OpenClawDispatchResult    *OpenClawDispatchSmokeResult     `json:"openclaw_dispatch_result,omitempty"`
 	OpenClawToolCallChecklist []OpenClawToolCallChecklistEntry `json:"openclaw_tool_call_checklist,omitempty"`
 	Registration              RegistrationGuidance             `json:"registration"`
+}
+
+type OpenClawDispatchSmokeResult struct {
+	WorkflowID   string `json:"workflow_id"`
+	HandoffID    string `json:"handoff_id"`
+	AttemptID    string `json:"attempt_id"`
+	ResultStatus string `json:"result_status"`
+	ExternalID   string `json:"external_id"`
+	State        string `json:"state"`
+	FinalState   string `json:"final_state"`
 }
 
 func (r *Report) addCheck(check CheckResult) {
@@ -300,6 +314,9 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	report.addCheck(checkOpenClawTruthPlaneContinuityResults(opts))
 	report.addCheck(checkOpenClawTruthPlaneDivergenceResults(opts))
 	report.addCheck(checkOpenClawTruthPlaneDeliveryResults(opts))
+	if opts.OpenClawDispatchSmoke {
+		report.addCheck(checkOpenClawDispatch(ctx, mcpClient, &report, opts))
+	}
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
 	} else {
@@ -366,6 +383,151 @@ func checkMCPTools(ctx context.Context, client smokeMCPClient, report *Report, s
 		return failedCheck("mcp_tools", fmt.Sprintf("missing tools: %s", strings.Join(missing, ", ")))
 	}
 	return CheckResult{Name: "mcp_tools", Status: checkStatusOK, Detail: fmt.Sprintf("discovered %d expected v1 tools", len(report.Tools))}
+}
+
+func checkOpenClawDispatch(ctx context.Context, client smokeMCPClient, report *Report, opts Options) CheckResult {
+	if client == nil {
+		return failedCheck("openclaw_dispatch", "mcp client is not initialized; configure --mcp-command before using --openclaw-dispatch-smoke")
+	}
+	message := strings.TrimSpace(opts.Text)
+	if message == "" {
+		message = "OpenClaw dispatch smoke test"
+	}
+	create, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_kind": "openclaw_dispatch_smoke",
+		"sender":        map[string]any{"type": "system", "id": "openclaw-mcp-smoke"},
+		"receiver":      map[string]any{"type": "agent", "id": "openclaw-smoke"},
+		"task_kind":     "generic_task",
+		"intent":        message,
+	}, opts)
+	if err != nil {
+		return failedCheck("openclaw_dispatch", err.Error())
+	}
+	workflowID := nestedString(create, "workflow", "id")
+	handoffID := nestedString(create, "handoff", "id")
+	if workflowID == "" || handoffID == "" {
+		return failedCheck("openclaw_dispatch", "handoff_create did not return workflow.id and handoff.id")
+	}
+	dispatch, err := callStructuredTool(ctx, client, "handoff_dispatch", map[string]any{
+		"handoff_id": handoffID,
+		"adapter":    "openclaw",
+		"target":     "agent:openclaw-smoke",
+		"message":    message,
+	}, opts)
+	if err != nil {
+		return failedCheck("openclaw_dispatch", err.Error())
+	}
+	attemptID := nestedString(dispatch, "attempt", "id")
+	resultStatus := nestedString(dispatch, "attempt", "result_status")
+	externalID := nestedString(dispatch, "attempt", "external_id")
+	if resultStatus != "accepted" || externalID == "" {
+		return failedCheck("openclaw_dispatch", fmt.Sprintf("expected accepted dispatch with external_id, got status=%s external_id=%s", resultStatus, externalID))
+	}
+	if !containsEventType(dispatch["events"], "transport_requested") || !containsEventType(dispatch["events"], "transport_accepted") {
+		return failedCheck("openclaw_dispatch", "dispatch result did not include transport_requested and transport_accepted events")
+	}
+	handoff, err := callStructuredTool(ctx, client, "handoff_get", map[string]any{"handoff_id": handoffID}, opts)
+	if err != nil {
+		return failedCheck("openclaw_dispatch", err.Error())
+	}
+	state := nestedString(handoff, "handoff", "state")
+	if state != "dispatched" {
+		return failedCheck("openclaw_dispatch", fmt.Sprintf("transport accepted must leave handoff dispatched, got state=%s", state))
+	}
+	finalState := state
+	for _, step := range []struct {
+		action string
+		state  string
+	}{
+		{action: "receive", state: "received"},
+		{action: "claim", state: "claimed"},
+		{action: "start", state: "started"},
+		{action: "checkpoint", state: "checkpointed"},
+		{action: "complete", state: "completed"},
+	} {
+		progress, err := callStructuredTool(ctx, client, "handoff_progress", map[string]any{
+			"action":      step.action,
+			"workflow_id": workflowID,
+			"handoff_id":  handoffID,
+			"actor":       map[string]any{"type": "agent", "id": "openclaw-smoke"},
+		}, opts)
+		if err != nil {
+			return failedCheck("openclaw_dispatch", err.Error())
+		}
+		finalState = nestedString(progress, "handoff", "state")
+		if finalState != step.state {
+			return failedCheck("openclaw_dispatch", fmt.Sprintf("handoff_progress %s expected state=%s, got state=%s", step.action, step.state, finalState))
+		}
+	}
+	report.OpenClawDispatchResult = &OpenClawDispatchSmokeResult{
+		WorkflowID:   workflowID,
+		HandoffID:    handoffID,
+		AttemptID:    attemptID,
+		ResultStatus: resultStatus,
+		ExternalID:   externalID,
+		State:        state,
+		FinalState:   finalState,
+	}
+	return CheckResult{Name: "openclaw_dispatch", Status: checkStatusOK, Detail: fmt.Sprintf("external_id=%s final_state=%s", externalID, finalState)}
+}
+
+func callStructuredTool(ctx context.Context, client smokeMCPClient, name string, arguments map[string]any, opts Options) (map[string]any, error) {
+	result, err := client.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: name, Arguments: arguments}})
+	if err != nil {
+		return nil, fmt.Errorf("%s call failed: %s", name, sanitizeDetail(err.Error(), opts.SenderAuthKey))
+	}
+	if result == nil {
+		return nil, fmt.Errorf("%s returned no result", name)
+	}
+	if result.IsError {
+		detail := name + " returned MCP error result"
+		if summary := summarizeCallToolResult(result); summary != "" {
+			detail += ": " + sanitizeDetail(summary, opts.SenderAuthKey)
+		}
+		return nil, errors.New(detail)
+	}
+	if result.StructuredContent == nil {
+		return nil, fmt.Errorf("%s structured content is missing", name)
+	}
+	raw, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		return nil, err
+	}
+	var structured map[string]any
+	if err := json.Unmarshal(raw, &structured); err != nil {
+		return nil, err
+	}
+	return structured, nil
+}
+
+func nestedString(value map[string]any, path ...string) string {
+	var current any = value
+	for _, key := range path {
+		currentMap, ok := current.(map[string]any)
+		if !ok {
+			return ""
+		}
+		current = currentMap[key]
+	}
+	text, _ := current.(string)
+	return strings.TrimSpace(text)
+}
+
+func containsEventType(value any, eventType string) bool {
+	events, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, event := range events {
+		eventMap, ok := event.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nestedString(eventMap, "type") == eventType {
+			return true
+		}
+	}
+	return false
 }
 
 func checkA2AMainDelivery(ctx context.Context, client smokeMCPClient, report *Report, opts Options) CheckResult {
@@ -481,10 +643,20 @@ func buildMCPArgs(opts Options) []string {
 		if !hasFlag(args, "--sender-base-url") {
 			args = append(args, "--sender-base-url", opts.SenderBaseURL)
 		}
-		return args
+		return appendOpenClawDispatchArgs(args, opts)
 	}
 
-	return []string{"--db", opts.DBPath, "--sender-base-url", opts.SenderBaseURL}
+	return appendOpenClawDispatchArgs([]string{"--db", opts.DBPath, "--sender-base-url", opts.SenderBaseURL}, opts)
+}
+
+func appendOpenClawDispatchArgs(args []string, opts Options) []string {
+	if strings.TrimSpace(opts.OpenClawCommand) != "" && !hasFlag(args, "--openclaw-command") {
+		args = append(args, "--openclaw-command", opts.OpenClawCommand)
+	}
+	if len(opts.OpenClawArgs) > 0 && !hasFlag(args, "--openclaw-args") {
+		args = append(args, "--openclaw-args", strings.Join(opts.OpenClawArgs, ","))
+	}
+	return args
 }
 
 func buildMCPEnv(opts Options) []string {
@@ -566,8 +738,10 @@ func buildRegistrationGuidance(command, dbPath string) RegistrationGuidance {
 func buildRegistrationGuidanceForOptions(opts Options) RegistrationGuidance {
 	guidance := buildRegistrationGuidance(opts.MCPCommand, opts.DBPath)
 	if len(opts.MCPArgs) > 0 {
-		guidance.Args = sanitizeRegistrationArgs(opts.MCPArgs, opts.SenderAuthKey)
+		guidance.Args = sanitizeRegistrationArgs(appendOpenClawDispatchArgs(append([]string(nil), opts.MCPArgs...), opts), opts.SenderAuthKey)
+		return guidance
 	}
+	guidance.Args = sanitizeRegistrationArgs(appendOpenClawDispatchArgs(guidance.Args, opts), opts.SenderAuthKey)
 	return guidance
 }
 

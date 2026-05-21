@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -169,6 +170,58 @@ func TestBuildMCPArgsPassesSenderAuthKeyViaEnv(t *testing.T) {
 	wantEnv := []string{"SENDER_AUTH_KEY=custom-secret-sender-key"}
 	if len(env) != len(wantEnv) || env[0] != wantEnv[0] {
 		t.Fatalf("expected env %+v, got %+v", wantEnv, env)
+	}
+}
+
+func TestBuildRegistrationGuidanceForOptionsIncludesOpenClawDispatchDefaults(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		DBPath:          filepath.Join(dir, "sender.db"),
+		MCPCommand:      filepath.Join(dir, "start_mcp.sh"),
+		OpenClawCommand: filepath.Join(dir, "openclaw-dispatch"),
+		OpenClawArgs:    []string{"--openclaw-command=/usr/local/bin/openclaw", "--mode", "sessions_spawn"},
+	}
+
+	guidance := buildRegistrationGuidanceForOptions(opts)
+	want := []string{
+		"--db", opts.DBPath,
+		"--openclaw-command", opts.OpenClawCommand,
+		"--openclaw-args", "--openclaw-command=/usr/local/bin/openclaw,--mode,sessions_spawn",
+	}
+	if len(guidance.Args) != len(want) {
+		t.Fatalf("expected args %+v, got %+v", want, guidance.Args)
+	}
+	for i := range want {
+		if guidance.Args[i] != want[i] {
+			t.Fatalf("arg %d: expected %q, got %+v", i, want[i], guidance.Args)
+		}
+	}
+}
+
+func TestBuildMCPArgsAppendsConfiguredOpenClawDispatchCommand(t *testing.T) {
+	dir := t.TempDir()
+	opts := Options{
+		DBPath:                filepath.Join(dir, "sender.db"),
+		SenderBaseURL:         "http://127.0.0.1:8787",
+		OpenClawCommand:       filepath.Join(dir, "openclaw-dispatch"),
+		OpenClawArgs:          []string{"--openclaw-command=/usr/local/bin/openclaw", "--mode", "sessions_spawn"},
+		OpenClawDispatchSmoke: true,
+	}
+
+	args := buildMCPArgs(opts)
+	want := []string{
+		"--db", opts.DBPath,
+		"--sender-base-url", opts.SenderBaseURL,
+		"--openclaw-command", opts.OpenClawCommand,
+		"--openclaw-args", "--openclaw-command=/usr/local/bin/openclaw,--mode,sessions_spawn",
+	}
+	if len(args) != len(want) {
+		t.Fatalf("expected args %+v, got %+v", want, args)
+	}
+	for i := range want {
+		if args[i] != want[i] {
+			t.Fatalf("arg %d: expected %q, got %+v", i, want[i], args)
+		}
 	}
 }
 
@@ -535,6 +588,57 @@ func validProfileEvidenceOptions(t *testing.T) Options {
 		OpenClawTruthPlaneContinuityResultsPath:  writeContinuityResultJSON(t, validContinuityResultJSON()),
 		OpenClawTruthPlaneDivergenceResultsPath:  writeDivergenceResultJSON(t, validDivergenceResultJSON()),
 		OpenClawTruthPlaneDeliveryResultsPath:    writeDeliveryResultJSON(t, validDeliveryResultJSON()),
+	}
+}
+
+func TestCheckOpenClawDispatchRunsTruthPlaneLoop(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "handoff-1"},
+		}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-1", "result_status": "accepted", "external_id": "openclaw-run-1"},
+			"events":  []any{map[string]any{"type": "transport_requested"}, map[string]any{"type": "transport_accepted"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "dispatched"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+	}}
+	report := Report{Status: reportStatusOK}
+
+	check := checkOpenClawDispatch(context.Background(), client, &report, Options{OpenClawDispatchSmoke: true, Text: "dispatch task"})
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected openclaw dispatch check ok, got %+v", check)
+	}
+	if report.OpenClawDispatchResult == nil {
+		t.Fatalf("expected report dispatch result")
+	}
+	if report.OpenClawDispatchResult.ExternalID != "openclaw-run-1" || report.OpenClawDispatchResult.FinalState != "completed" {
+		t.Fatalf("unexpected dispatch result: %+v", report.OpenClawDispatchResult)
+	}
+	wantNames := []string{"handoff_create", "handoff_dispatch", "handoff_get", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress"}
+	if len(client.calls) != len(wantNames) {
+		t.Fatalf("expected calls %+v, got %+v", wantNames, client.calls)
+	}
+	for i, want := range wantNames {
+		if client.calls[i].Params.Name != want {
+			t.Fatalf("call %d: expected %q, got %+v", i, want, client.calls[i])
+		}
+	}
+	dispatchArgs, ok := client.calls[1].Params.Arguments.(map[string]any)
+	if !ok {
+		t.Fatalf("expected dispatch args map, got %+v", client.calls[1].Params.Arguments)
+	}
+	if dispatchArgs["adapter"] != "openclaw" || dispatchArgs["target"] != "agent:openclaw-smoke" || dispatchArgs["message"] != "dispatch task" {
+		t.Fatalf("unexpected dispatch args: %+v", dispatchArgs)
+	}
+	if _, ok := dispatchArgs["command"]; ok {
+		t.Fatalf("dispatch smoke must not pass caller command: %+v", dispatchArgs)
 	}
 }
 
@@ -1037,6 +1141,30 @@ func TestRunFailsWhenSenderReadyFails(t *testing.T) {
 	if strings.Contains(stdout.String(), secret) || strings.Contains(stderr.String(), secret) || strings.Contains(err.Error(), secret) {
 		t.Fatalf("sender readiness failure leaked sender auth key:\nstdout=%s\nstderr=%s\nerr=%v", stdout.String(), stderr.String(), err)
 	}
+}
+
+type scriptedSmokeMCPClient struct {
+	results []*mcp.CallToolResult
+	calls   []mcp.CallToolRequest
+}
+
+func (c *scriptedSmokeMCPClient) Close() error { return nil }
+
+func (c *scriptedSmokeMCPClient) ListTools(context.Context, mcp.ListToolsRequest) (*mcp.ListToolsResult, error) {
+	return &mcp.ListToolsResult{}, nil
+}
+
+func (c *scriptedSmokeMCPClient) CallTool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	idx := len(c.calls)
+	c.calls = append(c.calls, req)
+	if idx >= len(c.results) {
+		return nil, fmt.Errorf("unexpected call %s", req.Params.Name)
+	}
+	return c.results[idx], nil
+}
+
+func structuredSmokeResult(value map[string]any) *mcp.CallToolResult {
+	return &mcp.CallToolResult{StructuredContent: value}
 }
 
 type fakeSmokeMCPClient struct {

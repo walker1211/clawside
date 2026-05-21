@@ -10,6 +10,9 @@ SENDER_BASE_URL_VALUE="${SENDER_BASE_URL:-${CLAWSIDE_SENDER_BASE_URL:-http://127
 MCP_COMMAND="$ROOT_DIR/scripts/start_mcp.sh"
 REGISTRATION_CONFIG_PATH=""
 SKIP_REGISTRATION_CHECK="false"
+OPENCLAW_DISPATCH_SMOKE="false"
+OPENCLAW_COMMAND_VALUE=""
+OPENCLAW_ARGS_VALUES=""
 OPENCLAW_TOOL_CALL_CHECKLIST="false"
 OPENCLAW_TOOL_RESULTS_PATH=""
 OPENCLAW_TRUTH_PLANE_RESULTS_PATH=""
@@ -45,6 +48,10 @@ usage() {
   printf '                             MCP command to launch (default: ROOT_DIR/scripts/start_mcp.sh)\n'
   printf '  --registration-config PATH  Read-only JSON MCP registration config to inspect for safe start_mcp.sh registration\n'
   printf '  --skip-registration-check  Skip read-only MCP registration safety inspection\n'
+  printf '  --openclaw-dispatch-smoke\n'
+  printf '                             Run handoff_dispatch adapter=openclaw smoke through MCP\n'
+  printf '  --openclaw-command COMMAND  Server-authorized OpenClaw dispatch command passed to clawside-mcp\n'
+  printf '  --openclaw-arg ARG          Argument for the configured OpenClaw dispatch command; repeat for multiple args\n'
   printf '  --openclaw-tool-call-checklist\n'
   printf '                             Include OpenClaw-side read-only tool call checklist\n'
   printf '  --openclaw-tool-results PATH\n'
@@ -134,6 +141,31 @@ while [[ $# -gt 0 ]]; do
     --skip-registration-check)
       SKIP_REGISTRATION_CHECK="true"
       shift
+      ;;
+    --openclaw-dispatch-smoke)
+      OPENCLAW_DISPATCH_SMOKE="true"
+      shift
+      ;;
+    --openclaw-command)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      OPENCLAW_COMMAND_VALUE="$2"
+      shift 2
+      ;;
+    --openclaw-arg)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      if [[ -n "$OPENCLAW_ARGS_VALUES" ]]; then
+        OPENCLAW_ARGS_VALUES="${OPENCLAW_ARGS_VALUES}
+$2"
+      else
+        OPENCLAW_ARGS_VALUES="$2"
+      fi
+      shift 2
       ;;
     --openclaw-tool-call-checklist)
       OPENCLAW_TOOL_CALL_CHECKLIST="true"
@@ -290,6 +322,17 @@ run_smoke() {
   fi
   if [[ "$SKIP_REGISTRATION_CHECK" == "true" ]]; then
     set -- "$@" --skip-registration-check
+  fi
+  if [[ "$OPENCLAW_DISPATCH_SMOKE" == "true" ]]; then
+    set -- "$@" --openclaw-dispatch-smoke
+  fi
+  if [[ -n "$OPENCLAW_COMMAND_VALUE" ]]; then
+    set -- "$@" --openclaw-command "$OPENCLAW_COMMAND_VALUE"
+  fi
+  if [[ -n "$OPENCLAW_ARGS_VALUES" ]]; then
+    while IFS= read -r openclaw_arg; do
+      set -- "$@" --openclaw-arg "$openclaw_arg"
+    done <<< "$OPENCLAW_ARGS_VALUES"
   fi
   if [[ "$OPENCLAW_TOOL_CALL_CHECKLIST" == "true" ]]; then
     set -- "$@" --openclaw-tool-call-checklist
