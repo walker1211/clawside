@@ -106,6 +106,7 @@ func TestGitHubCIWorkflow(t *testing.T) {
 		"gofmt -l",
 		"go vet ./...",
 		"go test -count=1 ./...",
+		"./build.sh",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected %s to contain %q", path, want)
@@ -160,10 +161,7 @@ func TestGitHubReleaseWorkflow(t *testing.T) {
 		"fetch-depth: 0",
 		"actions/setup-go@v6",
 		"go-version-file: go.mod",
-		"scripts/secret-scan.sh",
-		"scripts/secret-scan.sh --history",
-		"go vet ./...",
-		"go test -count=1 ./...",
+		"scripts/ci-local.sh clean",
 		"linux",
 		"darwin",
 		"windows",
@@ -173,8 +171,8 @@ func TestGitHubReleaseWorkflow(t *testing.T) {
 		"clawside-linux-arm64",
 		"clawside-darwin-amd64",
 		"clawside-darwin-arm64",
-		"clawside-windows-amd64.exe",
-		"mkdir -p \"dist/${{ matrix.artifact_name }}\"",
+		"clawside-windows-amd64",
+		"package=\"clawside-${SUFFIX}\"",
 		"LICENSE",
 		"README.md",
 		"README.zh-CN.md",
@@ -184,8 +182,11 @@ func TestGitHubReleaseWorkflow(t *testing.T) {
 		"actions/upload-artifact@v7",
 		"actions/download-artifact@v8",
 		"sha256sum",
-		"softprops/action-gh-release@v3",
-		"GITHUB_TOKEN",
+		"checksums.txt",
+		"clawside-windows-amd64.zip",
+		"gh release create",
+		"gh release upload",
+		"GH_TOKEN",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected %s to contain %q", path, want)
@@ -202,7 +203,8 @@ func TestGitHubReleaseWorkflow(t *testing.T) {
 		"git tag",
 		"git push",
 		"scripts/tag-release.sh",
-		"softprops/action-gh-release@v2",
+		"softprops/action-gh-release",
+		"GITHUB_TOKEN",
 		"GoReleaser",
 		"goreleaser",
 	} {
