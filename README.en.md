@@ -74,6 +74,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `cmd/orchestrator/`: low-level orchestrator debug / operation entrypoint.
 - `cmd/clawside-mcp/`: stdio MCP server entrypoint.
 - `cmd/openclaw-mcp-smoke/`: local smoke verifier for OpenClaw consuming the clawside MCP v1 surface.
+- `cmd/openclaw-dispatch/`: local helper that adapts `handoff_dispatch adapter=openclaw` requests to an OpenClaw-compatible CLI command.
 - `cmd/openclaw-tool-results-extract/`: local read-only CLI for extracting clawside tool structured results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-extract/`: local read-only CLI for extracting minimal truth-plane handoff/workflow/watch/ownership validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-progression-extract/`: local read-only CLI for extracting completed handoff progression validation results from OpenClaw trajectory.
@@ -347,6 +348,23 @@ For machine-readable output:
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
+```
+
+To run a real OpenClaw dispatch smoke through `handoff_dispatch adapter=openclaw`, point the MCP server at the local `openclaw-dispatch` helper and choose an agent that exists in your OpenClaw config. This invokes a real `openclaw agent` run, so it can consume model quota and write local OpenClaw session state:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-dispatch-smoke \
+  --openclaw-target agent:main \
+  --openclaw-command go \
+  --openclaw-arg run \
+  --openclaw-arg ./cmd/openclaw-dispatch \
+  --openclaw-arg --mode \
+  --openclaw-arg agent \
+  --openclaw-arg --timeout \
+  --openclaw-arg 300s \
+  --openclaw-arg --openclaw-command \
+  --openclaw-arg openclaw
 ```
 
 To include an OpenClaw-side read-only tool call checklist, pass `--openclaw-tool-call-checklist`. It only describes manual calls OpenClaw should make from its runtime / session for `sender_health`, `sender_ready`, and `sender_stats`, plus how to judge the returned results; it does not execute or fake OpenClaw calls:

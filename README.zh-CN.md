@@ -74,6 +74,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `cmd/orchestrator/`：低层 orchestrator 调试 / 操作入口
 - `cmd/clawside-mcp/`：stdio MCP server 入口
 - `cmd/openclaw-mcp-smoke/`：OpenClaw 消费 clawside MCP v1 surface 的本地 smoke verifier
+- `cmd/openclaw-dispatch/`：把 `handoff_dispatch adapter=openclaw` 请求适配到 OpenClaw-compatible CLI command 的本地 helper
 - `cmd/openclaw-tool-results-extract/`：从 OpenClaw trajectory 提取 clawside tool structured result 的本地只读 CLI
 - `cmd/openclaw-truth-plane-extract/`：从 OpenClaw trajectory 提取最小 truth-plane handoff/workflow/watch/ownership 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-progression-extract/`：从 OpenClaw trajectory 提取完整 handoff progression 验收结果的本地只读 CLI
@@ -347,6 +348,23 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
+```
+
+如需通过 `handoff_dispatch adapter=openclaw` 跑一次真实 OpenClaw dispatch smoke，请把 MCP server 指向本地 `openclaw-dispatch` helper，并选择一个你的 OpenClaw 配置中真实存在的 agent。该命令会执行一次真实的 `openclaw agent` run，可能消耗模型额度并写入本机 OpenClaw session 状态：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
+  --openclaw-dispatch-smoke \
+  --openclaw-target agent:main \
+  --openclaw-command go \
+  --openclaw-arg run \
+  --openclaw-arg ./cmd/openclaw-dispatch \
+  --openclaw-arg --mode \
+  --openclaw-arg agent \
+  --openclaw-arg --timeout \
+  --openclaw-arg 300s \
+  --openclaw-arg --openclaw-command \
+  --openclaw-arg openclaw
 ```
 
 如需让输出附带 OpenClaw 侧只读 tool call checklist，可传入 `--openclaw-tool-call-checklist`。它只说明应该在 OpenClaw runtime / session 中手动调用 `sender_health`、`sender_ready`、`sender_stats`，以及如何判断返回结果；不会代替 OpenClaw 执行或伪造这些调用：
