@@ -18,6 +18,11 @@ func (s *Service) ApplyProtocolAction(ctx context.Context, req ProtocolRequest) 
 	if err != nil {
 		return ProtocolResult{}, err
 	}
+	if protocolActionRequiresCompletedDependencies(req.Action) {
+		if err := s.ensureHandoffDependenciesCompleted(ctx, handoff); err != nil {
+			return ProtocolResult{}, err
+		}
+	}
 
 	event, err := protocolEventFromRequest(handoff, req)
 	if err != nil {
@@ -47,6 +52,23 @@ var supportedProtocolActions = []ProtocolAction{
 	ProtocolActionApprove,
 	ProtocolActionComplete,
 	ProtocolActionFail,
+}
+
+func protocolActionRequiresCompletedDependencies(action ProtocolAction) bool {
+	switch action {
+	case ProtocolActionReceive,
+		ProtocolActionClaim,
+		ProtocolActionStart,
+		ProtocolActionCheckpoint,
+		ProtocolActionSubmit,
+		ProtocolActionReview,
+		ProtocolActionRequestRevision,
+		ProtocolActionApprove,
+		ProtocolActionComplete:
+		return true
+	default:
+		return false
+	}
 }
 
 func protocolEventFromRequest(handoff Handoff, req ProtocolRequest) (EventRecord, error) {

@@ -150,6 +150,26 @@ func TestBuildRegistrationGuidanceForOptionsRedactsCustomSenderAuthArgs(t *testi
 	}
 }
 
+func TestDefaultMCPArgsUseOverriddenDBPath(t *testing.T) {
+	dir := t.TempDir()
+	opts, err := defaultOptions(dir)
+	if err != nil {
+		t.Fatalf("default options: %v", err)
+	}
+	overriddenDBPath := filepath.Join(dir, "override.db")
+	opts.DBPath = overriddenDBPath
+
+	args := buildMCPArgs(opts)
+	guidance := buildRegistrationGuidanceForOptions(opts)
+
+	if flagValue(args, "--db") != overriddenDBPath {
+		t.Fatalf("expected buildMCPArgs to use overridden db %q, got %+v", overriddenDBPath, args)
+	}
+	if len(guidance.Args) < 2 || guidance.Args[0] != "--db" || guidance.Args[1] != overriddenDBPath {
+		t.Fatalf("expected registration guidance to use overridden db %q, got %+v", overriddenDBPath, guidance.Args)
+	}
+}
+
 func TestBuildMCPArgsPassesSenderAuthKeyViaEnv(t *testing.T) {
 	const secret = " custom-secret-sender-key "
 	dir := t.TempDir()
@@ -647,6 +667,222 @@ func TestCheckOpenClawDispatchRunsTruthPlaneLoop(t *testing.T) {
 	}
 	if _, ok := dispatchArgs["command"]; ok {
 		t.Fatalf("dispatch smoke must not pass caller command: %+v", dispatchArgs)
+	}
+}
+
+func TestCheckMultiProjectHandoffCreatesDependencyChain(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "upstream-1"},
+		}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "midstream-1"},
+		}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "downstream-1"},
+		}),
+		structuredSmokeResult(map[string]any{
+			"Workflow": map[string]any{"id": "workflow-1", "status": "blocked"},
+			"Handoffs": []any{
+				map[string]any{"id": "upstream-1", "state": "created"},
+				map[string]any{"id": "midstream-1", "state": "created"},
+				map[string]any{"id": "downstream-1", "state": "created"},
+			},
+		}),
+		mcp.NewToolResultError("handoff dependencies are incomplete: dependency handoff midstream-1 is created"),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-upstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-midstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-downstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{
+			"Workflow": map[string]any{"id": "workflow-1", "status": "completed"},
+			"Handoffs": []any{
+				map[string]any{"id": "upstream-1", "state": "completed"},
+				map[string]any{"id": "midstream-1", "state": "completed"},
+				map[string]any{"id": "downstream-1", "state": "completed"},
+			},
+		}),
+	}}
+	report := Report{Status: reportStatusOK}
+
+	check := checkMultiProjectHandoff(context.Background(), client, &report, Options{Text: "coordinate projects"})
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected multi-project check ok, got %+v", check)
+	}
+	if report.MultiProjectHandoffResult == nil {
+		t.Fatalf("expected report multi-project result")
+	}
+	if report.MultiProjectHandoffResult.BlockedStatus != "blocked" || report.MultiProjectHandoffResult.FinalStatus != "completed" {
+		t.Fatalf("unexpected multi-project result: %+v", report.MultiProjectHandoffResult)
+	}
+	if !report.MultiProjectHandoffResult.DownstreamBlocked {
+		t.Fatalf("expected downstream dispatch to be blocked before dependencies complete")
+	}
+	wantNames := []string{
+		"handoff_create", "handoff_create", "handoff_create", "workflow_status", "handoff_dispatch",
+		"handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
+		"handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
+		"handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
+		"workflow_status",
+	}
+	if len(client.calls) != len(wantNames) {
+		t.Fatalf("expected calls %+v, got %+v", wantNames, client.calls)
+	}
+	for i, want := range wantNames {
+		if client.calls[i].Params.Name != want {
+			t.Fatalf("call %d: expected %q, got %+v", i, want, client.calls[i])
+		}
+	}
+	midstreamArgs, ok := client.calls[1].Params.Arguments.(map[string]any)
+	if !ok {
+		t.Fatalf("expected midstream create args map, got %+v", client.calls[1].Params.Arguments)
+	}
+	if midstreamArgs["workflow_id"] != "workflow-1" || midstreamArgs["parent_handoff_id"] != "upstream-1" {
+		t.Fatalf("unexpected midstream append args: %+v", midstreamArgs)
+	}
+	midstreamDepends, ok := midstreamArgs["depends_on_handoff_ids"].([]string)
+	if !ok || len(midstreamDepends) != 1 || midstreamDepends[0] != "upstream-1" {
+		t.Fatalf("unexpected midstream dependencies: %+v", midstreamArgs["depends_on_handoff_ids"])
+	}
+	downstreamArgs, ok := client.calls[2].Params.Arguments.(map[string]any)
+	if !ok {
+		t.Fatalf("expected downstream create args map, got %+v", client.calls[2].Params.Arguments)
+	}
+	if downstreamArgs["workflow_id"] != "workflow-1" || downstreamArgs["parent_handoff_id"] != "midstream-1" {
+		t.Fatalf("unexpected downstream append args: %+v", downstreamArgs)
+	}
+	blockedDispatchArgs, ok := client.calls[4].Params.Arguments.(map[string]any)
+	if !ok {
+		t.Fatalf("expected blocked dispatch args map, got %+v", client.calls[4].Params.Arguments)
+	}
+	if blockedDispatchArgs["adapter"] != "manual" || blockedDispatchArgs["target"] != "agent:downstream" {
+		t.Fatalf("unexpected blocked dispatch args: %+v", blockedDispatchArgs)
+	}
+	if _, ok := blockedDispatchArgs["command"]; ok {
+		t.Fatalf("multi-project smoke must not pass caller command: %+v", blockedDispatchArgs)
+	}
+}
+
+func TestCheckMultiAgentCoordinationCoversRegistryWorkAndWatchSuggestions(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "upstream"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "downstream"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "reviewer"}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{
+			map[string]any{"actor": map[string]any{"id": "downstream"}},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "upstream-1"},
+			"watches": []any{
+				map[string]any{"id": "watch-upstream-received", "watch_type": "wait_for_received"},
+			},
+		}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "downstream-1"},
+		}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "upstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{
+				"handoff": map[string]any{"id": "downstream-1"},
+				"reasons": []any{map[string]any{"code": "dependency_incomplete", "dependency_handoff_id": "upstream-1"}},
+			},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-upstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "downstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-watch"},
+			"handoff":  map[string]any{"id": "stalled-1"},
+			"watches": []any{
+				map[string]any{"id": "watch-stalled-received", "watch_type": "wait_for_received"},
+			},
+		}),
+		structuredSmokeResult(map[string]any{"id": "watch-stalled-received", "status": "active"}),
+		structuredSmokeResult(map[string]any{"reminders_sent": float64(1), "blocked_workflows": float64(1)}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{
+				"handoff":     map[string]any{"id": "stalled-1"},
+				"reasons":     []any{map[string]any{"code": "watch_reminder_sent", "watch_id": "watch-stalled-received"}},
+				"suggestions": []any{map[string]any{"code": "escalate_or_redispatch", "watch_id": "watch-stalled-received"}},
+			},
+		}}),
+	}}
+	report := Report{Status: reportStatusOK}
+
+	check := checkMultiAgentCoordination(context.Background(), client, &report, Options{Text: "coordinate agents"})
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected multi-agent coordination check ok, got %+v", check)
+	}
+	if report.MultiAgentCoordinationResult == nil {
+		t.Fatalf("expected report multi-agent coordination result")
+	}
+	if !report.MultiAgentCoordinationResult.DownstreamReady || report.MultiAgentCoordinationResult.WatchSuggestion != "escalate_or_redispatch" {
+		t.Fatalf("unexpected multi-agent coordination result: %+v", report.MultiAgentCoordinationResult)
+	}
+	wantNames := []string{
+		"agent_register", "agent_register", "agent_register", "agent_list", "handoff_create", "handoff_create", "next_work", "blocked_work",
+		"handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
+		"next_work", "handoff_create", "watch_update", "watch_run", "blocked_work",
+	}
+	if len(client.calls) != len(wantNames) {
+		t.Fatalf("expected calls %+v, got %+v", wantNames, client.calls)
+	}
+	for i, want := range wantNames {
+		if client.calls[i].Params.Name != want {
+			t.Fatalf("call %d: expected %q, got %+v", i, want, client.calls[i])
+		}
+	}
+	registerArgs, ok := client.calls[0].Params.Arguments.(map[string]any)
+	if !ok {
+		t.Fatalf("expected register args map, got %+v", client.calls[0].Params.Arguments)
+	}
+	if _, ok := registerArgs["command"]; ok {
+		t.Fatalf("agent registration smoke must not pass caller command: %+v", registerArgs)
+	}
+	watchRunArgs, ok := client.calls[17].Params.Arguments.(map[string]any)
+	if !ok || watchRunArgs["now"] == "" {
+		t.Fatalf("expected watch_run now arg, got %+v", client.calls[17].Params.Arguments)
 	}
 }
 
@@ -1188,6 +1424,18 @@ func (c fakeSmokeMCPClient) ListTools(context.Context, mcp.ListToolsRequest) (*m
 
 func (c fakeSmokeMCPClient) CallTool(context.Context, mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	return c.result, c.err
+}
+
+func flagValue(args []string, flag string) string {
+	for i, arg := range args {
+		if arg == flag && i+1 < len(args) {
+			return args[i+1]
+		}
+		if strings.HasPrefix(arg, flag+"=") {
+			return strings.TrimPrefix(arg, flag+"=")
+		}
+	}
+	return ""
 }
 
 func assertCheck(t *testing.T, report Report, name string, status string) {

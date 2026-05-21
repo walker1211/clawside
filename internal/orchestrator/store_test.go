@@ -109,6 +109,7 @@ func TestStoreCreatesCoreTables(t *testing.T) {
 
 	expected := []string{
 		"accepted_events",
+		"agents",
 		"artifacts",
 		"dispatch_attempts",
 		"divergences",
@@ -122,6 +123,85 @@ func TestStoreCreatesCoreTables(t *testing.T) {
 		if !slices.Contains(tables, name) {
 			t.Fatalf("expected table %s to exist, got %v", name, tables)
 		}
+	}
+}
+
+func TestStoreAgentRegistrationUpsertsAndFilters(t *testing.T) {
+	store, _ := newTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, 5, 22, 9, 0, 0, 0, time.UTC)
+	heartbeat := now.Add(2 * time.Minute)
+
+	first := AgentRegistration{
+		Actor:             ActorRef{Type: ActorAgent, ID: "upstream", Address: "agent:upstream"},
+		Capabilities:      []string{"planning", "go"},
+		ProjectRefs:       []string{"project://upstream"},
+		TaskKinds:         []TaskKind{TaskGeneric},
+		DeliveryTargetRef: "agent:upstream",
+		Status:            "available",
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	if err := store.SaveAgentRegistration(ctx, first); err != nil {
+		t.Fatalf("SaveAgentRegistration first: %v", err)
+	}
+
+	updated := first
+	updated.Capabilities = []string{"review"}
+	updated.ProjectRefs = []string{"project://downstream"}
+	updated.TaskKinds = []TaskKind{TaskReviewRequired}
+	updated.Status = "busy"
+	updated.LastHeartbeatAt = &heartbeat
+	updated.UpdatedAt = now.Add(3 * time.Minute)
+	if err := store.SaveAgentRegistration(ctx, updated); err != nil {
+		t.Fatalf("SaveAgentRegistration update: %v", err)
+	}
+
+	all, err := store.ListAgentRegistrations(ctx, AgentListFilter{})
+	if err != nil {
+		t.Fatalf("ListAgentRegistrations all: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("expected one upserted agent, got %d", len(all))
+	}
+	if all[0].Actor.ID != "upstream" || all[0].Actor.Address != "agent:upstream" {
+		t.Fatalf("expected actor to round trip, got %+v", all[0].Actor)
+	}
+	if !slices.Equal(all[0].Capabilities, []string{"review"}) {
+		t.Fatalf("expected updated capabilities, got %+v", all[0].Capabilities)
+	}
+	if !slices.Equal(all[0].ProjectRefs, []string{"project://downstream"}) {
+		t.Fatalf("expected updated project refs, got %+v", all[0].ProjectRefs)
+	}
+	if !slices.Equal(all[0].TaskKinds, []TaskKind{TaskReviewRequired}) {
+		t.Fatalf("expected updated task kinds, got %+v", all[0].TaskKinds)
+	}
+	if all[0].Status != "busy" {
+		t.Fatalf("expected updated status busy, got %q", all[0].Status)
+	}
+	if all[0].LastHeartbeatAt == nil || !all[0].LastHeartbeatAt.Equal(heartbeat) {
+		t.Fatalf("expected heartbeat %s, got %+v", heartbeat, all[0].LastHeartbeatAt)
+	}
+
+	matched, err := store.ListAgentRegistrations(ctx, AgentListFilter{
+		Capability: "review",
+		ProjectRef: "project://downstream",
+		TaskKind:   TaskReviewRequired,
+		Status:     "busy",
+	})
+	if err != nil {
+		t.Fatalf("ListAgentRegistrations matched: %v", err)
+	}
+	if len(matched) != 1 || matched[0].Actor.ID != "upstream" {
+		t.Fatalf("expected upstream filter match, got %+v", matched)
+	}
+
+	missing, err := store.ListAgentRegistrations(ctx, AgentListFilter{Capability: "implementation"})
+	if err != nil {
+		t.Fatalf("ListAgentRegistrations missing: %v", err)
+	}
+	if len(missing) != 0 {
+		t.Fatalf("expected no implementation match, got %+v", missing)
 	}
 }
 

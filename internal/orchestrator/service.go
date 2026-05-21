@@ -3,6 +3,8 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -24,6 +26,13 @@ type CreateHandoffInput struct {
 	RequiredForWorkflowCompletion bool
 	ArtifactPolicy                ArtifactPolicy
 	NeedsReview                   bool
+	PayloadRef                    string
+	DeliveryTargetRef             string
+}
+
+type AppendHandoffInput struct {
+	WorkflowID string
+	Handoff    CreateHandoffInput
 }
 
 type CreateHandoffResult struct {
@@ -107,7 +116,389 @@ func (s *Service) SetOpenClawAdapter(adapter *OpenClawAdapter) {
 	s.openclawAdapter = adapter
 }
 
+func (s *Service) RegisterAgent(ctx context.Context, input AgentRegistration) (AgentRegistration, error) {
+	now := s.now().UTC()
+	agent := input
+	agent.Actor = trimActorRef(agent.Actor)
+	if agent.Actor.ID == "" {
+		return AgentRegistration{}, fmt.Errorf("agent id is required")
+	}
+	if agent.Actor.Type != ActorAgent {
+		return AgentRegistration{}, fmt.Errorf("agent actor type must be agent")
+	}
+	agent.Capabilities = trimStrings(agent.Capabilities)
+	agent.ProjectRefs = trimStrings(agent.ProjectRefs)
+	agent.TaskKinds = append([]TaskKind(nil), agent.TaskKinds...)
+	agent.DeliveryTargetRef = strings.TrimSpace(agent.DeliveryTargetRef)
+	agent.Status = strings.TrimSpace(agent.Status)
+	if agent.Status == "" {
+		agent.Status = "available"
+	}
+	if agent.CreatedAt.IsZero() {
+		agent.CreatedAt = now
+	}
+	agent.UpdatedAt = now
+	if err := s.store.SaveAgentRegistration(ctx, agent); err != nil {
+		return AgentRegistration{}, err
+	}
+	return agent, nil
+}
+
+func (s *Service) ListAgents(ctx context.Context, filter AgentListFilter) ([]AgentRegistration, error) {
+	filter.Capability = strings.TrimSpace(filter.Capability)
+	filter.ProjectRef = strings.TrimSpace(filter.ProjectRef)
+	filter.Status = strings.TrimSpace(filter.Status)
+	return s.store.ListAgentRegistrations(ctx, filter)
+}
+
+func (s *Service) NextWork(ctx context.Context, query WorkQuery) ([]WorkItem, error) {
+	query = trimWorkQuery(query)
+	handoffs, workflows, err := s.workProjectionInputs(ctx, query.WorkflowID)
+	if err != nil {
+		return nil, err
+	}
+	agents, err := s.store.ListAgentRegistrations(ctx, AgentListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	handoffByID := handoffsByID(handoffs)
+
+	var items []WorkItem
+	for _, handoff := range handoffs {
+		if isTerminalHandoffState(handoff.State) || !workQueryMatchesHandoff(handoff, query, agents) {
+			continue
+		}
+		reasons, suggestions, err := s.workBlockReasons(ctx, handoff, handoffByID, agents)
+		if err != nil {
+			return nil, err
+		}
+		if hasNextWorkBlockingReason(reasons) {
+			continue
+		}
+		activeWatch, err := s.earliestActiveWatch(ctx, handoff.ID)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, WorkItem{Workflow: workflows[handoff.WorkflowID], Handoff: handoff, ActiveWatch: activeWatch, Suggestions: suggestions})
+	}
+	sortWorkItems(items)
+	return limitWorkItems(items, query.Limit), nil
+}
+
+func (s *Service) BlockedWork(ctx context.Context, query WorkQuery) ([]BlockedWorkItem, error) {
+	query = trimWorkQuery(query)
+	handoffs, workflows, err := s.workProjectionInputs(ctx, query.WorkflowID)
+	if err != nil {
+		return nil, err
+	}
+	agents, err := s.store.ListAgentRegistrations(ctx, AgentListFilter{})
+	if err != nil {
+		return nil, err
+	}
+	handoffByID := handoffsByID(handoffs)
+
+	var items []BlockedWorkItem
+	for _, handoff := range handoffs {
+		if isTerminalHandoffState(handoff.State) || !workQueryMatchesHandoff(handoff, query, agents) {
+			continue
+		}
+		reasons, suggestions, err := s.workBlockReasons(ctx, handoff, handoffByID, agents)
+		if err != nil {
+			return nil, err
+		}
+		if len(reasons) == 0 {
+			continue
+		}
+		items = append(items, BlockedWorkItem{Workflow: workflows[handoff.WorkflowID], Handoff: handoff, Reasons: reasons, Suggestions: suggestions})
+	}
+	sortBlockedWorkItems(items)
+	return limitBlockedWorkItems(items, query.Limit), nil
+}
+
+func (s *Service) workProjectionInputs(ctx context.Context, workflowID string) ([]Handoff, map[string]Workflow, error) {
+	workflows := map[string]Workflow{}
+	if workflowID != "" {
+		workflow, err := s.store.LoadWorkflow(ctx, workflowID)
+		if err != nil {
+			return nil, nil, err
+		}
+		handoffs, err := s.store.ListWorkflowHandoffs(ctx, workflowID)
+		if err != nil {
+			return nil, nil, err
+		}
+		workflows[workflow.ID] = workflow
+		return handoffs, workflows, nil
+	}
+	handoffs, err := s.store.ListHandoffs(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, handoff := range handoffs {
+		if _, ok := workflows[handoff.WorkflowID]; ok {
+			continue
+		}
+		workflow, err := s.store.LoadWorkflow(ctx, handoff.WorkflowID)
+		if err != nil {
+			return nil, nil, err
+		}
+		workflows[workflow.ID] = workflow
+	}
+	return handoffs, workflows, nil
+}
+
+func (s *Service) workBlockReasons(ctx context.Context, handoff Handoff, handoffByID map[string]Handoff, agents []AgentRegistration) ([]WorkBlockReason, []ActionSuggestion, error) {
+	var reasons []WorkBlockReason
+	var suggestions []ActionSuggestion
+	for _, dependencyID := range handoff.DependsOnHandoffIDs {
+		dependency, ok := handoffByID[dependencyID]
+		if !ok || dependency.State != StateCompleted {
+			reasons = append(reasons, WorkBlockReason{Code: "dependency_incomplete", DependencyHandoffID: dependencyID, Detail: "dependency handoff is not completed"})
+		}
+	}
+
+	watches, err := s.store.ListWatches(ctx, handoff.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	events, err := s.store.EffectiveEvents(ctx, handoff.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	for _, watch := range watches {
+		if watch.Status != "active" || watch.LastResult != "reminder_sent" || hasEventType(events, watch.EventType) {
+			continue
+		}
+		reasons = append(reasons, WorkBlockReason{Code: "watch_reminder_sent", WatchID: watch.ID, Detail: watch.WatchType + " reminder sent"})
+		suggestions = append(suggestions, watchActionSuggestion(handoff, watch))
+	}
+
+	if isEmptyActor(handoff.CurrentOwner) {
+		reasons = append(reasons, WorkBlockReason{Code: "owner_missing", Detail: "handoff has no current owner"})
+		if suggestion, ok := assignOwnerSuggestion(handoff, agents); ok {
+			suggestions = append(suggestions, suggestion)
+		}
+	}
+	if (handoff.NeedsReview || handoff.TaskKind == TaskReviewRequired) && isEmptyActor(handoff.ReviewerActor) {
+		reasons = append(reasons, WorkBlockReason{Code: "reviewer_missing", Detail: "handoff requires review but has no reviewer"})
+	}
+	return reasons, suggestions, nil
+}
+
+func watchActionSuggestion(handoff Handoff, watch Watch) ActionSuggestion {
+	suggestion := ActionSuggestion{Source: "watch", WatchID: watch.ID}
+	switch watch.WatchType {
+	case "wait_for_received":
+		suggestion.Code = "escalate_or_redispatch"
+		suggestion.Summary = "escalate to owner or redispatch the handoff"
+		suggestion.SuggestedActor = firstNonEmptyActor(handoff.EscalationOwner, handoff.FallbackOwner, handoff.SenderActor)
+	case "wait_for_started":
+		suggestion.Code = "check_receiver_online"
+		suggestion.Summary = "check whether the receiver is online and able to start"
+		suggestion.SuggestedActor = firstNonEmptyActor(handoff.CurrentOwner, handoff.ReceiverActor, handoff.EscalationOwner)
+	default:
+		suggestion.Code = "request_checkpoint_or_revision"
+		suggestion.Summary = "request a checkpoint, revision, or explicit failure"
+		suggestion.SuggestedActor = firstNonEmptyActor(handoff.CurrentOwner, handoff.ReceiverActor, handoff.ReviewerActor, handoff.EscalationOwner)
+	}
+	return suggestion
+}
+
+func assignOwnerSuggestion(handoff Handoff, agents []AgentRegistration) (ActionSuggestion, bool) {
+	for _, agent := range agents {
+		if agent.Status != "" && agent.Status != "available" {
+			continue
+		}
+		if !agentCanHandleHandoff(agent, handoff) {
+			continue
+		}
+		return ActionSuggestion{Code: "assign_owner", Summary: "assign a matching available agent as current owner", SuggestedActor: agent.Actor, Source: "agent_registry"}, true
+	}
+	return ActionSuggestion{}, false
+}
+
+func (s *Service) earliestActiveWatch(ctx context.Context, handoffID string) (*Watch, error) {
+	watches, err := s.store.ListWatches(ctx, handoffID)
+	if err != nil {
+		return nil, err
+	}
+	var earliest *Watch
+	for _, watch := range watches {
+		if watch.Status != "active" {
+			continue
+		}
+		current := watch
+		if earliest == nil || current.DeadlineAt.Before(earliest.DeadlineAt) || current.DeadlineAt.Equal(earliest.DeadlineAt) && current.ID < earliest.ID {
+			earliest = &current
+		}
+	}
+	return earliest, nil
+}
+
+func trimWorkQuery(query WorkQuery) WorkQuery {
+	query.AgentID = strings.TrimSpace(query.AgentID)
+	query.Capability = strings.TrimSpace(query.Capability)
+	query.ProjectRef = strings.TrimSpace(query.ProjectRef)
+	query.WorkflowID = strings.TrimSpace(query.WorkflowID)
+	return query
+}
+
+func handoffsByID(handoffs []Handoff) map[string]Handoff {
+	byID := make(map[string]Handoff, len(handoffs))
+	for _, handoff := range handoffs {
+		byID[handoff.ID] = handoff
+	}
+	return byID
+}
+
+func isTerminalHandoffState(state HandoffState) bool {
+	switch state {
+	case StateCompleted, StateFailed, StateExpired:
+		return true
+	default:
+		return false
+	}
+}
+
+func workQueryMatchesHandoff(handoff Handoff, query WorkQuery, agents []AgentRegistration) bool {
+	if query.TaskKind != "" && query.TaskKind != handoff.TaskKind {
+		return false
+	}
+	if query.ProjectRef != "" && query.ProjectRef != handoff.PayloadRef {
+		return false
+	}
+	if query.AgentID == "" && query.Capability == "" {
+		return true
+	}
+	if query.AgentID != "" && handoffMatchesAgentID(handoff, query.AgentID) {
+		return true
+	}
+	for _, agent := range agents {
+		if query.AgentID != "" && agent.Actor.ID != query.AgentID {
+			continue
+		}
+		if query.Capability != "" && !containsString(agent.Capabilities, query.Capability) {
+			continue
+		}
+		if agentCanHandleHandoff(agent, handoff) {
+			return true
+		}
+	}
+	return false
+}
+
+func handoffMatchesAgentID(handoff Handoff, agentID string) bool {
+	return handoff.ReceiverActor.ID == agentID || handoff.CurrentOwner.ID == agentID || handoff.LeaseHolder.ID == agentID || handoff.ReviewerActor.ID == agentID
+}
+
+func hasNextWorkBlockingReason(reasons []WorkBlockReason) bool {
+	for _, reason := range reasons {
+		switch reason.Code {
+		case "dependency_incomplete", "watch_reminder_sent", "reviewer_missing":
+			return true
+		}
+	}
+	return false
+}
+
+func sortWorkItems(items []WorkItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := items[i], items[j]
+		if leftDeadline, rightDeadline := workItemDeadline(left), workItemDeadline(right); !leftDeadline.Equal(rightDeadline) {
+			return leftDeadline.Before(rightDeadline)
+		}
+		if left.Handoff.RequiredForWorkflowCompletion != right.Handoff.RequiredForWorkflowCompletion {
+			return left.Handoff.RequiredForWorkflowCompletion
+		}
+		if !left.Handoff.CreatedAt.Equal(right.Handoff.CreatedAt) {
+			return left.Handoff.CreatedAt.Before(right.Handoff.CreatedAt)
+		}
+		return left.Handoff.ID < right.Handoff.ID
+	})
+}
+
+func workItemDeadline(item WorkItem) time.Time {
+	if item.ActiveWatch != nil {
+		return item.ActiveWatch.DeadlineAt
+	}
+	if item.Handoff.DeadlineAt != nil {
+		return *item.Handoff.DeadlineAt
+	}
+	return time.Time{}
+}
+
+func limitWorkItems(items []WorkItem, limit int) []WorkItem {
+	if limit <= 0 || len(items) <= limit {
+		return items
+	}
+	return items[:limit]
+}
+
+func sortBlockedWorkItems(items []BlockedWorkItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		left, right := items[i], items[j]
+		if left.Handoff.RequiredForWorkflowCompletion != right.Handoff.RequiredForWorkflowCompletion {
+			return left.Handoff.RequiredForWorkflowCompletion
+		}
+		if !left.Handoff.CreatedAt.Equal(right.Handoff.CreatedAt) {
+			return left.Handoff.CreatedAt.Before(right.Handoff.CreatedAt)
+		}
+		return left.Handoff.ID < right.Handoff.ID
+	})
+}
+
+func limitBlockedWorkItems(items []BlockedWorkItem, limit int) []BlockedWorkItem {
+	if limit <= 0 || len(items) <= limit {
+		return items
+	}
+	return items[:limit]
+}
+
+func isEmptyActor(actor ActorRef) bool {
+	return actor.Type == "" && actor.ID == "" && actor.Address == ""
+}
+
+func firstNonEmptyActor(actors ...ActorRef) ActorRef {
+	for _, actor := range actors {
+		if !isEmptyActor(actor) {
+			return actor
+		}
+	}
+	return ActorRef{}
+}
+
+func agentCanHandleHandoff(agent AgentRegistration, handoff Handoff) bool {
+	if len(agent.TaskKinds) > 0 && !containsTaskKind(agent.TaskKinds, handoff.TaskKind) {
+		return false
+	}
+	if len(agent.ProjectRefs) > 0 && handoff.PayloadRef != "" && !containsString(agent.ProjectRefs, handoff.PayloadRef) {
+		return false
+	}
+	return true
+}
+
+func trimActorRef(actor ActorRef) ActorRef {
+	return ActorRef{
+		Type:    ActorType(strings.TrimSpace(string(actor.Type))),
+		ID:      strings.TrimSpace(actor.ID),
+		Address: strings.TrimSpace(actor.Address),
+	}
+}
+
+func trimStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
 func (s *Service) CreateHandoff(ctx context.Context, input CreateHandoffInput) (CreateHandoffResult, error) {
+	if input.ParentHandoffID != nil || len(input.DependsOnHandoffIDs) > 0 {
+		return CreateHandoffResult{}, fmt.Errorf("workflow_id is required when creating a handoff with parent or dependencies")
+	}
 	now := s.now().UTC()
 	workflowID := NewID("wf")
 	handoffID := NewID("hf")
@@ -132,6 +523,8 @@ func (s *Service) CreateHandoff(ctx context.Context, input CreateHandoffInput) (
 		State:                         StateCreated,
 		TaskKind:                      input.TaskKind,
 		Intent:                        input.Intent,
+		PayloadRef:                    input.PayloadRef,
+		DeliveryTargetRef:             input.DeliveryTargetRef,
 		ProducerActor:                 ActorRef{Type: ActorSystem, ID: "workflow-controller"},
 		SenderActor:                   input.Sender,
 		ReceiverActor:                 input.Receiver,
@@ -168,6 +561,118 @@ func (s *Service) CreateHandoff(ctx context.Context, input CreateHandoffInput) (
 	}
 
 	return CreateHandoffResult{Workflow: workflow, Handoff: handoff, Watches: watches}, nil
+}
+
+func (s *Service) AppendHandoff(ctx context.Context, input AppendHandoffInput) (CreateHandoffResult, error) {
+	if input.WorkflowID == "" {
+		return CreateHandoffResult{}, fmt.Errorf("workflow_id is required")
+	}
+	now := s.now().UTC()
+	workflow, err := s.store.LoadWorkflow(ctx, input.WorkflowID)
+	if err != nil {
+		return CreateHandoffResult{}, err
+	}
+	handoffs, err := s.store.ListWorkflowHandoffs(ctx, input.WorkflowID)
+	if err != nil {
+		return CreateHandoffResult{}, err
+	}
+	projected := ProjectWorkflow(workflow, handoffs, now)
+	if projected.Status == WorkflowCompleted || projected.Status == WorkflowFailed {
+		return CreateHandoffResult{}, fmt.Errorf("cannot append handoff to terminal workflow %s with status %s", workflow.ID, projected.Status)
+	}
+	if input.Handoff.WorkflowKind != "" && input.Handoff.WorkflowKind != workflow.Kind {
+		return CreateHandoffResult{}, fmt.Errorf("workflow_kind %s does not match workflow %s kind %s", input.Handoff.WorkflowKind, workflow.ID, workflow.Kind)
+	}
+
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CreateHandoffResult{}, fmt.Errorf("begin append handoff tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if input.Handoff.ParentHandoffID != nil {
+		if _, err := loadRelatedHandoffTx(ctx, tx, "parent handoff", *input.Handoff.ParentHandoffID, workflow.ID); err != nil {
+			return CreateHandoffResult{}, err
+		}
+	}
+	for _, dependencyID := range input.Handoff.DependsOnHandoffIDs {
+		if _, err := loadRelatedHandoffTx(ctx, tx, "dependency handoff", dependencyID, workflow.ID); err != nil {
+			return CreateHandoffResult{}, err
+		}
+	}
+
+	handoffID := NewID("hf")
+	handoff := Handoff{
+		ID:                            handoffID,
+		WorkflowID:                    workflow.ID,
+		WorkflowKind:                  workflow.Kind,
+		ParentHandoffID:               input.Handoff.ParentHandoffID,
+		DependsOnHandoffIDs:           append([]string(nil), input.Handoff.DependsOnHandoffIDs...),
+		RequiredForWorkflowCompletion: input.Handoff.RequiredForWorkflowCompletion,
+		State:                         StateCreated,
+		TaskKind:                      input.Handoff.TaskKind,
+		Intent:                        input.Handoff.Intent,
+		PayloadRef:                    input.Handoff.PayloadRef,
+		DeliveryTargetRef:             input.Handoff.DeliveryTargetRef,
+		ProducerActor:                 ActorRef{Type: ActorSystem, ID: "workflow-controller"},
+		SenderActor:                   input.Handoff.Sender,
+		ReceiverActor:                 input.Handoff.Receiver,
+		ReviewerActor:                 input.Handoff.Reviewer,
+		SubjectActor:                  input.Handoff.Receiver,
+		CurrentOwner:                  input.Handoff.Receiver,
+		EscalationOwner:               input.Handoff.Sender,
+		FallbackOwner:                 input.Handoff.Sender,
+		ArtifactPolicy:                input.Handoff.ArtifactPolicy,
+		NeedsReview:                   input.Handoff.NeedsReview,
+		CreatedAt:                     now,
+		UpdatedAt:                     now,
+	}
+	watches := CreateDefaultWatches(handoff, now)
+	workflow.CurrentHandoffID = handoff.ID
+	workflow.UpdatedAt = now
+
+	if err := saveHandoffExec(ctx, tx, handoff); err != nil {
+		return CreateHandoffResult{}, err
+	}
+	for _, watch := range watches {
+		if err := saveWatchExec(ctx, tx, watch); err != nil {
+			return CreateHandoffResult{}, err
+		}
+	}
+	if err := saveWorkflowExec(ctx, tx, workflow); err != nil {
+		return CreateHandoffResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CreateHandoffResult{}, fmt.Errorf("commit append handoff tx: %w", err)
+	}
+	return CreateHandoffResult{Workflow: workflow, Handoff: handoff, Watches: watches}, nil
+}
+
+func loadRelatedHandoffTx(ctx context.Context, tx queryer, label, handoffID, workflowID string) (Handoff, error) {
+	if handoffID == "" {
+		return Handoff{}, fmt.Errorf("%s id is required", label)
+	}
+	handoff, err := loadHandoffTx(ctx, tx, handoffID)
+	if err != nil {
+		return Handoff{}, fmt.Errorf("%s %s: %w", label, handoffID, err)
+	}
+	if handoff.WorkflowID != workflowID {
+		return Handoff{}, fmt.Errorf("%s %s belongs to workflow %s, not %s", label, handoffID, handoff.WorkflowID, workflowID)
+	}
+	return handoff, nil
+}
+
+func (s *Service) ensureHandoffDependenciesCompleted(ctx context.Context, handoff Handoff) error {
+	for _, dependencyID := range handoff.DependsOnHandoffIDs {
+		dependency, err := loadRelatedHandoffTx(ctx, s.store.db, "dependency handoff", dependencyID, handoff.WorkflowID)
+		if err != nil {
+			return err
+		}
+		if dependency.State != StateCompleted {
+			return fmt.Errorf("handoff dependencies are incomplete: dependency handoff %s is %s", dependencyID, dependency.State)
+		}
+	}
+	return nil
 }
 
 func (s *Service) RecordEvent(ctx context.Context, input RecordEventInput) (EventDecision, error) {
@@ -318,6 +823,9 @@ func (s *Service) DispatchHandoff(ctx context.Context, input DispatchHandoffInpu
 	}
 	if handoff.State != StateCreated {
 		return DispatchHandoffResult{}, fmt.Errorf("dispatch requires created handoff state")
+	}
+	if err := s.ensureHandoffDependenciesCompleted(ctx, handoff); err != nil {
+		return DispatchHandoffResult{}, err
 	}
 	if handoff.DeliveryTargetRef == "" && input.Target != "" {
 		handoff.DeliveryTargetRef = input.Target

@@ -28,14 +28,19 @@ type ActorRefInput struct {
 
 type HandoffCreateInput struct {
 	WorkflowKind                  string               `json:"workflow_kind"`
+	WorkflowID                    string               `json:"workflow_id,omitempty"`
 	Sender                        ActorRefInput        `json:"sender"`
 	Receiver                      ActorRefInput        `json:"receiver"`
 	Reviewer                      *ActorRefInput       `json:"reviewer,omitempty"`
 	TaskKind                      string               `json:"task_kind"`
 	Intent                        string               `json:"intent"`
+	ParentHandoffID               *string              `json:"parent_handoff_id,omitempty"`
+	DependsOnHandoffIDs           []string             `json:"depends_on_handoff_ids,omitempty"`
 	RequiredForWorkflowCompletion bool                 `json:"required_for_workflow_completion,omitempty"`
 	NeedsReview                   bool                 `json:"needs_review,omitempty"`
 	ArtifactPolicy                *ArtifactPolicyInput `json:"artifact_policy,omitempty"`
+	PayloadRef                    string               `json:"payload_ref,omitempty"`
+	DeliveryTargetRef             string               `json:"delivery_target_ref,omitempty"`
 }
 
 type ArtifactPolicyInput struct {
@@ -84,6 +89,48 @@ type WorkflowStatusInput struct {
 
 type WorkflowListOutput struct {
 	Workflows []orchestrator.WorkflowView `json:"workflows"`
+}
+
+type AgentRegisterInput struct {
+	Actor             ActorRefInput `json:"actor"`
+	Capabilities      []string      `json:"capabilities,omitempty"`
+	ProjectRefs       []string      `json:"project_refs,omitempty"`
+	TaskKinds         []string      `json:"task_kinds,omitempty"`
+	DeliveryTargetRef string        `json:"delivery_target_ref,omitempty"`
+	Status            string        `json:"status,omitempty"`
+	LastHeartbeatAt   *string       `json:"last_heartbeat_at,omitempty"`
+}
+
+type AgentRegisterOutput struct {
+	Agent orchestrator.AgentRegistration `json:"agent"`
+}
+
+type AgentListInput struct {
+	Capability string `json:"capability,omitempty"`
+	ProjectRef string `json:"project_ref,omitempty"`
+	TaskKind   string `json:"task_kind,omitempty"`
+	Status     string `json:"status,omitempty"`
+}
+
+type AgentListOutput struct {
+	Agents []orchestrator.AgentRegistration `json:"agents"`
+}
+
+type WorkQueryInput struct {
+	AgentID    string `json:"agent_id,omitempty"`
+	Capability string `json:"capability,omitempty"`
+	ProjectRef string `json:"project_ref,omitempty"`
+	WorkflowID string `json:"workflow_id,omitempty"`
+	TaskKind   string `json:"task_kind,omitempty"`
+	Limit      int    `json:"limit,omitempty"`
+}
+
+type NextWorkOutput struct {
+	Items []orchestrator.WorkItem `json:"items"`
+}
+
+type BlockedWorkOutput struct {
+	Items []orchestrator.BlockedWorkItem `json:"items"`
 }
 
 type WatchListInput struct {
@@ -249,17 +296,28 @@ func (h *Handlers) HandleHandoffCreate(ctx context.Context, input HandoffCreateI
 			return HandoffCreateOutput{}, err
 		}
 	}
-	result, err := h.svc.CreateHandoff(ctx, orchestrator.CreateHandoffInput{
+	createInput := orchestrator.CreateHandoffInput{
 		WorkflowKind:                  strings.TrimSpace(input.WorkflowKind),
 		Sender:                        sender,
 		Receiver:                      receiver,
 		Reviewer:                      reviewer,
 		TaskKind:                      orchestrator.TaskKind(strings.TrimSpace(input.TaskKind)),
 		Intent:                        strings.TrimSpace(input.Intent),
+		ParentHandoffID:               trimOptionalString(input.ParentHandoffID),
+		DependsOnHandoffIDs:           trimStringSlice(input.DependsOnHandoffIDs),
 		RequiredForWorkflowCompletion: input.RequiredForWorkflowCompletion,
 		NeedsReview:                   input.NeedsReview,
 		ArtifactPolicy:                toArtifactPolicy(input.ArtifactPolicy),
-	})
+		PayloadRef:                    strings.TrimSpace(input.PayloadRef),
+		DeliveryTargetRef:             strings.TrimSpace(input.DeliveryTargetRef),
+	}
+	var result orchestrator.CreateHandoffResult
+	workflowID := strings.TrimSpace(input.WorkflowID)
+	if workflowID == "" {
+		result, err = h.svc.CreateHandoff(ctx, createInput)
+	} else {
+		result, err = h.svc.AppendHandoff(ctx, orchestrator.AppendHandoffInput{WorkflowID: workflowID, Handoff: createInput})
+	}
 	if err != nil {
 		return HandoffCreateOutput{}, err
 	}
@@ -313,6 +371,59 @@ func (h *Handlers) HandleHandoffProgress(ctx context.Context, input HandoffProgr
 
 func (h *Handlers) HandleWorkflowStatus(ctx context.Context, input WorkflowStatusInput) (orchestrator.WorkflowView, error) {
 	return h.svc.WorkflowStatus(ctx, strings.TrimSpace(input.WorkflowID))
+}
+
+func (h *Handlers) HandleAgentRegister(ctx context.Context, input AgentRegisterInput) (AgentRegisterOutput, error) {
+	actor, err := toActorRef(input.Actor)
+	if err != nil {
+		return AgentRegisterOutput{}, err
+	}
+	lastHeartbeatAt, err := optionalTime(input.LastHeartbeatAt)
+	if err != nil {
+		return AgentRegisterOutput{}, err
+	}
+	agent, err := h.svc.RegisterAgent(ctx, orchestrator.AgentRegistration{
+		Actor:             actor,
+		Capabilities:      trimNonEmptyStringSlice(input.Capabilities),
+		ProjectRefs:       trimNonEmptyStringSlice(input.ProjectRefs),
+		TaskKinds:         toTaskKinds(input.TaskKinds),
+		DeliveryTargetRef: strings.TrimSpace(input.DeliveryTargetRef),
+		Status:            strings.TrimSpace(input.Status),
+		LastHeartbeatAt:   lastHeartbeatAt,
+	})
+	if err != nil {
+		return AgentRegisterOutput{}, err
+	}
+	return AgentRegisterOutput{Agent: agent}, nil
+}
+
+func (h *Handlers) HandleAgentList(ctx context.Context, input AgentListInput) (AgentListOutput, error) {
+	agents, err := h.svc.ListAgents(ctx, orchestrator.AgentListFilter{
+		Capability: strings.TrimSpace(input.Capability),
+		ProjectRef: strings.TrimSpace(input.ProjectRef),
+		TaskKind:   orchestrator.TaskKind(strings.TrimSpace(input.TaskKind)),
+		Status:     strings.TrimSpace(input.Status),
+	})
+	if err != nil {
+		return AgentListOutput{}, err
+	}
+	return AgentListOutput{Agents: agents}, nil
+}
+
+func (h *Handlers) HandleNextWork(ctx context.Context, input WorkQueryInput) (NextWorkOutput, error) {
+	items, err := h.svc.NextWork(ctx, toWorkQuery(input))
+	if err != nil {
+		return NextWorkOutput{}, err
+	}
+	return NextWorkOutput{Items: items}, nil
+}
+
+func (h *Handlers) HandleBlockedWork(ctx context.Context, input WorkQueryInput) (BlockedWorkOutput, error) {
+	items, err := h.svc.BlockedWork(ctx, toWorkQuery(input))
+	if err != nil {
+		return BlockedWorkOutput{}, err
+	}
+	return BlockedWorkOutput{Items: items}, nil
 }
 
 func normalizeProtocolAction(raw string) orchestrator.ProtocolAction {
@@ -665,6 +776,55 @@ func optionalTime(input *string) (*time.Time, error) {
 		return nil, err
 	}
 	return &parsed, nil
+}
+
+func trimOptionalString(input *string) *string {
+	if input == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*input)
+	return &trimmed
+}
+
+func trimStringSlice(values []string) []string {
+	trimmed := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed = append(trimmed, strings.TrimSpace(value))
+	}
+	return trimmed
+}
+
+func trimNonEmptyStringSlice(values []string) []string {
+	trimmed := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			trimmed = append(trimmed, value)
+		}
+	}
+	return trimmed
+}
+
+func toTaskKinds(values []string) []orchestrator.TaskKind {
+	kinds := make([]orchestrator.TaskKind, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			kinds = append(kinds, orchestrator.TaskKind(value))
+		}
+	}
+	return kinds
+}
+
+func toWorkQuery(input WorkQueryInput) orchestrator.WorkQuery {
+	return orchestrator.WorkQuery{
+		AgentID:    strings.TrimSpace(input.AgentID),
+		Capability: strings.TrimSpace(input.Capability),
+		ProjectRef: strings.TrimSpace(input.ProjectRef),
+		WorkflowID: strings.TrimSpace(input.WorkflowID),
+		TaskKind:   orchestrator.TaskKind(strings.TrimSpace(input.TaskKind)),
+		Limit:      input.Limit,
+	}
 }
 
 func requireHandoffID(raw string) (string, error) {

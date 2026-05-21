@@ -27,8 +27,6 @@ func TestRunCreateHandoffPrintsJSON(t *testing.T) {
 		"--receiver", "agent:writer",
 		"--task-kind", "generic_task",
 		"--intent", "write summary",
-		"--parent-handoff-id", "hf_parent_1",
-		"--depends-on", "hf_prev_1,hf_prev_2",
 		"--required-for-workflow-completion", "true",
 	}, stdout, stderr)
 	if err != nil {
@@ -36,6 +34,131 @@ func TestRunCreateHandoffPrintsJSON(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"handoff_id"`) {
 		t.Fatalf("expected handoff_id json, got %s", stdout.String())
+	}
+}
+
+func TestRunAgentRegisterListAndWorkNext(t *testing.T) {
+	dbPath, created := seedTestHandoff(t)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	if err := run([]string{
+		"agent", "register",
+		"--db", dbPath,
+		"--actor", "agent:writer",
+		"--capabilities", "writing,go",
+		"--project-refs", "project://draft",
+		"--task-kinds", "generic_task",
+		"--delivery-target-ref", "agent:writer",
+	}, stdout, stderr); err != nil {
+		t.Fatalf("run agent register: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"id": "writer"`) || !strings.Contains(stdout.String(), `"status": "available"`) {
+		t.Fatalf("expected writer registration JSON, got %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := run([]string{
+		"agent", "list",
+		"--db", dbPath,
+		"--capability", "writing",
+		"--task-kind", "generic_task",
+		"--status", "available",
+	}, stdout, stderr); err != nil {
+		t.Fatalf("run agent list: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"id": "writer"`) {
+		t.Fatalf("expected writer in agent list, got %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := run([]string{"work", "next", "--db", dbPath, "--agent-id", "writer"}, stdout, stderr); err != nil {
+		t.Fatalf("run work next: %v", err)
+	}
+	if !strings.Contains(stdout.String(), created.Handoff.ID) {
+		t.Fatalf("expected handoff %s in next work JSON, got %s", created.Handoff.ID, stdout.String())
+	}
+}
+
+func TestRunWorkBlockedPrintsDependencyReason(t *testing.T) {
+	dbPath, root := seedTestHandoff(t)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	if err := run([]string{
+		"handoff", "create",
+		"--db", dbPath,
+		"--workflow-id", root.Workflow.ID,
+		"--sender", "agent:writer",
+		"--receiver", "agent:engineer",
+		"--task-kind", "generic_task",
+		"--intent", "consume upstream output",
+		"--depends-on", root.Handoff.ID,
+		"--required-for-workflow-completion", "true",
+	}, stdout, stderr); err != nil {
+		t.Fatalf("run downstream create: %v", err)
+	}
+
+	stdout.Reset()
+	if err := run([]string{"work", "blocked", "--db", dbPath, "--agent-id", "engineer"}, stdout, stderr); err != nil {
+		t.Fatalf("run work blocked: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"code": "dependency_incomplete"`) || !strings.Contains(stdout.String(), root.Handoff.ID) {
+		t.Fatalf("expected dependency reason for %s, got %s", root.Handoff.ID, stdout.String())
+	}
+}
+
+func TestRunCreateHandoffAppendsExistingWorkflow(t *testing.T) {
+	dbPath, root := seedTestHandoff(t)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{
+		"handoff", "create",
+		"--db", dbPath,
+		"--workflow-id", root.Workflow.ID,
+		"--sender", "agent:planner",
+		"--receiver", "agent:engineer",
+		"--task-kind", "generic_task",
+		"--intent", "update downstream project",
+		"--parent-handoff-id", root.Handoff.ID,
+		"--depends-on", root.Handoff.ID,
+		"--payload-ref", "project://downstream",
+		"--delivery-target-ref", "agent:engineer",
+		"--required-for-workflow-completion", "true",
+	}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run append create: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"workflow_id": "`+root.Workflow.ID+`"`) {
+		t.Fatalf("expected workflow id %s in json, got %s", root.Workflow.ID, stdout.String())
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	handoffs, err := store.ListWorkflowHandoffs(context.Background(), root.Workflow.ID)
+	if err != nil {
+		t.Fatalf("ListWorkflowHandoffs: %v", err)
+	}
+	if len(handoffs) != 2 {
+		t.Fatalf("expected 2 handoffs, got %d", len(handoffs))
+	}
+	appended := handoffs[1]
+	if appended.ParentHandoffID == nil || *appended.ParentHandoffID != root.Handoff.ID {
+		t.Fatalf("expected parent %s, got %+v", root.Handoff.ID, appended.ParentHandoffID)
+	}
+	if len(appended.DependsOnHandoffIDs) != 1 || appended.DependsOnHandoffIDs[0] != root.Handoff.ID {
+		t.Fatalf("expected dependency %s, got %+v", root.Handoff.ID, appended.DependsOnHandoffIDs)
+	}
+	if appended.PayloadRef != "project://downstream" || appended.DeliveryTargetRef != "agent:engineer" {
+		t.Fatalf("expected refs to be persisted, got payload=%q delivery=%q", appended.PayloadRef, appended.DeliveryTargetRef)
 	}
 }
 

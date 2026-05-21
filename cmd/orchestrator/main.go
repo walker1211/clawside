@@ -30,6 +30,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	switch args[0] {
 	case "handoff":
 		return runHandoff(args[1:], stdout, stderr)
+	case "agent":
+		return runAgent(args[1:], stdout, stderr)
+	case "work":
+		return runWork(args[1:], stdout, stderr)
 	case "event":
 		return runEvent(args[1:], stdout, stderr)
 	case "signal":
@@ -88,6 +92,34 @@ func runHandoff(args []string, stdout, stderr io.Writer) error {
 		return runHandoffProtocolAction(args[1:], stdout, stderr, orchestrator.ProtocolActionFail)
 	default:
 		return fmt.Errorf("unknown handoff subcommand %q", args[0])
+	}
+}
+
+func runAgent(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing agent subcommand")
+	}
+	switch args[0] {
+	case "register":
+		return runAgentRegister(args[1:], stdout, stderr)
+	case "list":
+		return runAgentList(args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("unknown agent subcommand %q", args[0])
+	}
+}
+
+func runWork(args []string, stdout, stderr io.Writer) error {
+	if len(args) == 0 {
+		return fmt.Errorf("missing work subcommand")
+	}
+	switch args[0] {
+	case "next":
+		return runWorkNext(args[1:], stdout, stderr)
+	case "blocked":
+		return runWorkBlocked(args[1:], stdout, stderr)
+	default:
+		return fmt.Errorf("unknown work subcommand %q", args[0])
 	}
 }
 
@@ -214,16 +246,22 @@ func runHandoffCreate(args []string, stdout, stderr io.Writer) error {
 	var intent string
 	var parentHandoffID string
 	var dependsOn string
+	var workflowID string
+	var payloadRef string
+	var deliveryTargetRef string
 	var required bool
 
 	fs.StringVar(&dbPath, "db", "", "sqlite db path")
 	fs.StringVar(&workflowKind, "workflow-kind", "", "workflow kind")
+	fs.StringVar(&workflowID, "workflow-id", "", "existing workflow id for appending a handoff")
 	fs.StringVar(&sender, "sender", "", "sender actor")
 	fs.StringVar(&receiver, "receiver", "", "receiver actor")
 	fs.StringVar(&taskKind, "task-kind", string(orchestrator.TaskGeneric), "task kind")
 	fs.StringVar(&intent, "intent", "", "intent")
 	fs.StringVar(&parentHandoffID, "parent-handoff-id", "", "parent handoff id")
 	fs.StringVar(&dependsOn, "depends-on", "", "depends on handoff ids")
+	fs.StringVar(&payloadRef, "payload-ref", "", "payload or project reference")
+	fs.StringVar(&deliveryTargetRef, "delivery-target-ref", "", "delivery target reference")
 	fs.BoolVar(&required, "required-for-workflow-completion", false, "required for workflow completion")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -252,7 +290,7 @@ func runHandoffCreate(args []string, stdout, stderr io.Writer) error {
 	if parentHandoffID != "" {
 		parent = &parentHandoffID
 	}
-	result, err := svc.CreateHandoff(context.Background(), orchestrator.CreateHandoffInput{
+	input := orchestrator.CreateHandoffInput{
 		WorkflowKind:                  workflowKind,
 		Sender:                        senderRef,
 		Receiver:                      receiverRef,
@@ -261,7 +299,15 @@ func runHandoffCreate(args []string, stdout, stderr io.Writer) error {
 		ParentHandoffID:               parent,
 		DependsOnHandoffIDs:           splitCSV(dependsOn),
 		RequiredForWorkflowCompletion: required,
-	})
+		PayloadRef:                    payloadRef,
+		DeliveryTargetRef:             deliveryTargetRef,
+	}
+	var result orchestrator.CreateHandoffResult
+	if workflowID == "" {
+		result, err = svc.CreateHandoff(context.Background(), input)
+	} else {
+		result, err = svc.AppendHandoff(context.Background(), orchestrator.AppendHandoffInput{WorkflowID: workflowID, Handoff: input})
+	}
 	if err != nil {
 		return err
 	}
@@ -330,6 +376,194 @@ func runHandoffList(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	return printJSON(stdout, handoffs)
+}
+
+func runAgentRegister(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("agent register", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var actor string
+	var address string
+	var capabilities string
+	var projectRefs string
+	var taskKinds string
+	var deliveryTargetRef string
+	var status string
+	var lastHeartbeatAtRaw string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&actor, "actor", "", "agent actor as type:id")
+	fs.StringVar(&address, "address", "", "agent address")
+	fs.StringVar(&capabilities, "capabilities", "", "comma-separated capabilities")
+	fs.StringVar(&projectRefs, "project-refs", "", "comma-separated project refs")
+	fs.StringVar(&taskKinds, "task-kinds", "", "comma-separated task kinds")
+	fs.StringVar(&deliveryTargetRef, "delivery-target-ref", "", "delivery target ref")
+	fs.StringVar(&status, "status", "", "agent status")
+	fs.StringVar(&lastHeartbeatAtRaw, "last-heartbeat-at", "", "last heartbeat RFC3339Nano timestamp")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" || actor == "" {
+		return fmt.Errorf("missing db or actor")
+	}
+	actorRef, err := parseActorRef(actor)
+	if err != nil {
+		return err
+	}
+	actorRef.Address = strings.TrimSpace(address)
+	var lastHeartbeatAt *time.Time
+	if strings.TrimSpace(lastHeartbeatAtRaw) != "" {
+		parsed, err := time.Parse(time.RFC3339Nano, strings.TrimSpace(lastHeartbeatAtRaw))
+		if err != nil {
+			return err
+		}
+		lastHeartbeatAt = &parsed
+	}
+
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	svc := orchestrator.NewService(store, nil)
+	agent, err := svc.RegisterAgent(context.Background(), orchestrator.AgentRegistration{
+		Actor:             actorRef,
+		Capabilities:      splitCSV(capabilities),
+		ProjectRefs:       splitCSV(projectRefs),
+		TaskKinds:         splitTaskKinds(taskKinds),
+		DeliveryTargetRef: strings.TrimSpace(deliveryTargetRef),
+		Status:            strings.TrimSpace(status),
+		LastHeartbeatAt:   lastHeartbeatAt,
+	})
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, agent)
+}
+
+func runAgentList(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("agent list", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var capability string
+	var projectRef string
+	var taskKind string
+	var status string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&capability, "capability", "", "capability filter")
+	fs.StringVar(&projectRef, "project-ref", "", "project ref filter")
+	fs.StringVar(&taskKind, "task-kind", "", "task kind filter")
+	fs.StringVar(&status, "status", "", "status filter")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" {
+		return fmt.Errorf("missing db")
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	svc := orchestrator.NewService(store, nil)
+	agents, err := svc.ListAgents(context.Background(), orchestrator.AgentListFilter{
+		Capability: strings.TrimSpace(capability),
+		ProjectRef: strings.TrimSpace(projectRef),
+		TaskKind:   orchestrator.TaskKind(strings.TrimSpace(taskKind)),
+		Status:     strings.TrimSpace(status),
+	})
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, agents)
+}
+
+func runWorkNext(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	dbPath, query, err := parseWorkQueryFlags("work next", args)
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	svc := orchestrator.NewService(store, nil)
+	items, err := svc.NextWork(context.Background(), query)
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, items)
+}
+
+func runWorkBlocked(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	dbPath, query, err := parseWorkQueryFlags("work blocked", args)
+	if err != nil {
+		return err
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		return err
+	}
+	svc := orchestrator.NewService(store, nil)
+	items, err := svc.BlockedWork(context.Background(), query)
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, items)
+}
+
+func parseWorkQueryFlags(name string, args []string) (string, orchestrator.WorkQuery, error) {
+	fs := flag.NewFlagSet(name, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var agentID string
+	var capability string
+	var projectRef string
+	var workflowID string
+	var taskKind string
+	var limit int
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&agentID, "agent-id", "", "agent id filter")
+	fs.StringVar(&capability, "capability", "", "capability filter")
+	fs.StringVar(&projectRef, "project-ref", "", "project ref filter")
+	fs.StringVar(&workflowID, "workflow-id", "", "workflow id filter")
+	fs.StringVar(&taskKind, "task-kind", "", "task kind filter")
+	fs.IntVar(&limit, "limit", 0, "maximum items")
+	if err := fs.Parse(args); err != nil {
+		return "", orchestrator.WorkQuery{}, err
+	}
+	if dbPath == "" {
+		return "", orchestrator.WorkQuery{}, fmt.Errorf("missing db")
+	}
+	return dbPath, orchestrator.WorkQuery{
+		AgentID:    strings.TrimSpace(agentID),
+		Capability: strings.TrimSpace(capability),
+		ProjectRef: strings.TrimSpace(projectRef),
+		WorkflowID: strings.TrimSpace(workflowID),
+		TaskKind:   orchestrator.TaskKind(strings.TrimSpace(taskKind)),
+		Limit:      limit,
+	}, nil
 }
 
 func runHandoffDispatch(args []string, stdout, stderr io.Writer) error {
@@ -1118,6 +1352,15 @@ func splitCSV(raw string) []string {
 		if part != "" {
 			out = append(out, part)
 		}
+	}
+	return out
+}
+
+func splitTaskKinds(raw string) []orchestrator.TaskKind {
+	parts := splitCSV(raw)
+	out := make([]orchestrator.TaskKind, 0, len(parts))
+	for _, part := range parts {
+		out = append(out, orchestrator.TaskKind(part))
 	}
 	return out
 }

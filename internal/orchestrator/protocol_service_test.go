@@ -88,6 +88,59 @@ func TestProtocolActionFailMovesToFailed(t *testing.T) {
 	}
 }
 
+func TestProtocolActionRejectsIncompleteDependencies(t *testing.T) {
+	svc := newTestService(t)
+	root := mustCreateTestHandoff(t, svc)
+	downstream, err := svc.AppendHandoff(context.Background(), AppendHandoffInput{
+		WorkflowID: root.Workflow.ID,
+		Handoff: CreateHandoffInput{
+			Sender:              ActorRef{Type: ActorAgent, ID: "planner"},
+			Receiver:            ActorRef{Type: ActorAgent, ID: "engineer"},
+			TaskKind:            TaskGeneric,
+			Intent:              "update downstream project",
+			DependsOnHandoffIDs: []string{root.Handoff.ID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AppendHandoff: %v", err)
+	}
+	if _, err := svc.RecordAuthoritativeEvent(context.Background(), RecordEventInput{Event: EventRecord{
+		ID:                NewID("evt"),
+		WorkflowID:        root.Workflow.ID,
+		HandoffID:         downstream.Handoff.ID,
+		Type:              EventTransportRequested,
+		ProducerEventTime: testNow(),
+		IngestedAt:        testNow(),
+		ProducerActor:     ActorRef{Type: ActorSystem, ID: "orchestrator"},
+		Accepted:          true,
+	}}); err != nil {
+		t.Fatalf("RecordAuthoritativeEvent(transport_requested): %v", err)
+	}
+
+	_, err = svc.ApplyProtocolAction(context.Background(), ProtocolRequest{
+		Action:     ProtocolActionReceive,
+		HandoffID:  downstream.Handoff.ID,
+		WorkflowID: root.Workflow.ID,
+		Actor:      downstream.Handoff.ReceiverActor,
+	})
+	if err == nil || !strings.Contains(err.Error(), "dependencies") {
+		t.Fatalf("expected dependency progress error, got %v", err)
+	}
+
+	result, err := svc.ApplyProtocolAction(context.Background(), ProtocolRequest{
+		Action:     ProtocolActionFail,
+		HandoffID:  downstream.Handoff.ID,
+		WorkflowID: root.Workflow.ID,
+		Actor:      downstream.Handoff.ReceiverActor,
+	})
+	if err != nil {
+		t.Fatalf("ApplyProtocolAction(fail): %v", err)
+	}
+	if result.Handoff.State != StateFailed {
+		t.Fatalf("expected fail to remain available, got %s", result.Handoff.State)
+	}
+}
+
 func TestProtocolActionRejectsInvalidActor(t *testing.T) {
 	svc := newTestService(t)
 	created := mustCreateTestHandoff(t, svc)
