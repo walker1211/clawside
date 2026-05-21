@@ -71,6 +71,24 @@ func TestRunExtractsContinuitySummary(t *testing.T) {
 	}
 }
 
+func TestRunAcceptsActivePostReopenWorkflowStatus(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeContinuityEventsWithFinals(t, eventsPath, "completed", "active")
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v\nstderr=%s", err, stderr.String())
+	}
+	var payload extractedContinuityResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.TruthPlaneContinuity.PostReopenFinalWorkflowStatus != "active" {
+		t.Fatalf("expected active final workflow status, got %+v", payload.TruthPlaneContinuity)
+	}
+}
+
 func TestRunWritesContinuitySummaryToStdout(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")
@@ -354,7 +372,7 @@ func TestRunFailsWhenFinalStateOrWorkflowStatusIsInvalid(t *testing.T) {
 		want           string
 	}{
 		{name: "handoff state", handoffState: "created", workflowStatus: "completed", want: "post-reopen final handoff state must be completed"},
-		{name: "workflow status", handoffState: "completed", workflowStatus: "active", want: "post-reopen final workflow status must be completed"},
+		{name: "workflow status", handoffState: "completed", workflowStatus: "failed", want: "post-reopen final workflow status must be active or completed"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -440,18 +458,18 @@ func TestRunSelectsLatestSuccessfulContinuityFlowAfterEarlierFinalHandoffFailure
 	}
 }
 
-func TestRunFailsWhenLatestContinuityFlowFailsAfterEarlierSuccess(t *testing.T) {
+func TestRunFailsWhenLatestContinuityFlowHasInvalidWorkflowStatusAfterEarlierSuccess(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")
 	lines := append([]string{}, validContinuityEvents()...)
 	latest := append([]string{}, validContinuityPrefixEvents()...)
-	latest = append(latest, validContinuityPostRepairEvents("completed", "active")...)
+	latest = append(latest, validContinuityPostRepairEvents("completed", "failed")...)
 	lines = append(lines, renamedContinuityEvents(latest, "hf-latest", "wf-latest", "repair-latest")...)
 	writeContinuityEvents(t, eventsPath, lines...)
 
 	var stdout, stderr bytes.Buffer
 	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
-	if err == nil || err.Error() != "post-reopen final workflow status must be completed" {
+	if err == nil || err.Error() != "post-reopen final workflow status must be active or completed" {
 		t.Fatalf("expected latest failed flow error, got %v", err)
 	}
 }

@@ -55,6 +55,37 @@ func TestRunExtractsDivergenceSummary(t *testing.T) {
 	assertDivergenceStringsEqual(t, summary.Tools, wantTools)
 }
 
+func TestRunAcceptsActiveFinalWorkflowStatus(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeDivergenceEvents(t, eventsPath,
+		divergenceToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		divergenceToolResultEvent("handoff_dispatch", divergenceDispatchResultJSON("hf-123", "wf-123", true), false),
+		divergenceToolResultEvent("divergence_record", divergenceRecordResultJSON("hf-123", "wf-123", "transport_accepted"), false),
+		divergenceToolResultEvent("handoff_progress", divergenceProgressResultJSON("handoff.receive", "received", true, "hf-123", "wf-123"), false),
+		divergenceToolResultEvent("handoff_progress", divergenceProgressResultJSON("handoff.claim", "claimed", true, "hf-123", "wf-123"), false),
+		divergenceToolResultEvent("handoff_progress", divergenceProgressResultJSON("handoff.start", "started", true, "hf-123", "wf-123"), false),
+		divergenceToolResultEvent("handoff_progress", divergenceProgressResultJSON("handoff.checkpoint", "checkpointed", true, "hf-123", "wf-123"), false),
+		divergenceToolResultEvent("handoff_progress", divergenceProgressResultJSON("handoff.complete", "completed", true, "hf-123", "wf-123"), false),
+		divergenceToolResultEvent("divergence_list", `{"divergences":[{"id":"div-123","handoff_id":"hf-123","workflow_id":"wf-123","signal_type":"transport_accepted"}]}`, false),
+		divergenceToolResultEvent("repair_candidate_list", `{"repair_candidates":[{"id":"repaircand-123","handoff_id":"hf-123","workflow_id":"wf-123","signal_id":"signal-123","reason":"missing_authoritative_progress","suggested_action":"review","status":"open"}]}`, false),
+		divergenceToolResultEvent("handoff_get", divergenceFinalHandoffJSON("completed"), false),
+		divergenceToolResultEvent("workflow_status", divergenceWorkflowStatusJSON("active", "completed", true), false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v\nstderr=%s", err, stderr.String())
+	}
+	var payload extractedDivergenceResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.TruthPlaneDivergence.FinalWorkflowStatus != "active" {
+		t.Fatalf("expected active final workflow status, got %+v", payload.TruthPlaneDivergence)
+	}
+}
+
 func writeDivergenceEvents(t *testing.T, path string, lines ...string) {
 	t.Helper()
 	content := strings.Join(lines, "\n") + "\n"

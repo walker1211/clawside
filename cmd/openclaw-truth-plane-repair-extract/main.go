@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/walker1211/clawside/internal/openclawtrajectory"
 )
 
 const (
@@ -45,23 +47,6 @@ type repairRecord struct {
 type repairActor struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
-}
-
-type trajectoryEvent struct {
-	Type string `json:"type"`
-	Data struct {
-		Message trajectoryMessage `json:"message"`
-	} `json:"data"`
-}
-
-type trajectoryMessage struct {
-	IsError  bool   `json:"isError"`
-	ToolName string `json:"toolName"`
-	Details  struct {
-		MCPServer         string `json:"mcpServer"`
-		MCPTool           string `json:"mcpTool"`
-		StructuredContent any    `json:"structuredContent"`
-	} `json:"details"`
 }
 
 type repairToolResult struct {
@@ -148,45 +133,22 @@ func extractRepairToolResults(eventsPath string) ([]repairToolResult, error) {
 			continue
 		}
 
-		var event trajectoryEvent
-		if err := json.Unmarshal(line, &event); err != nil {
+		result, ok, err := openclawtrajectory.ExtractToolResult(line, clawsideMCPServerName)
+		if errors.Is(err, openclawtrajectory.ErrInvalidJSON) {
 			return nil, fmt.Errorf("events line %d is invalid JSON", lineNumber)
 		}
-		if event.Type != "tool.result" || event.Data.Message.IsError {
+		if err != nil {
+			return nil, err
+		}
+		if !ok || !isRepairTool(result.Tool) {
 			continue
 		}
-
-		toolName, ok := normalizeClawsideToolName(event.Data.Message.Details.MCPServer, event.Data.Message.Details.MCPTool, event.Data.Message.ToolName)
-		if !ok || !isRepairTool(toolName) {
-			continue
-		}
-		structuredContent, ok := event.Data.Message.Details.StructuredContent.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("tool %s structuredContent must be an object", toolName)
-		}
-		results = append(results, repairToolResult{Tool: toolName, StructuredContent: structuredContent})
+		results = append(results, repairToolResult{Tool: result.Tool, StructuredContent: result.StructuredContent})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, errors.New("cannot read OpenClaw trajectory events file")
 	}
 	return results, nil
-}
-
-func normalizeClawsideToolName(server, mcpTool, toolName string) (string, bool) {
-	if server != "" {
-		if server != clawsideMCPServerName {
-			return "", false
-		}
-		tool := mcpTool
-		if tool == "" {
-			tool = toolName
-		}
-		return strings.TrimPrefix(tool, clawsideMCPServerName+"__"), true
-	}
-	if !strings.HasPrefix(toolName, clawsideMCPServerName+"__") {
-		return "", false
-	}
-	return strings.TrimPrefix(toolName, clawsideMCPServerName+"__"), true
 }
 
 func isRepairTool(tool string) bool {
@@ -200,11 +162,45 @@ func isRepairTool(tool string) bool {
 
 func summarizeRepairResults(results []repairToolResult) (extractedRepairResults, error) {
 	var payload extractedRepairResults
+	var selected *extractedRepairResults
+	var lastErr error
+	var sawHandoffCreate bool
+	for i, result := range results {
+		if result.Tool != "handoff_create" {
+			continue
+		}
+		sawHandoffCreate = true
+		candidate, err := summarizeRepairFlow(results[i:])
+		if err == nil {
+			selected = &candidate
+			continue
+		}
+		if selected == nil {
+			lastErr = err
+		}
+	}
+	if selected != nil {
+		return *selected, nil
+	}
+	if !sawHandoffCreate {
+		return payload, errors.New("missing tool handoff_create in OpenClaw trajectory events")
+	}
+	if lastErr != nil {
+		return payload, lastErr
+	}
+	return payload, errors.New("missing tool handoff_create in OpenClaw trajectory events")
+}
+
+func summarizeRepairFlow(results []repairToolResult) (extractedRepairResults, error) {
+	var payload extractedRepairResults
 	var handoffID, workflowID, receiveEventID string
 	var dispatchSeen, receiveSeen, invalidationSeen, backfillSeen, repairListSeen bool
 	var invalidationRepair, backfillRepair repairRecord
 
-	for _, result := range results {
+	for i, result := range results {
+		if i > 0 && result.Tool == "handoff_create" {
+			break
+		}
 		switch result.Tool {
 		case "handoff_create":
 			if !dispatchSeen && !receiveSeen {

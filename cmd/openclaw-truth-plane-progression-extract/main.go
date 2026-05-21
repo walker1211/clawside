@@ -10,6 +10,8 @@ import (
 	"io"
 	"os"
 	"strings"
+
+	"github.com/walker1211/clawside/internal/openclawtrajectory"
 )
 
 const clawsideMCPServerName = "clawside"
@@ -40,23 +42,6 @@ type extractedProgressionSummary struct {
 type progressionStep struct {
 	Action string `json:"action"`
 	State  string `json:"state"`
-}
-
-type trajectoryEvent struct {
-	Type string `json:"type"`
-	Data struct {
-		Message trajectoryMessage `json:"message"`
-	} `json:"data"`
-}
-
-type trajectoryMessage struct {
-	IsError  bool   `json:"isError"`
-	ToolName string `json:"toolName"`
-	Details  struct {
-		MCPServer         string `json:"mcpServer"`
-		MCPTool           string `json:"mcpTool"`
-		StructuredContent any    `json:"structuredContent"`
-	} `json:"details"`
 }
 
 type progressionToolResult struct {
@@ -143,45 +128,22 @@ func extractProgressionToolResults(eventsPath string) ([]progressionToolResult, 
 			continue
 		}
 
-		var event trajectoryEvent
-		if err := json.Unmarshal(line, &event); err != nil {
+		result, ok, err := openclawtrajectory.ExtractToolResult(line, clawsideMCPServerName)
+		if errors.Is(err, openclawtrajectory.ErrInvalidJSON) {
 			return nil, fmt.Errorf("events line %d is invalid JSON", lineNumber)
 		}
-		if event.Type != "tool.result" || event.Data.Message.IsError {
+		if err != nil {
+			return nil, err
+		}
+		if !ok || !isProgressionTool(result.Tool) {
 			continue
 		}
-
-		toolName, ok := normalizeClawsideToolName(event.Data.Message.Details.MCPServer, event.Data.Message.Details.MCPTool, event.Data.Message.ToolName)
-		if !ok || !isProgressionTool(toolName) {
-			continue
-		}
-		structuredContent, ok := event.Data.Message.Details.StructuredContent.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("tool %s structuredContent must be an object", toolName)
-		}
-		results = append(results, progressionToolResult{Tool: toolName, StructuredContent: structuredContent})
+		results = append(results, progressionToolResult{Tool: result.Tool, StructuredContent: result.StructuredContent})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, errors.New("cannot read OpenClaw trajectory events file")
 	}
 	return results, nil
-}
-
-func normalizeClawsideToolName(server, mcpTool, toolName string) (string, bool) {
-	if server != "" {
-		if server != clawsideMCPServerName {
-			return "", false
-		}
-		tool := mcpTool
-		if tool == "" {
-			tool = toolName
-		}
-		return strings.TrimPrefix(tool, clawsideMCPServerName+"__"), true
-	}
-	if !strings.HasPrefix(toolName, clawsideMCPServerName+"__") {
-		return "", false
-	}
-	return strings.TrimPrefix(toolName, clawsideMCPServerName+"__"), true
 }
 
 func isProgressionTool(tool string) bool {
@@ -195,18 +157,53 @@ func isProgressionTool(tool string) bool {
 
 func summarizeProgressionResults(results []progressionToolResult) (extractedProgressionResults, error) {
 	var payload extractedProgressionResults
+	var selected *extractedProgressionResults
+	var lastErr error
+	var sawHandoffCreate bool
+	for i, result := range results {
+		if result.Tool != "handoff_create" {
+			continue
+		}
+		sawHandoffCreate = true
+		candidate, err := summarizeProgressionFlow(results[i:])
+		if err == nil {
+			selected = &candidate
+			continue
+		}
+		if selected == nil {
+			lastErr = err
+		}
+	}
+	if selected != nil {
+		return *selected, nil
+	}
+	if !sawHandoffCreate {
+		return payload, errors.New("missing tool handoff_create in OpenClaw trajectory events")
+	}
+	if lastErr != nil {
+		return payload, lastErr
+	}
+	return payload, errors.New("missing tool handoff_create in OpenClaw trajectory events")
+}
+
+func summarizeProgressionFlow(results []progressionToolResult) (extractedProgressionResults, error) {
+	var payload extractedProgressionResults
 	var handoffCreate map[string]any
 	var handoffDispatch map[string]any
 	var progressions []map[string]any
 	var finalHandoffGet map[string]any
 	var finalWorkflowStatus map[string]any
 
-	for _, result := range results {
+	for i, result := range results {
+		if i > 0 && result.Tool == "handoff_create" {
+			break
+		}
+		if len(progressions) >= len(requiredProgressions) && finalHandoffGet != nil && finalWorkflowStatus != nil {
+			break
+		}
 		switch result.Tool {
 		case "handoff_create":
-			if handoffDispatch == nil && len(progressions) == 0 {
-				handoffCreate = result.StructuredContent
-			}
+			handoffCreate = result.StructuredContent
 		case "handoff_dispatch":
 			if handoffCreate == nil {
 				continue
@@ -446,8 +443,8 @@ func validateFinalWorkflow(content map[string]any, workflowID string) (string, e
 		return "", errors.New("workflow_status workflow id does not match handoff_create")
 	}
 	status := stringField(workflow, "status")
-	if status != "completed" {
-		return "", errors.New("workflow_status final status must be completed")
+	if status != "active" && status != "completed" {
+		return "", errors.New("workflow_status final status must be active or completed")
 	}
 	return status, nil
 }

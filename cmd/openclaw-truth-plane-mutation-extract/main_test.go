@@ -32,31 +32,34 @@ func TestRunExtractsMutationSummary(t *testing.T) {
 	}
 
 	payload := readMutationPayload(t, outputPath)
-	if payload.TruthPlaneMutation.HandoffID != "hf-123" {
-		t.Fatalf("expected handoff id hf-123, got %q", payload.TruthPlaneMutation.HandoffID)
+	assertMutationPayload(t, payload, "hf-123", "wf-123", "watch-123")
+}
+
+func TestRunSelectsCompleteMutationFlowAfterEarlierObservedFlow(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeMutationEvents(t, eventsPath,
+		mutationToolResultEvent("handoff_create", `{"workflow":{"id":"wf-observed"},"handoff":{"id":"hf-observed","workflow_id":"wf-observed"}}`, false),
+		mutationToolResultEvent("watch_list", mutationWatchListJSON("hf-observed", "watch-observed", "enabled", "", ""), false),
+		mutationToolResultEvent("ownership_get", mutationOwnershipJSON("hf-observed", true), false),
+		mutationToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		mutationToolResultEvent("watch_list", mutationWatchListJSON("hf-123", "watch-123", "enabled", "", ""), false),
+		mutationToolResultEvent("watch_update", mutationWatchJSON("hf-123", "watch-123", "disabled", "2026-05-07T12:30:00Z", "manual-smoke-escalation"), false),
+		mutationToolResultEvent("ownership_update", mutationOwnershipJSON("hf-123", true), false),
+		mutationToolResultEvent("watch_list", mutationWatchListJSON("hf-123", "watch-123", "disabled", "2026-05-07T12:30:00Z", "manual-smoke-escalation"), false),
+		mutationToolResultEvent("ownership_get", mutationOwnershipJSON("hf-123", true), false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v\nstderr=%s", err, stderr.String())
 	}
-	if payload.TruthPlaneMutation.WorkflowID != "wf-123" {
-		t.Fatalf("expected workflow id wf-123, got %q", payload.TruthPlaneMutation.WorkflowID)
+
+	var payload extractedMutationResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v; stdout = %q", err, stdout.String())
 	}
-	if payload.TruthPlaneMutation.Watch.ID != "watch-123" {
-		t.Fatalf("expected watch id watch-123, got %q", payload.TruthPlaneMutation.Watch.ID)
-	}
-	if payload.TruthPlaneMutation.Watch.Status != "disabled" || payload.TruthPlaneMutation.Watch.DeadlineAt != "2026-05-07T12:30:00Z" || payload.TruthPlaneMutation.Watch.EscalationPolicy != "manual-smoke-escalation" {
-		t.Fatalf("unexpected watch values: %+v", payload.TruthPlaneMutation.Watch)
-	}
-	if payload.TruthPlaneMutation.Ownership.CurrentOwner.Type != "agent" || payload.TruthPlaneMutation.Ownership.CurrentOwner.ID != "operator" {
-		t.Fatalf("unexpected current owner: %+v", payload.TruthPlaneMutation.Ownership.CurrentOwner)
-	}
-	wantTools := []string{"handoff_create", "watch_list", "watch_update", "ownership_update", "ownership_get"}
-	if got := payload.TruthPlaneMutation.Tools; len(got) != len(wantTools) {
-		t.Fatalf("expected tools %+v, got %+v", wantTools, got)
-	} else {
-		for i, want := range wantTools {
-			if got[i] != want {
-				t.Fatalf("tool[%d] = %q, want %q", i, got[i], want)
-			}
-		}
-	}
+	assertMutationPayload(t, payload, "hf-123", "wf-123", "watch-123")
 }
 
 func TestRunWritesMutationSummaryToOutput(t *testing.T) {
@@ -271,4 +274,33 @@ func readMutationPayload(t *testing.T, path string) extractedMutationResults {
 		t.Fatalf("unmarshal output: %v", err)
 	}
 	return payload
+}
+
+func assertMutationPayload(t *testing.T, payload extractedMutationResults, handoffID, workflowID, watchID string) {
+	t.Helper()
+	if payload.TruthPlaneMutation.HandoffID != handoffID {
+		t.Fatalf("expected handoff id %s, got %q", handoffID, payload.TruthPlaneMutation.HandoffID)
+	}
+	if payload.TruthPlaneMutation.WorkflowID != workflowID {
+		t.Fatalf("expected workflow id %s, got %q", workflowID, payload.TruthPlaneMutation.WorkflowID)
+	}
+	if payload.TruthPlaneMutation.Watch.ID != watchID {
+		t.Fatalf("expected watch id %s, got %q", watchID, payload.TruthPlaneMutation.Watch.ID)
+	}
+	if payload.TruthPlaneMutation.Watch.Status != "disabled" || payload.TruthPlaneMutation.Watch.DeadlineAt != "2026-05-07T12:30:00Z" || payload.TruthPlaneMutation.Watch.EscalationPolicy != "manual-smoke-escalation" {
+		t.Fatalf("unexpected watch values: %+v", payload.TruthPlaneMutation.Watch)
+	}
+	if payload.TruthPlaneMutation.Ownership.CurrentOwner.Type != "agent" || payload.TruthPlaneMutation.Ownership.CurrentOwner.ID != "operator" {
+		t.Fatalf("unexpected current owner: %+v", payload.TruthPlaneMutation.Ownership.CurrentOwner)
+	}
+	wantTools := []string{"handoff_create", "watch_list", "watch_update", "ownership_update", "ownership_get"}
+	if got := payload.TruthPlaneMutation.Tools; len(got) != len(wantTools) {
+		t.Fatalf("expected tools %+v, got %+v", wantTools, got)
+	} else {
+		for i, want := range wantTools {
+			if got[i] != want {
+				t.Fatalf("tool[%d] = %q, want %q", i, got[i], want)
+			}
+		}
+	}
 }

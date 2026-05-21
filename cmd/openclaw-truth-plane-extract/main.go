@@ -9,14 +9,20 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
+
+	"github.com/walker1211/clawside/internal/openclawtrajectory"
 )
 
 const clawsideMCPServerName = "clawside"
 
 var requiredTruthPlaneTools = []string{"handoff_create", "handoff_get", "workflow_status", "watch_list", "ownership_get"}
 
-type extractedTruthPlaneResults map[string]map[string]any
+type extractedTruthPlaneResults []truthPlaneToolResult
+
+type truthPlaneToolResult struct {
+	Tool              string
+	StructuredContent map[string]any
+}
 
 type extractedTruthPlaneSummary struct {
 	TruthPlane struct {
@@ -24,23 +30,6 @@ type extractedTruthPlaneSummary struct {
 		WorkflowID string   `json:"workflow_id"`
 		Tools      []string `json:"tools"`
 	} `json:"truth_plane"`
-}
-
-type trajectoryEvent struct {
-	Type string `json:"type"`
-	Data struct {
-		Message trajectoryMessage `json:"message"`
-	} `json:"data"`
-}
-
-type trajectoryMessage struct {
-	IsError  bool   `json:"isError"`
-	ToolName string `json:"toolName"`
-	Details  struct {
-		MCPServer         string `json:"mcpServer"`
-		MCPTool           string `json:"mcpTool"`
-		StructuredContent any    `json:"structuredContent"`
-	} `json:"details"`
 }
 
 func main() {
@@ -111,7 +100,7 @@ func extractTruthPlaneResults(eventsPath string) (extractedTruthPlaneResults, er
 	}
 	defer file.Close()
 
-	results := make(extractedTruthPlaneResults)
+	var results extractedTruthPlaneResults
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 64*1024), 4*1024*1024)
 	lineNumber := 0
@@ -122,45 +111,22 @@ func extractTruthPlaneResults(eventsPath string) (extractedTruthPlaneResults, er
 			continue
 		}
 
-		var event trajectoryEvent
-		if err := json.Unmarshal(line, &event); err != nil {
+		result, ok, err := openclawtrajectory.ExtractToolResult(line, clawsideMCPServerName)
+		if errors.Is(err, openclawtrajectory.ErrInvalidJSON) {
 			return nil, fmt.Errorf("events line %d is invalid JSON", lineNumber)
 		}
-		if event.Type != "tool.result" || event.Data.Message.IsError {
+		if err != nil {
+			return nil, err
+		}
+		if !ok || !isRequiredTruthPlaneTool(result.Tool) {
 			continue
 		}
-
-		toolName, ok := normalizeClawsideToolName(event.Data.Message.Details.MCPServer, event.Data.Message.Details.MCPTool, event.Data.Message.ToolName)
-		if !ok || !isRequiredTruthPlaneTool(toolName) {
-			continue
-		}
-		structuredContent, ok := event.Data.Message.Details.StructuredContent.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("tool %s structuredContent must be an object", toolName)
-		}
-		results[toolName] = structuredContent
+		results = append(results, truthPlaneToolResult{Tool: result.Tool, StructuredContent: result.StructuredContent})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, errors.New("cannot read OpenClaw trajectory events file")
 	}
 	return results, nil
-}
-
-func normalizeClawsideToolName(server, mcpTool, toolName string) (string, bool) {
-	if server != "" {
-		if server != clawsideMCPServerName {
-			return "", false
-		}
-		tool := mcpTool
-		if tool == "" {
-			tool = toolName
-		}
-		return strings.TrimPrefix(tool, clawsideMCPServerName+"__"), true
-	}
-	if !strings.HasPrefix(toolName, clawsideMCPServerName+"__") {
-		return "", false
-	}
-	return strings.TrimPrefix(toolName, clawsideMCPServerName+"__"), true
 }
 
 func isRequiredTruthPlaneTool(tool string) bool {
@@ -174,35 +140,78 @@ func isRequiredTruthPlaneTool(tool string) bool {
 
 func summarizeTruthPlaneResults(results extractedTruthPlaneResults) (extractedTruthPlaneSummary, error) {
 	var summary extractedTruthPlaneSummary
+	var selected *extractedTruthPlaneSummary
+	var lastErr error
+	var sawHandoffCreate bool
+	for i, result := range results {
+		if result.Tool != "handoff_create" {
+			continue
+		}
+		sawHandoffCreate = true
+		candidate, err := summarizeTruthPlaneFlow(results[i:])
+		if err == nil {
+			selected = &candidate
+			continue
+		}
+		if selected == nil {
+			lastErr = err
+		}
+	}
+	if selected != nil {
+		return *selected, nil
+	}
+	if !sawHandoffCreate {
+		return summary, errors.New("missing tool handoff_create in OpenClaw trajectory events")
+	}
+	if lastErr != nil {
+		return summary, lastErr
+	}
+	return summary, errors.New("missing tool handoff_create in OpenClaw trajectory events")
+}
+
+func summarizeTruthPlaneFlow(results extractedTruthPlaneResults) (extractedTruthPlaneSummary, error) {
+	var summary extractedTruthPlaneSummary
+	byTool := make(map[string]map[string]any, len(requiredTruthPlaneTools))
+	for i, result := range results {
+		if i > 0 && result.Tool == "handoff_create" {
+			break
+		}
+		if !isRequiredTruthPlaneTool(result.Tool) {
+			continue
+		}
+		if _, ok := byTool[result.Tool]; !ok {
+			byTool[result.Tool] = result.StructuredContent
+		}
+	}
 	for _, tool := range requiredTruthPlaneTools {
-		if _, ok := results[tool]; !ok {
+		if _, ok := byTool[tool]; !ok {
 			return summary, fmt.Errorf("missing tool %s in OpenClaw trajectory events", tool)
 		}
 	}
 
-	handoffID, ok := nestedString(results["handoff_create"], "handoff", "id")
+	handoffID, ok := nestedString(byTool["handoff_create"], "handoff", "id")
 	if !ok {
 		return summary, errors.New("handoff_create handoff id is required")
 	}
-	workflowID, ok := nestedString(results["handoff_create"], "workflow", "id")
+	workflowID, ok := nestedString(byTool["handoff_create"], "workflow", "id")
 	if !ok {
 		return summary, errors.New("handoff_create workflow id is required")
 	}
 
-	gotHandoffID, ok := nestedString(results["handoff_get"], "handoff", "id")
+	gotHandoffID, ok := nestedString(byTool["handoff_get"], "handoff", "id")
 	if !ok || gotHandoffID != handoffID {
 		return summary, errors.New("handoff_get handoff id does not match handoff_create")
 	}
 
-	gotWorkflowID, ok := nestedString(results["workflow_status"], "workflow", "id")
+	gotWorkflowID, ok := nestedString(byTool["workflow_status"], "workflow", "id")
 	if !ok {
-		gotWorkflowID, ok = nestedString(results["workflow_status"], "Workflow", "id")
+		gotWorkflowID, ok = nestedString(byTool["workflow_status"], "Workflow", "id")
 	}
 	if !ok || gotWorkflowID != workflowID {
 		return summary, errors.New("workflow_status workflow id does not match handoff_create")
 	}
 
-	watches, ok := results["watch_list"]["watches"].([]any)
+	watches, ok := byTool["watch_list"]["watches"].([]any)
 	if !ok || len(watches) == 0 {
 		return summary, errors.New("watch_list watches must be a non-empty array")
 	}
@@ -213,10 +222,10 @@ func summarizeTruthPlaneResults(results extractedTruthPlaneResults) (extractedTr
 		}
 	}
 
-	if stringField(results["ownership_get"], "handoff_id") != handoffID {
+	if stringField(byTool["ownership_get"], "handoff_id") != handoffID {
 		return summary, errors.New("ownership_get handoff id does not match handoff_create")
 	}
-	if _, ok := results["ownership_get"]["current_owner"].(map[string]any); !ok {
+	if _, ok := byTool["ownership_get"]["current_owner"].(map[string]any); !ok {
 		return summary, errors.New("ownership_get current_owner must be an object")
 	}
 

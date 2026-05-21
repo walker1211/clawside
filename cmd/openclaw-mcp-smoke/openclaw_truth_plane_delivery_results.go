@@ -19,6 +19,12 @@ var requiredOpenClawTruthPlaneDeliveryTools = []string{
 	"workflow_status",
 }
 
+var requiredOpenClawTruthPlaneMainDeliveryTools = []string{
+	"a2a_deliver",
+	"sender_job_get",
+	"sender_stats",
+}
+
 func checkOpenClawTruthPlaneDeliveryResults(opts Options) CheckResult {
 	path := strings.TrimSpace(opts.OpenClawTruthPlaneDeliveryResultsPath)
 	if path == "" {
@@ -55,6 +61,9 @@ func validateOpenClawTruthPlaneDeliveryResults(value any) (string, bool) {
 	if !ok {
 		return "openclaw truth-plane delivery results.truth_plane_delivery must be an object", false
 	}
+	if tools, ok := delivery["tools"].([]any); ok && openClawTruthPlaneDeliveryToolsEqual(tools, requiredOpenClawTruthPlaneMainDeliveryTools) {
+		return validateOpenClawTruthPlaneMainDeliveryResults(delivery)
+	}
 
 	handoffID := strings.TrimSpace(truthPlaneStringValue(delivery["handoff_id"]))
 	workflowID := strings.TrimSpace(truthPlaneStringValue(delivery["workflow_id"]))
@@ -80,7 +89,7 @@ func validateOpenClawTruthPlaneDeliveryResults(value any) (string, bool) {
 	if !ok {
 		return "truth-plane delivery delivery_result must be an object", false
 	}
-	jobID, detail, ok := validateOpenClawTruthPlaneDeliveryResult(deliveryResult)
+	jobID, detail, ok := validateOpenClawTruthPlaneDeliveryResult(deliveryResult, "planner")
 	if !ok {
 		return detail, false
 	}
@@ -136,7 +145,35 @@ func validateOpenClawTruthPlaneDeliveryResults(value any) (string, bool) {
 	return "", true
 }
 
-func validateOpenClawTruthPlaneDeliveryResult(deliveryResult map[string]any) (float64, string, bool) {
+func validateOpenClawTruthPlaneMainDeliveryResults(delivery map[string]any) (string, bool) {
+	deliveryResult, ok := delivery["delivery_result"].(map[string]any)
+	if !ok {
+		return "truth-plane delivery delivery_result must be an object", false
+	}
+	jobID, detail, ok := validateOpenClawTruthPlaneDeliveryResult(deliveryResult, "main")
+	if !ok {
+		return detail, false
+	}
+
+	senderJob, ok := delivery["sender_job"].(map[string]any)
+	if !ok {
+		return "truth-plane delivery sender_job must be an object", false
+	}
+	if detail, ok := validateOpenClawTruthPlaneDeliverySenderJob(senderJob, deliveryResult, jobID); !ok {
+		return detail, false
+	}
+
+	senderStats, ok := delivery["sender_stats"].(map[string]any)
+	if !ok {
+		return "truth-plane delivery sender_stats must be an object", false
+	}
+	if detail, ok := validateOpenClawTruthPlaneDeliverySenderStats(senderStats); !ok {
+		return detail, false
+	}
+	return "", true
+}
+
+func validateOpenClawTruthPlaneDeliveryResult(deliveryResult map[string]any, targetAgent string) (float64, string, bool) {
 	if truthPlaneStringValue(deliveryResult["status"]) != "sent" {
 		return 0, "truth-plane delivery delivery_result status must be sent", false
 	}
@@ -144,8 +181,8 @@ func validateOpenClawTruthPlaneDeliveryResult(deliveryResult map[string]any) (fl
 	if jobID <= 0 {
 		return 0, "truth-plane delivery delivery_result job_id must be greater than zero", false
 	}
-	if truthPlaneStringValue(deliveryResult["target_agent"]) != "planner" {
-		return 0, "truth-plane delivery delivery_result target_agent must be planner", false
+	if truthPlaneStringValue(deliveryResult["target_agent"]) != targetAgent {
+		return 0, "truth-plane delivery delivery_result target_agent must be " + targetAgent, false
 	}
 	if strings.TrimSpace(truthPlaneStringValue(deliveryResult["bot"])) == "" {
 		return 0, "truth-plane delivery delivery_result bot must be non-empty", false
@@ -174,6 +211,21 @@ func validateOpenClawTruthPlaneDeliverySenderJob(senderJob, deliveryResult map[s
 		openClawTruthPlaneDeliveryStringFieldMismatch(senderJob, deliveryResult, "target_agent") ||
 		openClawTruthPlaneDeliveryNumberFieldMismatch(senderJob, deliveryResult, "attempt_count") {
 		return "truth-plane delivery sender_job mismatch with delivery_result", false
+	}
+	return "", true
+}
+
+func validateOpenClawTruthPlaneDeliverySenderStats(senderStats map[string]any) (string, bool) {
+	for _, counter := range []string{"pending_count", "retry_count", "sending_count"} {
+		if _, ok := senderStats[counter]; !ok {
+			return "truth-plane delivery sender_stats " + counter + " must be present", false
+		}
+		if truthPlaneNumberValue(senderStats[counter]) != 0 {
+			return "truth-plane delivery sender_stats " + counter + " must be zero", false
+		}
+	}
+	if workerRunning, ok := senderStats["worker_running"].(bool); ok && !workerRunning {
+		return "truth-plane delivery sender_stats worker_running must be true", false
 	}
 	return "", true
 }
@@ -283,6 +335,19 @@ func validateOpenClawTruthPlaneDeliveryWorkflow(workflow map[string]any, handoff
 		}
 	}
 	return "truth-plane delivery workflow handoffs must contain dispatched handoff", false
+}
+
+func openClawTruthPlaneDeliveryToolsEqual(tools []any, required []string) bool {
+	if len(tools) != len(required) {
+		return false
+	}
+	for i, toolValue := range tools {
+		tool, ok := toolValue.(string)
+		if !ok || tool != required[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func validateOpenClawTruthPlaneDeliveryTools(tools []any) (string, bool) {

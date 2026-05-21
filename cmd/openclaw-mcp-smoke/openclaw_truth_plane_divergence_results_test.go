@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -24,6 +25,14 @@ func TestCheckOpenClawTruthPlaneDivergenceResultsValid(t *testing.T) {
 	}
 	if check.Detail != "validated divergence and repair candidate truth" {
 		t.Fatalf("unexpected detail %q", check.Detail)
+	}
+}
+
+func TestCheckOpenClawTruthPlaneDivergenceResultsAcceptsActiveFinalWorkflowStatus(t *testing.T) {
+	path := writeDivergenceResultJSON(t, strings.Replace(validDivergenceResultJSON(), `"final_workflow_status":"completed"`, `"final_workflow_status":"active"`, 1))
+	check := checkOpenClawTruthPlaneDivergenceResults(Options{OpenClawTruthPlaneDivergenceResultsPath: path})
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected ok, got %+v", check)
 	}
 }
 

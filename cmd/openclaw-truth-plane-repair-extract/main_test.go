@@ -66,6 +66,35 @@ func TestRunExtractsRepairSummary(t *testing.T) {
 	}
 }
 
+func TestRunSelectsCompleteRepairFlowAfterEarlierReceiveFlow(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeRepairEvents(t, eventsPath,
+		repairToolResultEvent("handoff_create", `{"workflow":{"id":"wf-observed"},"handoff":{"id":"hf-observed","workflow_id":"wf-observed"}}`, false),
+		repairToolResultEvent("handoff_dispatch", repairDispatchResultJSON("hf-observed", "wf-observed", true), false),
+		repairToolResultEvent("handoff_progress", repairProgressResultJSON("handoff.receive", "received", true, "hf-observed", "wf-observed", "evt-observed"), false),
+		repairToolResultEvent("handoff_create", `{"workflow":{"id":"wf-123"},"handoff":{"id":"hf-123","workflow_id":"wf-123"}}`, false),
+		repairToolResultEvent("handoff_dispatch", repairDispatchResultJSON("hf-123", "wf-123", true), false),
+		repairToolResultEvent("handoff_progress", repairProgressResultJSON("handoff.receive", "received", true, "hf-123", "wf-123", "evt-receive"), false),
+		repairToolResultEvent("repair_invalidate_event", repairRecordJSON("repair-123", "evt-receive", repairReason, "main"), false),
+		repairToolResultEvent("repair_backfill_event", repairBackfillRecordJSON("repair-456", backfillRepairReason, "main"), false),
+		repairToolResultEvent("repair_list", repairListJSON(repairRecordJSON("repair-123", "evt-receive", repairReason, "main"), repairBackfillRecordJSON("repair-456", backfillRepairReason, "main")), false),
+		repairToolResultEvent("handoff_get", repairFinalHandoffJSON("received"), false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v\nstderr=%s", err, stderr.String())
+	}
+	var payload extractedRepairResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.TruthPlaneRepair.HandoffID != "hf-123" || payload.TruthPlaneRepair.WorkflowID != "wf-123" || payload.TruthPlaneRepair.InvalidatedEventID != "evt-receive" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
 func TestRunWritesRepairSummaryToStdout(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")

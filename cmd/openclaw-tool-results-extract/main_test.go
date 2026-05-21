@@ -52,6 +52,33 @@ func TestRunExtractsLatestSenderToolResults(t *testing.T) {
 	}
 }
 
+func TestRunExtractsDotPrefixedContentToolResults(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeEvents(t, eventsPath,
+		contentToolResultEvent(t, "sender_health", `{"status":"ok"}`, false),
+		contentToolResultEvent(t, "sender_ready", `{"status":"ok"}`, false),
+		contentToolResultEvent(t, "sender_stats", `{"pending_count":0,"retry_count":0,"sending_count":0,"worker_running":true}`, false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run extractor: %v\nstderr=%s", err, stderr.String())
+	}
+
+	var payload extractedToolResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.Results[0].Result["status"] != "ok" {
+		t.Fatalf("expected sender_health status ok, got %+v", payload.Results[0].Result)
+	}
+	if payload.Results[2].Result["worker_running"] != true {
+		t.Fatalf("expected sender_stats worker_running true, got %+v", payload.Results[2].Result)
+	}
+}
+
 func TestRunWritesExtractedResultsToStdout(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")
@@ -147,6 +174,39 @@ func writeEvents(t *testing.T, path string, lines ...string) {
 
 func trajectoryToolResultEvent(tool string, structured string, isError bool) string {
 	return `{"type":"tool.result","data":{"message":{"details":{"mcpServer":"clawside","mcpTool":"` + tool + `","structuredContent":` + structured + `},"isError":` + boolJSON(isError) + `}}}`
+}
+
+func contentToolResultEvent(t *testing.T, tool string, structured string, isError bool) string {
+	t.Helper()
+	var structuredContent any
+	if err := json.Unmarshal([]byte(structured), &structuredContent); err != nil {
+		t.Fatalf("unmarshal structured content: %v", err)
+	}
+	payload, err := json.Marshal(map[string]any{
+		"content":           []map[string]string{{"type": "text", "text": structured}},
+		"structuredContent": structuredContent,
+		"_meta":             nil,
+	})
+	if err != nil {
+		t.Fatalf("marshal content payload: %v", err)
+	}
+	event, err := json.Marshal(map[string]any{
+		"type": "tool.result",
+		"data": map[string]any{
+			"message": map[string]any{
+				"toolName": "clawside." + tool,
+				"isError":  isError,
+				"content": []map[string]any{{
+					"type": "toolResult",
+					"text": string(payload),
+				}},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal event: %v", err)
+	}
+	return string(event)
 }
 
 func boolJSON(value bool) string {

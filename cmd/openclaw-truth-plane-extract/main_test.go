@@ -56,6 +56,37 @@ func TestRunExtractsMinimalTruthPlaneSummary(t *testing.T) {
 	}
 }
 
+func TestRunSelectsLatestCompleteTruthPlaneFlow(t *testing.T) {
+	eventsPath := writeEventsJSONL(t,
+		toolResultEvent("clawside", "handoff_create", false, map[string]any{
+			"handoff":  map[string]any{"id": "hf-complete"},
+			"workflow": map[string]any{"id": "wf-complete"},
+		}),
+		toolResultEvent("clawside", "handoff_get", false, map[string]any{"handoff": map[string]any{"id": "hf-complete"}}),
+		toolResultEvent("clawside", "workflow_status", false, map[string]any{"workflow": map[string]any{"id": "wf-complete"}}),
+		toolResultEvent("clawside", "watch_list", false, map[string]any{"watches": []any{map[string]any{"handoff_id": "hf-complete"}}}),
+		toolResultEvent("clawside", "ownership_get", false, map[string]any{"handoff_id": "hf-complete", "current_owner": map[string]any{"id": "agent-a"}}),
+		toolResultEvent("clawside", "handoff_create", false, map[string]any{
+			"handoff":  map[string]any{"id": "hf-incomplete"},
+			"workflow": map[string]any{"id": "wf-incomplete"},
+		}),
+		toolResultEvent("clawside", "watch_list", false, map[string]any{"watches": []any{map[string]any{"handoff_id": "hf-incomplete"}}}),
+	)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run() error = %v, stderr = %q", err, stderr.String())
+	}
+
+	var got extractedTruthPlaneSummary
+	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
+		t.Fatalf("stdout is not valid JSON: %v; stdout = %q", err, stdout.String())
+	}
+	if got.TruthPlane.HandoffID != "hf-complete" || got.TruthPlane.WorkflowID != "wf-complete" {
+		t.Fatalf("summary = %+v", got)
+	}
+}
+
 func TestRunWritesTruthPlaneSummaryToStdout(t *testing.T) {
 	eventsPath := writeValidEventsJSONL(t)
 	var stdout, stderr bytes.Buffer

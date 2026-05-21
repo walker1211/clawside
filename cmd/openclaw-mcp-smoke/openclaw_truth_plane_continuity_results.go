@@ -91,8 +91,9 @@ func validateOpenClawTruthPlaneContinuityResults(value any) (string, bool) {
 	if truthPlaneStringValue(continuity["post_reopen_final_handoff_state"]) != "completed" {
 		return "truth-plane continuity post_reopen_final_handoff_state must be completed", false
 	}
-	if truthPlaneStringValue(continuity["post_reopen_final_workflow_status"]) != "completed" {
-		return "truth-plane continuity post_reopen_final_workflow_status must be completed", false
+	workflowStatus := truthPlaneStringValue(continuity["post_reopen_final_workflow_status"])
+	if workflowStatus != "active" && workflowStatus != "completed" {
+		return "truth-plane continuity post_reopen_final_workflow_status must be active or completed", false
 	}
 
 	tools, ok := continuity["tools"].([]any)

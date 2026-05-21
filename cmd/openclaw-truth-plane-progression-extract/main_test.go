@@ -66,6 +66,66 @@ func TestRunExtractsProgressionSummary(t *testing.T) {
 	}
 }
 
+func TestRunSelectsCompleteProgressionFlowBeforeLaterIncompleteFlow(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeProgressionEvents(t, eventsPath,
+		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-complete"},"handoff":{"id":"hf-complete","workflow_id":"wf-complete"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-complete", "wf-complete", true), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-complete", "wf-complete"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.claim", "claimed", true, "hf-complete", "wf-complete"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.start", "started", true, "hf-complete", "wf-complete"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.checkpoint", "checkpointed", true, "hf-complete", "wf-complete"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.complete", "completed", true, "hf-complete", "wf-complete"), false),
+		progressionToolResultEvent("handoff_get", `{"handoff":{"id":"hf-complete","workflow_id":"wf-complete","state":"completed"},"timeline":[]}`, false),
+		progressionToolResultEvent("workflow_status", `{"workflow":{"id":"wf-complete","status":"completed"},"handoffs":[{"id":"hf-complete","workflow_id":"wf-complete","state":"completed"}]}`, false),
+		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-incomplete"},"handoff":{"id":"hf-incomplete","workflow_id":"wf-incomplete"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-incomplete", "wf-incomplete", true), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-incomplete", "wf-incomplete"), false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v\nstderr=%s", err, stderr.String())
+	}
+	var payload extractedProgressionResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.TruthPlaneProgression.HandoffID != "hf-complete" || payload.TruthPlaneProgression.WorkflowID != "wf-complete" {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
+func TestRunIgnoresLaterProgressionAfterFinalObservations(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeProgressionEvents(t, eventsPath,
+		progressionToolResultEvent("handoff_create", `{"workflow":{"id":"wf-complete"},"handoff":{"id":"hf-complete","workflow_id":"wf-complete"}}`, false),
+		progressionToolResultEvent("handoff_dispatch", progressionDispatchResultJSON("hf-complete", "wf-complete", true), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-complete", "wf-complete"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.claim", "claimed", true, "hf-complete", "wf-complete"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.start", "started", true, "hf-complete", "wf-complete"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.checkpoint", "checkpointed", true, "hf-complete", "wf-complete"), false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.complete", "completed", true, "hf-complete", "wf-complete"), false),
+		progressionToolResultEvent("handoff_get", `{"handoff":{"id":"hf-complete","workflow_id":"wf-complete","state":"completed"},"timeline":[]}`, false),
+		progressionToolResultEvent("workflow_status", `{"workflow":{"id":"wf-complete","status":"completed"},"handoffs":[{"id":"hf-complete","workflow_id":"wf-complete","state":"completed"}]}`, false),
+		progressionToolResultEvent("handoff_progress", progressionResultJSON("handoff.receive", "received", true, "hf-complete", "wf-complete"), false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v\nstderr=%s", err, stderr.String())
+	}
+	var payload extractedProgressionResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.TruthPlaneProgression.HandoffID != "hf-complete" || len(payload.TruthPlaneProgression.Progressions) != len(requiredProgressions) {
+		t.Fatalf("unexpected payload: %+v", payload)
+	}
+}
+
 func TestRunWritesProgressionSummaryToStdout(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")
@@ -243,14 +303,32 @@ func TestRunFailsWhenFinalHandoffIsNotCompleted(t *testing.T) {
 	}
 }
 
-func TestRunFailsWhenFinalWorkflowIsNotCompleted(t *testing.T) {
+func TestRunAcceptsActiveFinalWorkflow(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")
 	writeValidProgressionEventsWithFinals(t, eventsPath, "completed", "active")
 
 	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v\nstderr=%s", err, stderr.String())
+	}
+	var payload extractedProgressionResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("expected JSON stdout, got %q: %v", stdout.String(), err)
+	}
+	if payload.TruthPlaneProgression.FinalWorkflowStatus != "active" {
+		t.Fatalf("expected active final workflow status, got %q", payload.TruthPlaneProgression.FinalWorkflowStatus)
+	}
+}
+
+func TestRunFailsWhenFinalWorkflowIsNotActiveOrCompleted(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeValidProgressionEventsWithFinals(t, eventsPath, "completed", "failed")
+
+	var stdout, stderr bytes.Buffer
 	err := run([]string{"--events", eventsPath}, &stdout, &stderr)
-	if err == nil || err.Error() != "workflow_status final status must be completed" {
+	if err == nil || err.Error() != "workflow_status final status must be active or completed" {
 		t.Fatalf("expected final workflow status error, got %v", err)
 	}
 }

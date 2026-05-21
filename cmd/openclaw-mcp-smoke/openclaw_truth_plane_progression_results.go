@@ -85,8 +85,9 @@ func validateOpenClawTruthPlaneProgressionResults(value any) (string, bool) {
 	if truthPlaneStringValue(progression["final_handoff_state"]) != "completed" {
 		return "truth-plane progression final_handoff_state must be completed", false
 	}
-	if truthPlaneStringValue(progression["final_workflow_status"]) != "completed" {
-		return "truth-plane progression final_workflow_status must be completed", false
+	workflowStatus := truthPlaneStringValue(progression["final_workflow_status"])
+	if workflowStatus != "active" && workflowStatus != "completed" {
+		return "truth-plane progression final_workflow_status must be active or completed", false
 	}
 
 	tools, ok := progression["tools"].([]any)

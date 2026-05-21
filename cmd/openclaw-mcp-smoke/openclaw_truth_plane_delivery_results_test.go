@@ -28,6 +28,14 @@ func TestCheckOpenClawTruthPlaneDeliveryResultsValid(t *testing.T) {
 	}
 }
 
+func TestCheckOpenClawTruthPlaneDeliveryResultsAcceptsMainSenderStatsEvidence(t *testing.T) {
+	path := writeDeliveryResultJSON(t, validMainDeliveryResultJSON())
+	check := checkOpenClawTruthPlaneDeliveryResults(Options{OpenClawTruthPlaneDeliveryResultsPath: path})
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected ok, got %+v", check)
+	}
+}
+
 func TestCheckOpenClawTruthPlaneDeliveryResultsRejectsMismatchedSenderJobID(t *testing.T) {
 	path := writeDeliveryResultJSON(t, strings.Replace(validDeliveryResultJSON(), `"sender_job":{"job_id":77`, `"sender_job":{"job_id":78`, 1))
 	check := checkOpenClawTruthPlaneDeliveryResults(Options{OpenClawTruthPlaneDeliveryResultsPath: path})
@@ -144,4 +152,8 @@ func writeDeliveryResultJSON(t *testing.T, content string) string {
 
 func validDeliveryResultJSON() string {
 	return `{"truth_plane_delivery":{"handoff_id":"hf-123","workflow_id":"wf-123","dispatch_attempt":{"handoff_id":"hf-123"},"delivery_result":{"status":"sent","job_id":77,"target_agent":"planner","bot":"planner","chat_id":123456789,"attempt_count":1,"last_error":""},"sender_job":{"job_id":77,"status":"sent","attempt_count":1,"last_error":""},"sender_jobs":[{"job_id":77,"bot":"planner","chat_id":123456789,"status":"sent","attempt_count":1,"last_error":""}],"handoff":{"id":"hf-123","workflow_id":"wf-123","state":"dispatched"},"timeline":[{"type":"transport_requested","handoff_id":"hf-123","workflow_id":"wf-123","accepted":true}],"workflow":{"Workflow":{"id":"wf-123","status":"active"},"Handoffs":[{"id":"hf-123","workflow_id":"wf-123","state":"dispatched"}]},"tools":["handoff_create","handoff_dispatch","a2a_deliver","sender_job_get","sender_job_list","handoff_get","workflow_status"]}}`
+}
+
+func validMainDeliveryResultJSON() string {
+	return `{"truth_plane_delivery":{"handoff_id":"","workflow_id":"","dispatch_attempt":null,"delivery_result":{"status":"sent","job_id":77,"target_agent":"main","bot":"main","chat_id":123456789,"attempt_count":1,"last_error":""},"sender_job":{"job_id":77,"status":"sent","target_agent":"main","bot":"main","chat_id":123456789,"attempt_count":1,"last_error":""},"sender_stats":{"pending_count":0,"retry_count":0,"sending_count":0,"worker_running":true},"timeline":null,"workflow":null,"tools":["a2a_deliver","sender_job_get","sender_stats"]}}`
 }

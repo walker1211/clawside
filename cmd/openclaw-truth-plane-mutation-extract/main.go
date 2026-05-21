@@ -10,7 +10,8 @@ import (
 	"io"
 	"os"
 	"reflect"
-	"strings"
+
+	"github.com/walker1211/clawside/internal/openclawtrajectory"
 )
 
 const (
@@ -66,23 +67,6 @@ type mutationOwnership struct {
 type mutationActor struct {
 	Type string `json:"type"`
 	ID   string `json:"id"`
-}
-
-type trajectoryEvent struct {
-	Type string `json:"type"`
-	Data struct {
-		Message trajectoryMessage `json:"message"`
-	} `json:"data"`
-}
-
-type trajectoryMessage struct {
-	IsError  bool   `json:"isError"`
-	ToolName string `json:"toolName"`
-	Details  struct {
-		MCPServer         string `json:"mcpServer"`
-		MCPTool           string `json:"mcpTool"`
-		StructuredContent any    `json:"structuredContent"`
-	} `json:"details"`
 }
 
 type mutationToolResult struct {
@@ -169,45 +153,22 @@ func extractMutationToolResults(eventsPath string) ([]mutationToolResult, error)
 			continue
 		}
 
-		var event trajectoryEvent
-		if err := json.Unmarshal(line, &event); err != nil {
+		result, ok, err := openclawtrajectory.ExtractToolResult(line, clawsideMCPServerName)
+		if errors.Is(err, openclawtrajectory.ErrInvalidJSON) {
 			return nil, fmt.Errorf("events line %d is invalid JSON", lineNumber)
 		}
-		if event.Type != "tool.result" || event.Data.Message.IsError {
+		if err != nil {
+			return nil, err
+		}
+		if !ok || !isMutationTool(result.Tool) {
 			continue
 		}
-
-		toolName, ok := normalizeClawsideToolName(event.Data.Message.Details.MCPServer, event.Data.Message.Details.MCPTool, event.Data.Message.ToolName)
-		if !ok || !isMutationTool(toolName) {
-			continue
-		}
-		structuredContent, ok := event.Data.Message.Details.StructuredContent.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("tool %s structuredContent must be an object", toolName)
-		}
-		results = append(results, mutationToolResult{Tool: toolName, StructuredContent: structuredContent})
+		results = append(results, mutationToolResult{Tool: result.Tool, StructuredContent: result.StructuredContent})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, errors.New("cannot read OpenClaw trajectory events file")
 	}
 	return results, nil
-}
-
-func normalizeClawsideToolName(server, mcpTool, toolName string) (string, bool) {
-	if server != "" {
-		if server != clawsideMCPServerName {
-			return "", false
-		}
-		tool := mcpTool
-		if tool == "" {
-			tool = toolName
-		}
-		return strings.TrimPrefix(tool, clawsideMCPServerName+"__"), true
-	}
-	if !strings.HasPrefix(toolName, clawsideMCPServerName+"__") {
-		return "", false
-	}
-	return strings.TrimPrefix(toolName, clawsideMCPServerName+"__"), true
 }
 
 func isMutationTool(tool string) bool {
@@ -221,12 +182,46 @@ func isMutationTool(tool string) bool {
 
 func summarizeMutationResults(results []mutationToolResult) (extractedMutationResults, error) {
 	var payload extractedMutationResults
+	var selected *extractedMutationResults
+	var lastErr error
+	var sawHandoffCreate bool
+	for i, result := range results {
+		if result.Tool != "handoff_create" {
+			continue
+		}
+		sawHandoffCreate = true
+		candidate, err := summarizeMutationFlow(results[i:])
+		if err == nil {
+			selected = &candidate
+			continue
+		}
+		if selected == nil {
+			lastErr = err
+		}
+	}
+	if selected != nil {
+		return *selected, nil
+	}
+	if !sawHandoffCreate {
+		return payload, errors.New("missing tool handoff_create in OpenClaw trajectory events")
+	}
+	if lastErr != nil {
+		return payload, lastErr
+	}
+	return payload, errors.New("missing tool handoff_create in OpenClaw trajectory events")
+}
+
+func summarizeMutationFlow(results []mutationToolResult) (extractedMutationResults, error) {
+	var payload extractedMutationResults
 	var handoffID, workflowID, selectedWatchID string
 	var firstWatchListSeen, firstWatchList, watchUpdate, ownershipUpdate, finalWatchList, ownershipGet bool
 	var updatedWatch mutationWatch
 	var updatedOwnership mutationOwnership
 
-	for _, result := range results {
+	for i, result := range results {
+		if i > 0 && result.Tool == "handoff_create" {
+			break
+		}
 		switch result.Tool {
 		case "handoff_create":
 			if !firstWatchListSeen {

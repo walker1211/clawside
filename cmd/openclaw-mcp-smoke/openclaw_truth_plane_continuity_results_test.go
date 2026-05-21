@@ -28,6 +28,14 @@ func TestCheckOpenClawTruthPlaneContinuityResultsValid(t *testing.T) {
 	}
 }
 
+func TestCheckOpenClawTruthPlaneContinuityResultsAcceptsActiveFinalWorkflowStatus(t *testing.T) {
+	path := writeContinuityResultJSON(t, strings.Replace(validContinuityResultJSON(), `"post_reopen_final_workflow_status":"completed"`, `"post_reopen_final_workflow_status":"active"`, 1))
+	check := checkOpenClawTruthPlaneContinuityResults(Options{OpenClawTruthPlaneContinuityResultsPath: path})
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected ok, got %+v", check)
+	}
+}
+
 func TestCheckOpenClawTruthPlaneContinuityResultsRejectsInvalidData(t *testing.T) {
 	tests := []struct {
 		name string
@@ -47,7 +55,7 @@ func TestCheckOpenClawTruthPlaneContinuityResultsRejectsInvalidData(t *testing.T
 		{name: "false divergence observed", json: continuityResultJSONWithField(`"divergence_observed":false`), want: "truth-plane continuity divergence_observed must be true"},
 		{name: "false candidate observed", json: continuityResultJSONWithField(`"candidate_observed":false`), want: "truth-plane continuity candidate_observed must be true"},
 		{name: "wrong final handoff state", json: continuityResultJSONWithField(`"post_reopen_final_handoff_state":"created"`), want: "truth-plane continuity post_reopen_final_handoff_state must be completed"},
-		{name: "wrong final workflow status", json: continuityResultJSONWithField(`"post_reopen_final_workflow_status":"active"`), want: "truth-plane continuity post_reopen_final_workflow_status must be completed"},
+		{name: "wrong final workflow status", json: continuityResultJSONWithField(`"post_reopen_final_workflow_status":"failed"`), want: "truth-plane continuity post_reopen_final_workflow_status must be active or completed"},
 		{name: "tools not array", json: continuityResultJSONWithTools(`{}`), want: "truth-plane continuity tools must be an array"},
 		{name: "missing tool", json: continuityResultJSONWithTools(`["handoff_create","handoff_dispatch","handoff_progress","handoff_progress","handoff_progress","handoff_progress","handoff_progress","divergence_list","repair_candidate_list","repair_reopen_handoff","handoff_dispatch","handoff_progress","handoff_progress","handoff_progress","handoff_progress","handoff_progress","handoff_get"]`), want: "missing truth-plane continuity tool workflow_status"},
 		{name: "duplicate tool", json: continuityResultJSONWithTools(`["handoff_create","handoff_dispatch","handoff_progress","handoff_progress","handoff_progress","handoff_progress","handoff_progress","divergence_list","repair_candidate_list","repair_reopen_handoff","handoff_dispatch","handoff_progress","handoff_progress","handoff_progress","handoff_progress","handoff_progress","handoff_get","handoff_get"]`), want: "truth-plane continuity tools must match expected order"},

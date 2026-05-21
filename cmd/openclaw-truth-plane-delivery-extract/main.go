@@ -9,7 +9,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
+
+	"github.com/walker1211/clawside/internal/openclawtrajectory"
 )
 
 const clawsideMCPServerName = "clawside"
@@ -24,6 +25,12 @@ var deliveryTools = []string{
 	"workflow_status",
 }
 
+var mainDeliveryTools = []string{
+	"a2a_deliver",
+	"sender_job_get",
+	"sender_stats",
+}
+
 type extractedDeliveryResults struct {
 	TruthPlaneDelivery extractedDeliverySummary `json:"truth_plane_delivery"`
 }
@@ -34,8 +41,9 @@ type extractedDeliverySummary struct {
 	DispatchAttempt map[string]any   `json:"dispatch_attempt"`
 	DeliveryResult  deliveryResult   `json:"delivery_result"`
 	SenderJob       map[string]any   `json:"sender_job"`
-	SenderJobs      []map[string]any `json:"sender_jobs"`
-	Handoff         map[string]any   `json:"handoff"`
+	SenderJobs      []map[string]any `json:"sender_jobs,omitempty"`
+	SenderStats     map[string]any   `json:"sender_stats,omitempty"`
+	Handoff         map[string]any   `json:"handoff,omitempty"`
 	Timeline        []any            `json:"timeline"`
 	Workflow        map[string]any   `json:"workflow"`
 	Tools           []string         `json:"tools"`
@@ -49,23 +57,6 @@ type deliveryResult struct {
 	ChatID       int64  `json:"chat_id"`
 	AttemptCount int64  `json:"attempt_count"`
 	LastError    string `json:"last_error"`
-}
-
-type trajectoryEvent struct {
-	Type string `json:"type"`
-	Data struct {
-		Message trajectoryMessage `json:"message"`
-	} `json:"data"`
-}
-
-type trajectoryMessage struct {
-	IsError  bool   `json:"isError"`
-	ToolName string `json:"toolName"`
-	Details  struct {
-		MCPServer         string `json:"mcpServer"`
-		MCPTool           string `json:"mcpTool"`
-		StructuredContent any    `json:"structuredContent"`
-	} `json:"details"`
 }
 
 type deliveryToolResult struct {
@@ -152,23 +143,17 @@ func extractDeliveryToolResults(eventsPath string) ([]deliveryToolResult, error)
 			continue
 		}
 
-		var event trajectoryEvent
-		if err := json.Unmarshal(line, &event); err != nil {
+		result, ok, err := openclawtrajectory.ExtractToolResult(line, clawsideMCPServerName)
+		if errors.Is(err, openclawtrajectory.ErrInvalidJSON) {
 			return nil, fmt.Errorf("events line %d is invalid JSON", lineNumber)
 		}
-		if event.Type != "tool.result" || event.Data.Message.IsError {
+		if err != nil {
+			return nil, err
+		}
+		if !ok || !isDeliveryTool(result.Tool) {
 			continue
 		}
-
-		toolName, ok := normalizeClawsideToolName(event.Data.Message.Details.MCPServer, event.Data.Message.Details.MCPTool, event.Data.Message.ToolName)
-		if !ok || !isDeliveryTool(toolName) {
-			continue
-		}
-		structuredContent, ok := event.Data.Message.Details.StructuredContent.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("tool %s structuredContent must be an object", toolName)
-		}
-		results = append(results, deliveryToolResult{Tool: toolName, StructuredContent: structuredContent})
+		results = append(results, deliveryToolResult{Tool: result.Tool, StructuredContent: result.StructuredContent})
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, errors.New("cannot read OpenClaw trajectory events file")
@@ -176,26 +161,9 @@ func extractDeliveryToolResults(eventsPath string) ([]deliveryToolResult, error)
 	return results, nil
 }
 
-func normalizeClawsideToolName(server, mcpTool, toolName string) (string, bool) {
-	if server != "" {
-		if server != clawsideMCPServerName {
-			return "", false
-		}
-		tool := mcpTool
-		if tool == "" {
-			tool = toolName
-		}
-		return strings.TrimPrefix(tool, clawsideMCPServerName+"__"), true
-	}
-	if !strings.HasPrefix(toolName, clawsideMCPServerName+"__") {
-		return "", false
-	}
-	return strings.TrimPrefix(toolName, clawsideMCPServerName+"__"), true
-}
-
 func isDeliveryTool(tool string) bool {
 	switch tool {
-	case "handoff_create", "handoff_dispatch", "a2a_deliver", "sender_job_get", "sender_job_list", "handoff_get", "workflow_status":
+	case "handoff_create", "handoff_dispatch", "a2a_deliver", "sender_job_get", "sender_job_list", "sender_stats", "handoff_get", "workflow_status":
 		return true
 	default:
 		return false
@@ -208,17 +176,27 @@ func summarizeDeliveryResults(results []deliveryToolResult) (extractedDeliveryRe
 	var selectedErr error
 
 	for i, result := range results {
-		if result.Tool != "handoff_create" {
-			continue
-		}
-		candidate, consumed, err := summarizeDeliveryFlow(results[i:])
-		if err == nil && consumed {
-			selected = &candidate
-			selectedErr = nil
-			continue
-		}
-		if err != nil {
-			selectedErr = err
+		switch result.Tool {
+		case "handoff_create":
+			candidate, consumed, err := summarizeDeliveryFlow(results[i:])
+			if err == nil && consumed {
+				selected = &candidate
+				selectedErr = nil
+				continue
+			}
+			if err != nil {
+				selectedErr = err
+			}
+		case "a2a_deliver":
+			candidate, consumed, err := summarizeMainDeliveryFlow(results[i:])
+			if err == nil && consumed {
+				selected = &candidate
+				selectedErr = nil
+				continue
+			}
+			if err != nil && selected == nil && selectedErr == nil {
+				selectedErr = err
+			}
 		}
 	}
 	if selected != nil {
@@ -318,6 +296,55 @@ func summarizeDeliveryFlow(results []deliveryToolResult) (extractedDeliveryResul
 		return payload, false, errors.New("missing tool handoff_create in OpenClaw trajectory events")
 	}
 	return payload, false, fmt.Errorf("missing tool %s in OpenClaw trajectory events", deliveryTools[step])
+}
+
+func summarizeMainDeliveryFlow(results []deliveryToolResult) (extractedDeliveryResults, bool, error) {
+	var payload extractedDeliveryResults
+	var delivery deliveryResult
+	var senderJob map[string]any
+	var senderStats map[string]any
+	step := 0
+
+	for _, result := range results {
+		if result.Tool != mainDeliveryTools[step] {
+			continue
+		}
+		switch result.Tool {
+		case "a2a_deliver":
+			observed, err := validateA2ADelivery(result.StructuredContent)
+			if err != nil {
+				return payload, false, err
+			}
+			delivery = observed
+		case "sender_job_get":
+			job, err := validateSenderJobGet(result.StructuredContent, delivery)
+			if err != nil {
+				return payload, false, err
+			}
+			senderJob = job
+		case "sender_stats":
+			stats, err := validateSenderStats(result.StructuredContent)
+			if err != nil {
+				return payload, false, err
+			}
+			senderStats = stats
+		}
+		step++
+		if step == len(mainDeliveryTools) {
+			payload.TruthPlaneDelivery = extractedDeliverySummary{
+				DeliveryResult: delivery,
+				SenderJob:      senderJob,
+				SenderStats:    senderStats,
+				Tools:          append([]string(nil), mainDeliveryTools...),
+			}
+			return payload, true, nil
+		}
+	}
+
+	if step == 0 {
+		return payload, false, errors.New("missing tool a2a_deliver in OpenClaw trajectory events")
+	}
+	return payload, false, fmt.Errorf("missing tool %s in OpenClaw trajectory events", mainDeliveryTools[step])
 }
 
 func handoffCreateIDs(content map[string]any) (string, string, error) {
@@ -438,6 +465,18 @@ func validateSenderJobList(content map[string]any, jobID int64) ([]map[string]an
 		return nil, errors.New("sender_job_list did not include delivery job")
 	}
 	return jobs, nil
+}
+
+func validateSenderStats(content map[string]any) (map[string]any, error) {
+	for _, counter := range []string{"pending_count", "retry_count", "sending_count"} {
+		if int64Field(content, counter) != 0 {
+			return nil, fmt.Errorf("sender_stats %s must be zero", counter)
+		}
+	}
+	if workerRunning, ok := content["worker_running"].(bool); ok && !workerRunning {
+		return nil, errors.New("sender_stats worker_running must be true")
+	}
+	return content, nil
 }
 
 func validateDeliveryHandoffGet(content map[string]any, handoffID, workflowID string) (map[string]any, []any, error) {

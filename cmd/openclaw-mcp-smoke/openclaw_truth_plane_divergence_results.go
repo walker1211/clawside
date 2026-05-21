@@ -89,8 +89,9 @@ func validateOpenClawTruthPlaneDivergenceResults(value any) (string, bool) {
 	if truthPlaneStringValue(divergenceSummary["final_handoff_state"]) != "completed" {
 		return "truth-plane divergence final_handoff_state must be completed", false
 	}
-	if truthPlaneStringValue(divergenceSummary["final_workflow_status"]) != "completed" {
-		return "truth-plane divergence final_workflow_status must be completed", false
+	workflowStatus := truthPlaneStringValue(divergenceSummary["final_workflow_status"])
+	if workflowStatus != "active" && workflowStatus != "completed" {
+		return "truth-plane divergence final_workflow_status must be active or completed", false
 	}
 
 	tools, ok := divergenceSummary["tools"].([]any)

@@ -10,6 +10,8 @@ import (
 	"os"
 	"slices"
 	"strings"
+
+	"github.com/walker1211/clawside/internal/openclawtrajectory"
 )
 
 const clawsideMCPServerName = "clawside"
@@ -27,23 +29,6 @@ type extractedToolResults struct {
 type extractedToolResult struct {
 	Tool   string         `json:"tool"`
 	Result map[string]any `json:"result"`
-}
-
-type trajectoryEvent struct {
-	Type string `json:"type"`
-	Data struct {
-		Message trajectoryMessage `json:"message"`
-	} `json:"data"`
-}
-
-type trajectoryMessage struct {
-	ToolName string `json:"toolName"`
-	IsError  bool   `json:"isError"`
-	Details  struct {
-		MCPServer         string `json:"mcpServer"`
-		MCPTool           string `json:"mcpTool"`
-		StructuredContent any    `json:"structuredContent"`
-	} `json:"details"`
 }
 
 func main() {
@@ -122,26 +107,17 @@ func extractToolResults(eventsPath string) (extractedToolResults, error) {
 		if line == "" {
 			continue
 		}
-		var event trajectoryEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
+		result, ok, err := openclawtrajectory.ExtractToolResult([]byte(line), clawsideMCPServerName)
+		if errors.Is(err, openclawtrajectory.ErrInvalidJSON) {
 			return extractedToolResults{}, fmt.Errorf("events line %d is invalid JSON", lineNumber)
 		}
-		if event.Type != "tool.result" || event.Data.Message.IsError {
+		if err != nil {
+			return extractedToolResults{}, err
+		}
+		if !ok || !slices.Contains(requiredTrajectoryTools, result.Tool) {
 			continue
 		}
-		message := event.Data.Message
-		if !isClawsideToolMessage(message) {
-			continue
-		}
-		tool := trajectoryToolName(message)
-		if !slices.Contains(requiredTrajectoryTools, tool) {
-			continue
-		}
-		result, ok := message.Details.StructuredContent.(map[string]any)
-		if !ok {
-			return extractedToolResults{}, fmt.Errorf("tool %s structuredContent must be an object", tool)
-		}
-		byTool[tool] = result
+		byTool[result.Tool] = result.StructuredContent
 	}
 	if err := scanner.Err(); err != nil {
 		return extractedToolResults{}, errors.New("cannot read OpenClaw trajectory events file")
@@ -156,19 +132,4 @@ func extractToolResults(eventsPath string) (extractedToolResults, error) {
 		results = append(results, extractedToolResult{Tool: tool, Result: result})
 	}
 	return extractedToolResults{Results: results}, nil
-}
-
-func isClawsideToolMessage(message trajectoryMessage) bool {
-	serverName := strings.TrimSpace(message.Details.MCPServer)
-	if serverName != "" {
-		return serverName == clawsideMCPServerName
-	}
-	return strings.HasPrefix(strings.TrimSpace(message.ToolName), clawsideMCPServerName+"__")
-}
-
-func trajectoryToolName(message trajectoryMessage) string {
-	if tool := strings.TrimSpace(message.Details.MCPTool); tool != "" {
-		return tool
-	}
-	return strings.TrimPrefix(strings.TrimSpace(message.ToolName), clawsideMCPServerName+"__")
 }

@@ -40,6 +40,20 @@ func TestCheckOpenClawTruthPlaneProgressionResultsOK(t *testing.T) {
 	}
 }
 
+func TestCheckOpenClawTruthPlaneProgressionResultsAcceptsActiveWorkflowStatus(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "openclaw-truth-plane-progression-results.json")
+	value := validOpenClawTruthPlaneProgressionResultsValueForTest()
+	value["truth_plane_progression"].(map[string]any)["final_workflow_status"] = "active"
+	writeOpenClawTruthPlaneProgressionResultsTestJSON(t, path, value)
+
+	check := checkOpenClawTruthPlaneProgressionResults(Options{OpenClawTruthPlaneProgressionResultsPath: path})
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected ok, got %+v", check)
+	}
+}
+
 func TestCheckOpenClawTruthPlaneProgressionResultsFailures(t *testing.T) {
 	const secret = "token-private-value"
 	tests := []struct {
@@ -165,16 +179,16 @@ func TestCheckOpenClawTruthPlaneProgressionResultsFailures(t *testing.T) {
 			want: "truth-plane progression final_handoff_state must be completed",
 		},
 		{
-			name: "final workflow not completed",
+			name: "final workflow not active or completed",
 			value: map[string]any{"truth_plane_progression": map[string]any{
 				"handoff_id":            "hf-123",
 				"workflow_id":           "wf-123",
 				"progressions":          validOpenClawTruthPlaneProgressionsForTest(),
 				"final_handoff_state":   "completed",
-				"final_workflow_status": "started",
+				"final_workflow_status": "failed",
 				"tools":                 requiredOpenClawTruthPlaneProgressionToolsForTest(),
 			}},
-			want: "truth-plane progression final_workflow_status must be completed",
+			want: "truth-plane progression final_workflow_status must be active or completed",
 		},
 		{
 			name: "unknown tool containing token-private-value",

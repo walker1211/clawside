@@ -67,6 +67,34 @@ func TestRunExtractsDeliveryEvidence(t *testing.T) {
 	assertDeliveryStringsEqual(t, summary.Tools, wantTools)
 }
 
+func TestRunExtractsMainDeliveryEvidenceWithSenderStats(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeDeliveryEvents(t, eventsPath,
+		deliveryToolResultEvent("a2a_deliver", deliveryResultJSON(77, "sent", "main"), false),
+		deliveryToolResultEvent("sender_job_get", senderJobGetJSON(77, "sent", "main"), false),
+		deliveryToolResultEvent("sender_stats", senderStatsJSON(0, 0, 0, true), false),
+	)
+
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"--events", eventsPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run extractor: %v\nstderr=%s", err, stderr.String())
+	}
+	var payload extractedDeliveryResults
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("unmarshal stdout: %v", err)
+	}
+	summary := payload.TruthPlaneDelivery
+	if summary.DeliveryResult.TargetAgent != "main" || intField(summary.SenderJob, "job_id") != 77 {
+		t.Fatalf("unexpected main delivery evidence: %+v", summary)
+	}
+	if intField(summary.SenderStats, "pending_count") != 0 || intField(summary.SenderStats, "retry_count") != 0 || intField(summary.SenderStats, "sending_count") != 0 {
+		t.Fatalf("unexpected sender stats: %+v", summary.SenderStats)
+	}
+	wantTools := []string{"a2a_deliver", "sender_job_get", "sender_stats"}
+	assertDeliveryStringsEqual(t, summary.Tools, wantTools)
+}
+
 func TestRunWritesDeliveryEvidenceToStdout(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")
@@ -176,6 +204,10 @@ func senderJobGetJSON(jobID int, status string, agent string) string {
 
 func senderJobListJSON(jobID int, status string, agent string) string {
 	return `{"jobs":[{"job_id":` + itoa(jobID) + `,"status":"` + status + `","target_agent":"` + agent + `","bot":"` + agent + `","chat_id":123456789,"attempt_count":1,"last_error":""}]}`
+}
+
+func senderStatsJSON(pending int, retry int, sending int, workerRunning bool) string {
+	return `{"pending_count":` + itoa(pending) + `,"retry_count":` + itoa(retry) + `,"sending_count":` + itoa(sending) + `,"worker_running":` + deliveryBoolJSON(workerRunning) + `}`
 }
 
 func finalDeliveryHandoffJSON(handoffID string, workflowID string) string {
