@@ -131,6 +131,111 @@ func TestHandleHandoffDispatchRecordsTransportRequest(t *testing.T) {
 	}
 }
 
+func TestHandleHandoffDispatchUsesConfiguredOpenClawDefaults(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	runner := &captureOpenClawRunner{stdout: []byte(`{"status":"accepted","external_id":"openclaw-run-1"}`)}
+	h.svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(runner))
+	h.SetOpenClawDispatchDefaults("/configured/openclaw", []string{"--mode", "test"})
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	result, err := h.HandleHandoffDispatch(context.Background(), HandoffDispatchInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+		Command:   "/caller/unsafe",
+		Args:      []string{"--caller", "unsafe"},
+		Message:   "hello",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffDispatch: %v", err)
+	}
+	if result.Attempt.ResultStatus != string(orchestrator.TransportAccepted) {
+		t.Fatalf("expected accepted dispatch attempt, got %+v", result.Attempt)
+	}
+	if result.Attempt.ExternalID != "openclaw-run-1" {
+		t.Fatalf("expected external id from configured command, got %q", result.Attempt.ExternalID)
+	}
+	if runner.command != "/configured/openclaw" {
+		t.Fatalf("expected configured command, got %q", runner.command)
+	}
+	if len(runner.args) != 2 || runner.args[0] != "--mode" || runner.args[1] != "test" {
+		t.Fatalf("expected configured args, got %v", runner.args)
+	}
+	stdin := string(runner.stdin)
+	for _, want := range []string{`"target":"agent:writer"`, `"message":"hello"`, `"command":"/configured/openclaw"`} {
+		if !strings.Contains(stdin, want) {
+			t.Fatalf("expected dispatch request stdin to contain %s, got %s", want, stdin)
+		}
+	}
+	if strings.Contains(stdin, "/caller/unsafe") || strings.Contains(stdin, "--caller") {
+		t.Fatalf("expected caller command and args to be ignored for openclaw defaults, got %s", stdin)
+	}
+
+	view, err := h.HandleWorkflowStatus(context.Background(), WorkflowStatusInput{WorkflowID: created.Workflow.ID})
+	if err != nil {
+		t.Fatalf("HandleWorkflowStatus: %v", err)
+	}
+	if view.Handoffs[0].State != orchestrator.StateDispatched {
+		t.Fatalf("expected transport accepted not to complete handoff, got %s", view.Handoffs[0].State)
+	}
+	for _, action := range []string{"receive", "claim", "start", "checkpoint", "complete"} {
+		if _, err := h.HandleHandoffProgress(context.Background(), HandoffProgressInput{
+			Action:     action,
+			WorkflowID: created.Workflow.ID,
+			HandoffID:  created.Handoff.ID,
+			Actor:      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		}); err != nil {
+			t.Fatalf("HandleHandoffProgress(%s): %v", action, err)
+		}
+	}
+}
+
+func TestHandleHandoffDispatchIgnoresCallerOpenClawCommandWithoutDefaults(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	runner := &captureOpenClawRunner{stdout: []byte(`{"status":"accepted","external_id":"should-not-run"}`)}
+	h.svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(runner))
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "draft chapter",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	result, err := h.HandleHandoffDispatch(context.Background(), HandoffDispatchInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+		Command:   "/caller/unsafe",
+		Args:      []string{"--caller", "unsafe"},
+		Message:   "hello",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffDispatch: %v", err)
+	}
+	if runner.command != "" {
+		t.Fatalf("expected caller command not to execute, runner saw %q", runner.command)
+	}
+	if result.Attempt.ResultStatus != string(orchestrator.TransportRequested) {
+		t.Fatalf("expected only requested dispatch attempt, got %+v", result.Attempt)
+	}
+	if len(result.Events) != 1 || result.Events[0].Type != orchestrator.EventTransportRequested {
+		t.Fatalf("expected only transport_requested event, got %+v", result.Events)
+	}
+}
+
 func TestHandleWorkflowStatusReturnsProjectedWorkflow(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
@@ -1129,6 +1234,22 @@ func newTestHandlersWithDB(t *testing.T, client *a2adelivery.SenderClient) (*Han
 		return time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
 	})
 	return NewHandlers(svc, store, client), db
+}
+
+type captureOpenClawRunner struct {
+	stdout  []byte
+	stderr  []byte
+	err     error
+	command string
+	args    []string
+	stdin   []byte
+}
+
+func (c *captureOpenClawRunner) Run(_ context.Context, command string, args []string, stdin []byte) ([]byte, []byte, error) {
+	c.command = command
+	c.args = append([]string(nil), args...)
+	c.stdin = append([]byte(nil), stdin...)
+	return c.stdout, c.stderr, c.err
 }
 
 func int64Ptr(v int64) *int64 { return &v }

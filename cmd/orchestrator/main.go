@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -9,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -370,7 +368,7 @@ func runHandoffDispatch(args []string, stdout, stderr io.Writer) error {
 	}
 	svc := orchestrator.NewService(store, nil)
 	if adapter == "openclaw" && command != "" {
-		svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(shellRunner{}))
+		svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(orchestrator.CommandRunner{}))
 	}
 	result, err := svc.DispatchHandoff(context.Background(), orchestrator.DispatchHandoffInput{
 		HandoffID: handoffID,
@@ -1132,19 +1130,4 @@ func printJSON(w io.Writer, v any) error {
 
 func loadHandoff(ctx context.Context, store *orchestrator.Store, handoffID string) (orchestrator.Handoff, error) {
 	return store.LoadHandoff(ctx, handoffID)
-}
-
-type shellRunner struct{}
-
-func (shellRunner) Run(ctx context.Context, command string, args []string, stdin []byte) ([]byte, []byte, error) {
-	cmd := exec.CommandContext(ctx, command, args...)
-	if len(stdin) > 0 {
-		cmd.Stdin = bytes.NewReader(stdin)
-	}
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	err := cmd.Run()
-	return stdout.Bytes(), stderr.Bytes(), err
 }

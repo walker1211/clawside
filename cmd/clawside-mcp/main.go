@@ -34,10 +34,14 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var senderBaseURL string
 	var senderAuthKey string
 	var targetAgentMap string
+	var openClawCommand string
+	var openClawArgs string
 	fs.StringVar(&dbPath, "db", "", "sqlite db path")
 	fs.StringVar(&senderBaseURL, "sender-base-url", defaultSenderBaseURL, "sender base url")
 	fs.StringVar(&senderAuthKey, "sender-auth-key", "", "sender auth key")
 	fs.StringVar(&targetAgentMap, "target-agent-map", "", "comma-separated target_agent=bot mappings")
+	fs.StringVar(&openClawCommand, "openclaw-command", "", "OpenClaw dispatch command")
+	fs.StringVar(&openClawArgs, "openclaw-args", "", "comma-separated OpenClaw dispatch command args")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -56,19 +60,28 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	senderAuthKey = resolveSenderAuthKey(senderAuthKey)
 	targetAgentMap = resolveTargetAgentBotMap(targetAgentMap)
+	openClawCommand = resolveOpenClawCommand(openClawCommand)
+	openClawDispatchArgs := resolveOpenClawArgs(openClawArgs)
 	resolver, err := a2adelivery.NewTargetAgentBotResolver(targetAgentMap)
 	if err != nil {
 		return err
 	}
 	senderClient := a2adelivery.NewSenderClient(senderBaseURL, senderAuthKey, nil)
-	handlers := toolserver.NewHandlersWithTargetAgentBotResolver(orchestrator.NewService(store, nil), store, senderClient, resolver)
+	svc := orchestrator.NewService(store, nil)
+	handlers := toolserver.NewHandlersWithTargetAgentBotResolver(svc, store, senderClient, resolver)
+	if openClawCommand != "" {
+		svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(orchestrator.CommandRunner{}))
+		handlers.SetOpenClawDispatchDefaults(openClawCommand, openClawDispatchArgs)
+	}
 	s := newServer(handlers)
 	return server.ServeStdio(s)
 }
 
 const (
-	defaultSenderBaseURL     = "http://127.0.0.1:8787"
-	targetAgentBotMapEnvName = "CLAWSIDE_TARGET_AGENT_BOT_MAP"
+	defaultSenderBaseURL       = "http://127.0.0.1:8787"
+	targetAgentBotMapEnvName   = "CLAWSIDE_TARGET_AGENT_BOT_MAP"
+	openClawCommandEnvName     = "CLAWSIDE_OPENCLAW_COMMAND"
+	openClawCommandArgsEnvName = "CLAWSIDE_OPENCLAW_ARGS"
 )
 
 func resolveSenderAuthKey(flagValue string) string {
@@ -83,6 +96,31 @@ func resolveTargetAgentBotMap(flagValue string) string {
 		return trimmed
 	}
 	return strings.TrimSpace(os.Getenv(targetAgentBotMapEnvName))
+}
+
+func resolveOpenClawCommand(flagValue string) string {
+	if trimmed := strings.TrimSpace(flagValue); trimmed != "" {
+		return trimmed
+	}
+	return strings.TrimSpace(os.Getenv(openClawCommandEnvName))
+}
+
+func resolveOpenClawArgs(flagValue string) []string {
+	if trimmed := strings.TrimSpace(flagValue); trimmed != "" {
+		return splitCommaSeparated(trimmed)
+	}
+	return splitCommaSeparated(os.Getenv(openClawCommandArgsEnvName))
+}
+
+func splitCommaSeparated(raw string) []string {
+	var out []string
+	for part := range strings.SplitSeq(raw, ",") {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 var handoffProgressActionValues = []string{

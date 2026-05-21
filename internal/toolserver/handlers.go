@@ -16,6 +16,8 @@ type Handlers struct {
 	store                  *orchestrator.Store
 	senderClient           *a2adelivery.SenderClient
 	targetAgentBotResolver *a2adelivery.TargetAgentBotResolver
+	openClawCommand        string
+	openClawArgs           []string
 }
 
 type ActorRefInput struct {
@@ -226,6 +228,11 @@ func NewHandlersWithTargetAgentBotResolver(svc *orchestrator.Service, store *orc
 	return &Handlers{svc: svc, store: store, senderClient: senderClient, targetAgentBotResolver: resolver}
 }
 
+func (h *Handlers) SetOpenClawDispatchDefaults(command string, args []string) {
+	h.openClawCommand = strings.TrimSpace(command)
+	h.openClawArgs = append([]string(nil), args...)
+}
+
 func (h *Handlers) HandleHandoffCreate(ctx context.Context, input HandoffCreateInput) (HandoffCreateOutput, error) {
 	sender, err := toActorRef(input.Sender)
 	if err != nil {
@@ -272,12 +279,19 @@ func (h *Handlers) HandleHandoffGet(ctx context.Context, input HandoffGetInput) 
 }
 
 func (h *Handlers) HandleHandoffDispatch(ctx context.Context, input HandoffDispatchInput) (orchestrator.DispatchHandoffResult, error) {
+	adapter := strings.TrimSpace(input.Adapter)
+	command := strings.TrimSpace(input.Command)
+	args := append([]string(nil), input.Args...)
+	if adapter == "openclaw" {
+		command = h.openClawCommand
+		args = append([]string(nil), h.openClawArgs...)
+	}
 	return h.svc.DispatchHandoff(ctx, orchestrator.DispatchHandoffInput{
 		HandoffID: strings.TrimSpace(input.HandoffID),
-		Adapter:   strings.TrimSpace(input.Adapter),
+		Adapter:   adapter,
 		Target:    strings.TrimSpace(input.Target),
-		Command:   strings.TrimSpace(input.Command),
-		Args:      append([]string(nil), input.Args...),
+		Command:   command,
+		Args:      args,
 		Message:   input.Message,
 	})
 }

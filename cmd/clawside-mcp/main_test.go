@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -63,6 +64,46 @@ func TestResolveTargetAgentBotMapFallsBackToEnvironment(t *testing.T) {
 
 	if got != "env=guardian" {
 		t.Fatalf("expected environment target agent bot map, got %q", got)
+	}
+}
+
+func TestResolveOpenClawCommandPrefersExplicitFlag(t *testing.T) {
+	t.Setenv("CLAWSIDE_OPENCLAW_COMMAND", "env-command")
+
+	got := resolveOpenClawCommand(" flag-command ")
+
+	if got != "flag-command" {
+		t.Fatalf("expected explicit OpenClaw command, got %q", got)
+	}
+}
+
+func TestResolveOpenClawCommandFallsBackToEnvironment(t *testing.T) {
+	t.Setenv("CLAWSIDE_OPENCLAW_COMMAND", " env-command ")
+
+	got := resolveOpenClawCommand(" ")
+
+	if got != "env-command" {
+		t.Fatalf("expected environment OpenClaw command, got %q", got)
+	}
+}
+
+func TestResolveOpenClawArgsPrefersExplicitFlag(t *testing.T) {
+	t.Setenv("CLAWSIDE_OPENCLAW_ARGS", "env-a,env-b")
+
+	got := resolveOpenClawArgs(" flag-a, flag-b ,, ")
+
+	if !slices.Equal(got, []string{"flag-a", "flag-b"}) {
+		t.Fatalf("expected explicit OpenClaw args, got %v", got)
+	}
+}
+
+func TestResolveOpenClawArgsFallsBackToEnvironment(t *testing.T) {
+	t.Setenv("CLAWSIDE_OPENCLAW_ARGS", " env-a, env-b ,, ")
+
+	got := resolveOpenClawArgs(" ")
+
+	if !slices.Equal(got, []string{"env-a", "env-b"}) {
+		t.Fatalf("expected environment OpenClaw args, got %v", got)
 	}
 }
 
@@ -311,6 +352,78 @@ func TestServerCallHandoffDispatchSucceeds(t *testing.T) {
 		t.Fatalf("expected handoff_dispatch success, got error result")
 	}
 	assertStructuredObject(t, result, "attempt")
+}
+
+func TestServerCallHandoffDispatchUsesConfiguredOpenClawCommand(t *testing.T) {
+	tempDir := t.TempDir()
+	payloadPath := filepath.Join(tempDir, "payload.json")
+	argsPath := filepath.Join(tempDir, "args.txt")
+	scriptPath := writeMCPDispatchScript(t, `#!/bin/sh
+cat > "`+payloadPath+`"
+printf '%s\n' "$@" > "`+argsPath+`"
+printf '{"status":"accepted","external_id":"openclaw-run-123"}'
+`)
+	dbPath := filepath.Join(tempDir, "clawside.db")
+	c := newTestMCPClient(t, dbPath, "--openclaw-command", scriptPath, "--openclaw-args", "--mode,test")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	created, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_create", Arguments: map[string]any{
+		"workflow_kind": "generic",
+		"sender":        map[string]any{"type": "agent", "id": "planner"},
+		"receiver":      map[string]any{"type": "agent", "id": "writer"},
+		"task_kind":     "generic_task",
+		"intent":        "draft chapter",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_create): %v", err)
+	}
+	result, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_dispatch", Arguments: map[string]any{
+		"handoff_id": extractHandoffID(t, created),
+		"adapter":    "openclaw",
+		"target":     "agent:writer",
+		"command":    "/caller/unsafe",
+		"args":       []string{"--caller", "unsafe"},
+		"message":    "hello",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_dispatch): %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected handoff_dispatch success, got error result")
+	}
+
+	var dispatch struct {
+		Attempt struct {
+			ResultStatus string `json:"result_status"`
+			ExternalID   string `json:"external_id"`
+		} `json:"attempt"`
+		Events []struct {
+			Type string `json:"type"`
+		} `json:"events"`
+	}
+	decodeStructuredContent(t, result, &dispatch)
+	if dispatch.Attempt.ResultStatus != "accepted" || dispatch.Attempt.ExternalID != "openclaw-run-123" {
+		t.Fatalf("expected accepted OpenClaw attempt, got %+v", dispatch.Attempt)
+	}
+	if len(dispatch.Events) != 2 || dispatch.Events[1].Type != "transport_accepted" {
+		t.Fatalf("expected transport_accepted event, got %+v", dispatch.Events)
+	}
+	capturedPayload := readTestFile(t, payloadPath)
+	for _, want := range []string{`"target":"agent:writer"`, `"message":"hello"`, `"command":"` + scriptPath + `"`} {
+		if !strings.Contains(capturedPayload, want) {
+			t.Fatalf("expected captured payload to contain %s, got %s", want, capturedPayload)
+		}
+	}
+	if strings.Contains(capturedPayload, "/caller/unsafe") || strings.Contains(capturedPayload, "--caller") {
+		t.Fatalf("expected MCP caller command to be ignored, got %s", capturedPayload)
+	}
+	capturedArgs := readTestFile(t, argsPath)
+	if capturedArgs != "--mode\ntest\n" {
+		t.Fatalf("expected configured OpenClaw args, got %q", capturedArgs)
+	}
 }
 
 func TestServerCallDivergenceRecordSucceeds(t *testing.T) {
@@ -1355,6 +1468,35 @@ func assertTextContentObject(t *testing.T, result *mcp.CallToolResult, key strin
 	if _, ok := payload[key]; !ok {
 		t.Fatalf("expected text content key %q in %+v", key, payload)
 	}
+}
+
+func decodeStructuredContent(t *testing.T, result *mcp.CallToolResult, out any) {
+	t.Helper()
+	raw, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	if err := json.Unmarshal(raw, out); err != nil {
+		t.Fatalf("unmarshal structured content: %v", err)
+	}
+}
+
+func writeMCPDispatchScript(t *testing.T, content string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "dispatch.sh")
+	if err := os.WriteFile(path, []byte(content), 0o700); err != nil {
+		t.Fatalf("write dispatch script: %v", err)
+	}
+	return path
+}
+
+func readTestFile(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return string(data)
 }
 
 func extractHandoffID(t *testing.T, result *mcp.CallToolResult) string {
