@@ -22,6 +22,52 @@
 
 当前版本已把最小可用 v1 收口为可安装、可注册、可验证的 MCP server + skill 产品套件。
 
+## 最小使用路径
+
+1. 生成本地 sender 配置：
+
+```bash
+cp .example.env .env
+# 编辑 .env，设置 SENDER_AUTH_KEY 为本地随机 key
+./scripts/config_builder.sh
+```
+
+2. 构建并启动 sender：
+
+```bash
+./build.sh
+./start.sh
+```
+
+3. 在 OpenClaw 中注册 clawside MCP server：
+
+```text
+command: <repo-root>/scripts/start_mcp.sh
+args: --db <repo-root>/sender.db
+env: SENDER_AUTH_KEY=<local-sender-key>
+```
+
+4. 做本地只读验收：
+
+```bash
+SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh
+```
+
+5. 从 OpenClaw trajectory 生成并复验 release evidence bundle：
+
+```bash
+go run ./cmd/openclaw-release-evidence-bundle \
+  --output-dir <bundle-dir> \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --verify
+```
+
+6. tag 前复验；准备发布时去掉 `--verify-only`，脚本会创建并推送 tag：
+
+```bash
+./scripts/tag-release.sh --verify-only --evidence-bundle <bundle-dir> vX.Y.Z
+```
+
 ## 组件概览
 
 - `cmd/config-builder/`：生成 sender 派生配置的 Go CLI

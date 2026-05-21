@@ -22,6 +22,52 @@ It is not the OpenClaw runtime itself, and it is not only a Telegram sender. The
 
 This version now productizes the minimal v1 into an installable, registerable, and verifiable MCP server + skill suite.
 
+## Minimal usage path
+
+1. Generate the local sender config:
+
+```bash
+cp .example.env .env
+# edit .env and set SENDER_AUTH_KEY to a local random key
+./scripts/config_builder.sh
+```
+
+2. Build and start the sender:
+
+```bash
+./build.sh
+./start.sh
+```
+
+3. Register the clawside MCP server in OpenClaw:
+
+```text
+command: <repo-root>/scripts/start_mcp.sh
+args: --db <repo-root>/sender.db
+env: SENDER_AUTH_KEY=<local-sender-key>
+```
+
+4. Run the local read-only verifier:
+
+```bash
+SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh
+```
+
+5. Generate and verify a release evidence bundle from OpenClaw trajectory:
+
+```bash
+go run ./cmd/openclaw-release-evidence-bundle \
+  --output-dir <bundle-dir> \
+  --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --verify
+```
+
+6. Re-verify before tagging. Remove `--verify-only` when you are ready to publish; the script will create and push the tag:
+
+```bash
+./scripts/tag-release.sh --verify-only --evidence-bundle <bundle-dir> vX.Y.Z
+```
+
 ## Components
 
 - `cmd/config-builder/`: Go CLI that generates the derived sender config.
