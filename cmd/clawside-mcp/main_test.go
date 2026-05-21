@@ -247,6 +247,35 @@ func TestServerHandoffProgressActionSchemaListsAcceptedValues(t *testing.T) {
 	}
 }
 
+func TestServerHandoffCreateSchemaListsAppendFields(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	tools, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var properties map[string]any
+	for _, tool := range tools.Tools {
+		if tool.Name == "handoff_create" {
+			properties = tool.InputSchema.Properties
+			break
+		}
+	}
+	if properties == nil {
+		t.Fatalf("expected handoff_create properties")
+	}
+	for _, want := range []string{"workflow_id", "parent_handoff_id", "depends_on_handoff_ids", "payload_ref", "delivery_target_ref"} {
+		if _, ok := properties[want]; !ok {
+			t.Fatalf("expected handoff_create schema field %q in %+v", want, properties)
+		}
+	}
+}
+
 func TestServerNoInputV1ToolsExposeEmptyObjectSchema(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "clawside.db")
 	c := newTestMCPClient(t, dbPath)
@@ -305,6 +334,78 @@ func TestServerCallHandoffCreateSucceeds(t *testing.T) {
 	}
 	if result.IsError {
 		t.Fatalf("expected handoff_create success, got error result")
+	}
+}
+
+func TestServerCallHandoffCreateAppendsToExistingWorkflow(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	root, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_create", Arguments: map[string]any{
+		"workflow_kind":                     "multi_project",
+		"sender":                            map[string]any{"type": "agent", "id": "planner"},
+		"receiver":                          map[string]any{"type": "agent", "id": "upstream"},
+		"task_kind":                         "generic_task",
+		"intent":                            "prepare upstream project",
+		"required_for_workflow_completion":  true,
+		"payload_ref":                       "project://upstream",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_create root): %v", err)
+	}
+	if root.IsError {
+		t.Fatalf("expected root handoff_create success, got error result")
+	}
+	workflowID := extractWorkflowID(t, root)
+	rootHandoffID := extractHandoffID(t, root)
+
+	appended, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_create", Arguments: map[string]any{
+		"workflow_id":                       workflowID,
+		"parent_handoff_id":                 rootHandoffID,
+		"depends_on_handoff_ids":            []string{rootHandoffID},
+		"sender":                            map[string]any{"type": "agent", "id": "upstream"},
+		"receiver":                          map[string]any{"type": "agent", "id": "downstream"},
+		"task_kind":                         "generic_task",
+		"intent":                            "consume upstream output",
+		"required_for_workflow_completion":  true,
+		"payload_ref":                       "project://downstream",
+		"delivery_target_ref":               "agent:downstream",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_create append): %v", err)
+	}
+	if appended.IsError {
+		t.Fatalf("expected appended handoff_create success, got error result")
+	}
+	if got := extractWorkflowID(t, appended); got != workflowID {
+		t.Fatalf("expected workflow %s, got %s", workflowID, got)
+	}
+
+	status, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "workflow_status", Arguments: map[string]any{"workflow_id": workflowID}}})
+	if err != nil {
+		t.Fatalf("CallTool(workflow_status): %v", err)
+	}
+	if status.IsError {
+		t.Fatalf("expected workflow_status success, got error result")
+	}
+	var payload struct {
+		Workflow struct {
+			Status string `json:"status"`
+		} `json:"Workflow"`
+		Handoffs []struct {
+			ID string `json:"id"`
+		} `json:"Handoffs"`
+	}
+	decodeStructuredContent(t, status, &payload)
+	if payload.Workflow.Status != "blocked" {
+		t.Fatalf("expected blocked workflow, got %s", payload.Workflow.Status)
+	}
+	if len(payload.Handoffs) != 2 {
+		t.Fatalf("expected 2 handoffs, got %d", len(payload.Handoffs))
 	}
 }
 

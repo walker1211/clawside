@@ -24,6 +24,13 @@ type CreateHandoffInput struct {
 	RequiredForWorkflowCompletion bool
 	ArtifactPolicy                ArtifactPolicy
 	NeedsReview                   bool
+	PayloadRef                    string
+	DeliveryTargetRef             string
+}
+
+type AppendHandoffInput struct {
+	WorkflowID string
+	Handoff    CreateHandoffInput
 }
 
 type CreateHandoffResult struct {
@@ -108,6 +115,9 @@ func (s *Service) SetOpenClawAdapter(adapter *OpenClawAdapter) {
 }
 
 func (s *Service) CreateHandoff(ctx context.Context, input CreateHandoffInput) (CreateHandoffResult, error) {
+	if input.ParentHandoffID != nil || len(input.DependsOnHandoffIDs) > 0 {
+		return CreateHandoffResult{}, fmt.Errorf("workflow_id is required when creating a handoff with parent or dependencies")
+	}
 	now := s.now().UTC()
 	workflowID := NewID("wf")
 	handoffID := NewID("hf")
@@ -132,6 +142,8 @@ func (s *Service) CreateHandoff(ctx context.Context, input CreateHandoffInput) (
 		State:                         StateCreated,
 		TaskKind:                      input.TaskKind,
 		Intent:                        input.Intent,
+		PayloadRef:                    input.PayloadRef,
+		DeliveryTargetRef:             input.DeliveryTargetRef,
 		ProducerActor:                 ActorRef{Type: ActorSystem, ID: "workflow-controller"},
 		SenderActor:                   input.Sender,
 		ReceiverActor:                 input.Receiver,
@@ -168,6 +180,118 @@ func (s *Service) CreateHandoff(ctx context.Context, input CreateHandoffInput) (
 	}
 
 	return CreateHandoffResult{Workflow: workflow, Handoff: handoff, Watches: watches}, nil
+}
+
+func (s *Service) AppendHandoff(ctx context.Context, input AppendHandoffInput) (CreateHandoffResult, error) {
+	if input.WorkflowID == "" {
+		return CreateHandoffResult{}, fmt.Errorf("workflow_id is required")
+	}
+	now := s.now().UTC()
+	workflow, err := s.store.LoadWorkflow(ctx, input.WorkflowID)
+	if err != nil {
+		return CreateHandoffResult{}, err
+	}
+	handoffs, err := s.store.ListWorkflowHandoffs(ctx, input.WorkflowID)
+	if err != nil {
+		return CreateHandoffResult{}, err
+	}
+	projected := ProjectWorkflow(workflow, handoffs, now)
+	if projected.Status == WorkflowCompleted || projected.Status == WorkflowFailed {
+		return CreateHandoffResult{}, fmt.Errorf("cannot append handoff to terminal workflow %s with status %s", workflow.ID, projected.Status)
+	}
+	if input.Handoff.WorkflowKind != "" && input.Handoff.WorkflowKind != workflow.Kind {
+		return CreateHandoffResult{}, fmt.Errorf("workflow_kind %s does not match workflow %s kind %s", input.Handoff.WorkflowKind, workflow.ID, workflow.Kind)
+	}
+
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CreateHandoffResult{}, fmt.Errorf("begin append handoff tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if input.Handoff.ParentHandoffID != nil {
+		if _, err := loadRelatedHandoffTx(ctx, tx, "parent handoff", *input.Handoff.ParentHandoffID, workflow.ID); err != nil {
+			return CreateHandoffResult{}, err
+		}
+	}
+	for _, dependencyID := range input.Handoff.DependsOnHandoffIDs {
+		if _, err := loadRelatedHandoffTx(ctx, tx, "dependency handoff", dependencyID, workflow.ID); err != nil {
+			return CreateHandoffResult{}, err
+		}
+	}
+
+	handoffID := NewID("hf")
+	handoff := Handoff{
+		ID:                            handoffID,
+		WorkflowID:                    workflow.ID,
+		WorkflowKind:                  workflow.Kind,
+		ParentHandoffID:               input.Handoff.ParentHandoffID,
+		DependsOnHandoffIDs:           append([]string(nil), input.Handoff.DependsOnHandoffIDs...),
+		RequiredForWorkflowCompletion: input.Handoff.RequiredForWorkflowCompletion,
+		State:                         StateCreated,
+		TaskKind:                      input.Handoff.TaskKind,
+		Intent:                        input.Handoff.Intent,
+		PayloadRef:                    input.Handoff.PayloadRef,
+		DeliveryTargetRef:             input.Handoff.DeliveryTargetRef,
+		ProducerActor:                 ActorRef{Type: ActorSystem, ID: "workflow-controller"},
+		SenderActor:                   input.Handoff.Sender,
+		ReceiverActor:                 input.Handoff.Receiver,
+		ReviewerActor:                 input.Handoff.Reviewer,
+		SubjectActor:                  input.Handoff.Receiver,
+		CurrentOwner:                  input.Handoff.Receiver,
+		EscalationOwner:               input.Handoff.Sender,
+		FallbackOwner:                 input.Handoff.Sender,
+		ArtifactPolicy:                input.Handoff.ArtifactPolicy,
+		NeedsReview:                   input.Handoff.NeedsReview,
+		CreatedAt:                     now,
+		UpdatedAt:                     now,
+	}
+	watches := CreateDefaultWatches(handoff, now)
+	workflow.CurrentHandoffID = handoff.ID
+	workflow.UpdatedAt = now
+
+	if err := saveHandoffExec(ctx, tx, handoff); err != nil {
+		return CreateHandoffResult{}, err
+	}
+	for _, watch := range watches {
+		if err := saveWatchExec(ctx, tx, watch); err != nil {
+			return CreateHandoffResult{}, err
+		}
+	}
+	if err := saveWorkflowExec(ctx, tx, workflow); err != nil {
+		return CreateHandoffResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return CreateHandoffResult{}, fmt.Errorf("commit append handoff tx: %w", err)
+	}
+	return CreateHandoffResult{Workflow: workflow, Handoff: handoff, Watches: watches}, nil
+}
+
+func loadRelatedHandoffTx(ctx context.Context, tx queryer, label, handoffID, workflowID string) (Handoff, error) {
+	if handoffID == "" {
+		return Handoff{}, fmt.Errorf("%s id is required", label)
+	}
+	handoff, err := loadHandoffTx(ctx, tx, handoffID)
+	if err != nil {
+		return Handoff{}, fmt.Errorf("%s %s: %w", label, handoffID, err)
+	}
+	if handoff.WorkflowID != workflowID {
+		return Handoff{}, fmt.Errorf("%s %s belongs to workflow %s, not %s", label, handoffID, handoff.WorkflowID, workflowID)
+	}
+	return handoff, nil
+}
+
+func (s *Service) ensureHandoffDependenciesCompleted(ctx context.Context, handoff Handoff) error {
+	for _, dependencyID := range handoff.DependsOnHandoffIDs {
+		dependency, err := loadRelatedHandoffTx(ctx, s.store.db, "dependency handoff", dependencyID, handoff.WorkflowID)
+		if err != nil {
+			return err
+		}
+		if dependency.State != StateCompleted {
+			return fmt.Errorf("handoff dependencies are incomplete: dependency handoff %s is %s", dependencyID, dependency.State)
+		}
+	}
+	return nil
 }
 
 func (s *Service) RecordEvent(ctx context.Context, input RecordEventInput) (EventDecision, error) {
@@ -318,6 +442,9 @@ func (s *Service) DispatchHandoff(ctx context.Context, input DispatchHandoffInpu
 	}
 	if handoff.State != StateCreated {
 		return DispatchHandoffResult{}, fmt.Errorf("dispatch requires created handoff state")
+	}
+	if err := s.ensureHandoffDependenciesCompleted(ctx, handoff); err != nil {
+		return DispatchHandoffResult{}, err
 	}
 	if handoff.DeliveryTargetRef == "" && input.Target != "" {
 		handoff.DeliveryTargetRef = input.Target

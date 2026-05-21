@@ -11,6 +11,7 @@ MCP_COMMAND="$ROOT_DIR/scripts/start_mcp.sh"
 REGISTRATION_CONFIG_PATH=""
 SKIP_REGISTRATION_CHECK="false"
 OPENCLAW_DISPATCH_SMOKE="false"
+MULTI_PROJECT_HANDOFF_SMOKE="false"
 OPENCLAW_COMMAND_VALUE=""
 OPENCLAW_ARGS_VALUES=""
 OPENCLAW_TOOL_CALL_CHECKLIST="false"
@@ -50,6 +51,8 @@ usage() {
   printf '  --skip-registration-check  Skip read-only MCP registration safety inspection\n'
   printf '  --openclaw-dispatch-smoke\n'
   printf '                             Run handoff_dispatch adapter=openclaw smoke through MCP\n'
+  printf '  --multi-project-handoff-smoke\n'
+  printf '                             Run multi-project upstream/downstream handoff dependency smoke through MCP\n'
   printf '  --openclaw-command COMMAND  Server-authorized OpenClaw dispatch command passed to clawside-mcp\n'
   printf '  --openclaw-arg ARG          Argument for the configured OpenClaw dispatch command; repeat for multiple args\n'
   printf '  --openclaw-tool-call-checklist\n'
@@ -144,6 +147,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --openclaw-dispatch-smoke)
       OPENCLAW_DISPATCH_SMOKE="true"
+      shift
+      ;;
+    --multi-project-handoff-smoke)
+      MULTI_PROJECT_HANDOFF_SMOKE="true"
       shift
       ;;
     --openclaw-command)
@@ -325,6 +332,9 @@ run_smoke() {
   fi
   if [[ "$OPENCLAW_DISPATCH_SMOKE" == "true" ]]; then
     set -- "$@" --openclaw-dispatch-smoke
+  fi
+  if [[ "$MULTI_PROJECT_HANDOFF_SMOKE" == "true" ]]; then
+    set -- "$@" --multi-project-handoff-smoke
   fi
   if [[ -n "$OPENCLAW_COMMAND_VALUE" ]]; then
     set -- "$@" --openclaw-command "$OPENCLAW_COMMAND_VALUE"

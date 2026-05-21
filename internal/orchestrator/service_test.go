@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 )
@@ -40,6 +41,180 @@ func TestServiceCreateHandoffCreatesWorkflowAndWatches(t *testing.T) {
 	}
 	if !sameActor(result.Handoff.FallbackOwner, result.Handoff.SenderActor) {
 		t.Fatalf("expected fallback owner initialized to sender, got %+v", result.Handoff.FallbackOwner)
+	}
+}
+
+func TestServiceCreateHandoffRejectsRootRelations(t *testing.T) {
+	svc := newTestService(t)
+	parentID := "hf_parent"
+
+	_, err := svc.CreateHandoff(context.Background(), CreateHandoffInput{
+		WorkflowKind:        "generic",
+		Sender:              ActorRef{Type: ActorAgent, ID: "planner"},
+		Receiver:            ActorRef{Type: ActorAgent, ID: "writer"},
+		TaskKind:            TaskGeneric,
+		Intent:              "invalid root parent",
+		ParentHandoffID:     &parentID,
+		DependsOnHandoffIDs: nil,
+	})
+	if err == nil || !strings.Contains(err.Error(), "workflow_id") {
+		t.Fatalf("expected root parent error, got %v", err)
+	}
+
+	_, err = svc.CreateHandoff(context.Background(), CreateHandoffInput{
+		WorkflowKind:        "generic",
+		Sender:              ActorRef{Type: ActorAgent, ID: "planner"},
+		Receiver:            ActorRef{Type: ActorAgent, ID: "writer"},
+		TaskKind:            TaskGeneric,
+		Intent:              "invalid root dependency",
+		DependsOnHandoffIDs: []string{"hf_dependency"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "workflow_id") {
+		t.Fatalf("expected root dependency error, got %v", err)
+	}
+}
+
+func TestServiceAppendHandoffAddsHandoffToExistingWorkflow(t *testing.T) {
+	svc := newTestService(t)
+	root := mustCreateTestHandoff(t, svc)
+	parentID := root.Handoff.ID
+
+	result, err := svc.AppendHandoff(context.Background(), AppendHandoffInput{
+		WorkflowID: root.Workflow.ID,
+		Handoff: CreateHandoffInput{
+			Sender:                        ActorRef{Type: ActorAgent, ID: "planner"},
+			Receiver:                      ActorRef{Type: ActorAgent, ID: "engineer"},
+			TaskKind:                      TaskGeneric,
+			Intent:                        "update downstream project",
+			ParentHandoffID:               &parentID,
+			DependsOnHandoffIDs:           []string{root.Handoff.ID},
+			RequiredForWorkflowCompletion: true,
+			PayloadRef:                    "project://downstream",
+			DeliveryTargetRef:             "agent:engineer",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AppendHandoff: %v", err)
+	}
+	if result.Workflow.ID != root.Workflow.ID {
+		t.Fatalf("expected workflow %s, got %s", root.Workflow.ID, result.Workflow.ID)
+	}
+	if result.Workflow.RootHandoffID != root.Handoff.ID {
+		t.Fatalf("expected root handoff %s, got %s", root.Handoff.ID, result.Workflow.RootHandoffID)
+	}
+	if result.Workflow.CurrentHandoffID != result.Handoff.ID {
+		t.Fatalf("expected current handoff %s, got %s", result.Handoff.ID, result.Workflow.CurrentHandoffID)
+	}
+	if result.Handoff.WorkflowID != root.Workflow.ID || result.Handoff.WorkflowKind != root.Workflow.Kind {
+		t.Fatalf("expected appended handoff in root workflow, got %+v", result.Handoff)
+	}
+	if result.Handoff.ParentHandoffID == nil || *result.Handoff.ParentHandoffID != root.Handoff.ID {
+		t.Fatalf("expected parent handoff %s, got %+v", root.Handoff.ID, result.Handoff.ParentHandoffID)
+	}
+	if len(result.Handoff.DependsOnHandoffIDs) != 1 || result.Handoff.DependsOnHandoffIDs[0] != root.Handoff.ID {
+		t.Fatalf("expected dependency %s, got %+v", root.Handoff.ID, result.Handoff.DependsOnHandoffIDs)
+	}
+	if result.Handoff.PayloadRef != "project://downstream" || result.Handoff.DeliveryTargetRef != "agent:engineer" {
+		t.Fatalf("expected refs to be persisted, got payload=%q delivery=%q", result.Handoff.PayloadRef, result.Handoff.DeliveryTargetRef)
+	}
+	if len(result.Watches) != 3 {
+		t.Fatalf("expected 3 default watches, got %d", len(result.Watches))
+	}
+
+	view, err := svc.WorkflowStatus(context.Background(), root.Workflow.ID)
+	if err != nil {
+		t.Fatalf("WorkflowStatus: %v", err)
+	}
+	if len(view.Handoffs) != 2 {
+		t.Fatalf("expected 2 workflow handoffs, got %d", len(view.Handoffs))
+	}
+	if view.Workflow.Status != WorkflowBlocked {
+		t.Fatalf("expected workflow blocked while dependency is incomplete, got %s", view.Workflow.Status)
+	}
+}
+
+func TestServiceAppendHandoffRejectsCrossWorkflowRelations(t *testing.T) {
+	svc := newTestService(t)
+	root := mustCreateTestHandoff(t, svc)
+	other := mustCreateTestHandoff(t, svc)
+
+	parentID := other.Handoff.ID
+	_, err := svc.AppendHandoff(context.Background(), AppendHandoffInput{
+		WorkflowID: root.Workflow.ID,
+		Handoff: CreateHandoffInput{
+			Sender:          ActorRef{Type: ActorAgent, ID: "planner"},
+			Receiver:        ActorRef{Type: ActorAgent, ID: "engineer"},
+			TaskKind:        TaskGeneric,
+			Intent:          "invalid parent",
+			ParentHandoffID: &parentID,
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "parent handoff") {
+		t.Fatalf("expected cross-workflow parent error, got %v", err)
+	}
+
+	_, err = svc.AppendHandoff(context.Background(), AppendHandoffInput{
+		WorkflowID: root.Workflow.ID,
+		Handoff: CreateHandoffInput{
+			Sender:              ActorRef{Type: ActorAgent, ID: "planner"},
+			Receiver:            ActorRef{Type: ActorAgent, ID: "engineer"},
+			TaskKind:            TaskGeneric,
+			Intent:              "invalid dependency",
+			DependsOnHandoffIDs: []string{other.Handoff.ID},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "dependency handoff") {
+		t.Fatalf("expected cross-workflow dependency error, got %v", err)
+	}
+
+	_, err = svc.AppendHandoff(context.Background(), AppendHandoffInput{
+		WorkflowID: root.Workflow.ID,
+		Handoff: CreateHandoffInput{
+			Sender:              ActorRef{Type: ActorAgent, ID: "planner"},
+			Receiver:            ActorRef{Type: ActorAgent, ID: "engineer"},
+			TaskKind:            TaskGeneric,
+			Intent:              "missing dependency",
+			DependsOnHandoffIDs: []string{"hf_missing"},
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "dependency handoff") {
+		t.Fatalf("expected missing dependency error, got %v", err)
+	}
+}
+
+func TestServiceAppendHandoffRejectsTerminalWorkflow(t *testing.T) {
+	svc := newTestService(t)
+	root := mustCreateTestHandoff(t, svc)
+	mustDispatchTestHandoff(t, svc, root.Handoff.ID)
+	for _, action := range []ProtocolAction{ProtocolActionReceive, ProtocolActionClaim, ProtocolActionStart, ProtocolActionCheckpoint, ProtocolActionComplete} {
+		if _, err := svc.ApplyProtocolAction(context.Background(), ProtocolRequest{
+			Action:     action,
+			HandoffID:  root.Handoff.ID,
+			WorkflowID: root.Workflow.ID,
+			Actor:      root.Handoff.ReceiverActor,
+		}); err != nil {
+			t.Fatalf("ApplyProtocolAction(%s): %v", action, err)
+		}
+	}
+	view, err := svc.WorkflowStatus(context.Background(), root.Workflow.ID)
+	if err != nil {
+		t.Fatalf("WorkflowStatus: %v", err)
+	}
+	if view.Workflow.Status != WorkflowCompleted {
+		t.Fatalf("expected completed workflow, got %s", view.Workflow.Status)
+	}
+
+	_, err = svc.AppendHandoff(context.Background(), AppendHandoffInput{
+		WorkflowID: root.Workflow.ID,
+		Handoff: CreateHandoffInput{
+			Sender:   ActorRef{Type: ActorAgent, ID: "planner"},
+			Receiver: ActorRef{Type: ActorAgent, ID: "engineer"},
+			TaskKind: TaskGeneric,
+			Intent:   "late downstream project",
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "terminal workflow") {
+		t.Fatalf("expected terminal workflow append error, got %v", err)
 	}
 }
 
@@ -92,6 +267,52 @@ func TestServiceDispatchHandoffRejectsNonCreatedState(t *testing.T) {
 	}
 	if err.Error() != "dispatch requires created handoff state" {
 		t.Fatalf("expected created-state dispatch error, got %v", err)
+	}
+}
+
+func TestServiceDispatchHandoffRejectsIncompleteDependencies(t *testing.T) {
+	svc := newTestService(t)
+	root := mustCreateTestHandoff(t, svc)
+	downstream, err := svc.AppendHandoff(context.Background(), AppendHandoffInput{
+		WorkflowID: root.Workflow.ID,
+		Handoff: CreateHandoffInput{
+			Sender:              ActorRef{Type: ActorAgent, ID: "planner"},
+			Receiver:            ActorRef{Type: ActorAgent, ID: "engineer"},
+			TaskKind:            TaskGeneric,
+			Intent:              "update downstream project",
+			DependsOnHandoffIDs: []string{root.Handoff.ID},
+		},
+	})
+	if err != nil {
+		t.Fatalf("AppendHandoff: %v", err)
+	}
+
+	_, err = svc.DispatchHandoff(context.Background(), DispatchHandoffInput{
+		HandoffID: downstream.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:engineer",
+	})
+	if err == nil || !strings.Contains(err.Error(), "dependencies") {
+		t.Fatalf("expected dependency dispatch error, got %v", err)
+	}
+
+	mustDispatchTestHandoff(t, svc, root.Handoff.ID)
+	for _, action := range []ProtocolAction{ProtocolActionReceive, ProtocolActionClaim, ProtocolActionStart, ProtocolActionCheckpoint, ProtocolActionComplete} {
+		if _, err := svc.ApplyProtocolAction(context.Background(), ProtocolRequest{
+			Action:     action,
+			HandoffID:  root.Handoff.ID,
+			WorkflowID: root.Workflow.ID,
+			Actor:      root.Handoff.ReceiverActor,
+		}); err != nil {
+			t.Fatalf("ApplyProtocolAction(%s): %v", action, err)
+		}
+	}
+	if _, err := svc.DispatchHandoff(context.Background(), DispatchHandoffInput{
+		HandoffID: downstream.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:engineer",
+	}); err != nil {
+		t.Fatalf("DispatchHandoff after dependency completion: %v", err)
 	}
 }
 

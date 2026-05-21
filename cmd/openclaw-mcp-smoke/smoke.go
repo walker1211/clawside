@@ -47,6 +47,7 @@ type Options struct {
 	RegistrationConfigPath                   string
 	SkipRegistrationCheck                    bool
 	OpenClawDispatchSmoke                    bool
+	MultiProjectHandoffSmoke                 bool
 	OpenClawCommand                          string
 	OpenClawArgs                             []string
 	OpenClawTarget                           string
@@ -100,6 +101,7 @@ type Report struct {
 	Tools                     []string                         `json:"tools"`
 	DeliveryResult            *a2adelivery.DeliveryResult      `json:"delivery_result,omitempty"`
 	OpenClawDispatchResult    *OpenClawDispatchSmokeResult     `json:"openclaw_dispatch_result,omitempty"`
+	MultiProjectHandoffResult *MultiProjectHandoffSmokeResult  `json:"multi_project_handoff_result,omitempty"`
 	OpenClawToolCallChecklist []OpenClawToolCallChecklistEntry `json:"openclaw_tool_call_checklist,omitempty"`
 	Registration              RegistrationGuidance             `json:"registration"`
 }
@@ -112,6 +114,19 @@ type OpenClawDispatchSmokeResult struct {
 	ExternalID   string `json:"external_id"`
 	State        string `json:"state"`
 	FinalState   string `json:"final_state"`
+}
+
+type MultiProjectHandoffSmokeResult struct {
+	WorkflowID           string `json:"workflow_id"`
+	UpstreamHandoffID    string `json:"upstream_handoff_id"`
+	MidstreamHandoffID   string `json:"midstream_handoff_id"`
+	DownstreamHandoffID  string `json:"downstream_handoff_id"`
+	BlockedStatus        string `json:"blocked_status"`
+	DownstreamBlocked    bool   `json:"downstream_blocked"`
+	FinalStatus          string `json:"final_status"`
+	UpstreamFinalState   string `json:"upstream_final_state"`
+	MidstreamFinalState  string `json:"midstream_final_state"`
+	DownstreamFinalState string `json:"downstream_final_state"`
 }
 
 func (r *Report) addCheck(check CheckResult) {
@@ -318,6 +333,9 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	if opts.OpenClawDispatchSmoke {
 		report.addCheck(checkOpenClawDispatch(ctx, mcpClient, &report, opts))
 	}
+	if opts.MultiProjectHandoffSmoke {
+		report.addCheck(checkMultiProjectHandoff(ctx, mcpClient, &report, opts))
+	}
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
 	} else {
@@ -474,6 +492,224 @@ func checkOpenClawDispatch(ctx context.Context, client smokeMCPClient, report *R
 	return CheckResult{Name: "openclaw_dispatch", Status: checkStatusOK, Detail: fmt.Sprintf("external_id=%s final_state=%s", externalID, finalState)}
 }
 
+func checkMultiProjectHandoff(ctx context.Context, client smokeMCPClient, report *Report, opts Options) CheckResult {
+	if client == nil {
+		return failedCheck("multi_project_handoff", "mcp client is not initialized; configure --mcp-command before using --multi-project-handoff-smoke")
+	}
+	message := strings.TrimSpace(opts.Text)
+	if message == "" {
+		message = "Multi-project handoff smoke test"
+	}
+	upstream, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_kind":                    "multi_project_handoff_smoke",
+		"sender":                           map[string]any{"type": "system", "id": "openclaw-mcp-smoke"},
+		"receiver":                         map[string]any{"type": "agent", "id": "upstream"},
+		"task_kind":                        "generic_task",
+		"intent":                           message + ": upstream project",
+		"required_for_workflow_completion": true,
+		"payload_ref":                      "project://smoke/upstream",
+		"delivery_target_ref":              "agent:upstream",
+	}, opts)
+	if err != nil {
+		return failedCheck("multi_project_handoff", err.Error())
+	}
+	workflowID := nestedString(upstream, "workflow", "id")
+	upstreamID := nestedString(upstream, "handoff", "id")
+	if workflowID == "" || upstreamID == "" {
+		return failedCheck("multi_project_handoff", "root handoff_create did not return workflow.id and handoff.id")
+	}
+
+	midstream, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_id":                      workflowID,
+		"workflow_kind":                    "multi_project_handoff_smoke",
+		"sender":                           map[string]any{"type": "agent", "id": "upstream"},
+		"receiver":                         map[string]any{"type": "agent", "id": "midstream"},
+		"task_kind":                        "generic_task",
+		"intent":                           message + ": midstream project",
+		"parent_handoff_id":                upstreamID,
+		"depends_on_handoff_ids":           []string{upstreamID},
+		"required_for_workflow_completion": true,
+		"payload_ref":                      "project://smoke/midstream",
+		"delivery_target_ref":              "agent:midstream",
+	}, opts)
+	if err != nil {
+		return failedCheck("multi_project_handoff", err.Error())
+	}
+	midstreamID := nestedString(midstream, "handoff", "id")
+	if nestedString(midstream, "workflow", "id") != workflowID || midstreamID == "" {
+		return failedCheck("multi_project_handoff", "midstream handoff_create did not append to the root workflow")
+	}
+
+	downstream, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_id":                      workflowID,
+		"workflow_kind":                    "multi_project_handoff_smoke",
+		"sender":                           map[string]any{"type": "agent", "id": "midstream"},
+		"receiver":                         map[string]any{"type": "agent", "id": "downstream"},
+		"task_kind":                        "generic_task",
+		"intent":                           message + ": downstream project",
+		"parent_handoff_id":                midstreamID,
+		"depends_on_handoff_ids":           []string{midstreamID},
+		"required_for_workflow_completion": true,
+		"payload_ref":                      "project://smoke/downstream",
+		"delivery_target_ref":              "agent:downstream",
+	}, opts)
+	if err != nil {
+		return failedCheck("multi_project_handoff", err.Error())
+	}
+	downstreamID := nestedString(downstream, "handoff", "id")
+	if nestedString(downstream, "workflow", "id") != workflowID || downstreamID == "" {
+		return failedCheck("multi_project_handoff", "downstream handoff_create did not append to the root workflow")
+	}
+
+	blockedView, err := callStructuredTool(ctx, client, "workflow_status", map[string]any{"workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("multi_project_handoff", err.Error())
+	}
+	blockedStatus := nestedString(blockedView, "workflow", "status")
+	if blockedStatus != "blocked" {
+		return failedCheck("multi_project_handoff", fmt.Sprintf("expected blocked workflow before dependencies complete, got status=%s", blockedStatus))
+	}
+	if !workflowContainsHandoffs(blockedView, upstreamID, midstreamID, downstreamID) {
+		return failedCheck("multi_project_handoff", "workflow_status did not return the full upstream/downstream handoff chain")
+	}
+
+	_, err = callStructuredTool(ctx, client, "handoff_dispatch", map[string]any{
+		"handoff_id": downstreamID,
+		"adapter":    "manual",
+		"target":     "agent:downstream",
+		"message":    message,
+	}, opts)
+	if err == nil {
+		return failedCheck("multi_project_handoff", "downstream dispatch succeeded before dependencies completed")
+	}
+	if !strings.Contains(err.Error(), "dependencies") && !strings.Contains(err.Error(), "dependency") {
+		return failedCheck("multi_project_handoff", err.Error())
+	}
+
+	upstreamFinal, err := dispatchAndCompleteSmokeHandoff(ctx, client, opts, workflowID, upstreamID, "upstream", message)
+	if err != nil {
+		return failedCheck("multi_project_handoff", err.Error())
+	}
+	midstreamFinal, err := dispatchAndCompleteSmokeHandoff(ctx, client, opts, workflowID, midstreamID, "midstream", message)
+	if err != nil {
+		return failedCheck("multi_project_handoff", err.Error())
+	}
+	downstreamFinal, err := dispatchAndCompleteSmokeHandoff(ctx, client, opts, workflowID, downstreamID, "downstream", message)
+	if err != nil {
+		return failedCheck("multi_project_handoff", err.Error())
+	}
+
+	finalView, err := callStructuredTool(ctx, client, "workflow_status", map[string]any{"workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("multi_project_handoff", err.Error())
+	}
+	finalStatus := nestedString(finalView, "workflow", "status")
+	if finalStatus != "completed" {
+		return failedCheck("multi_project_handoff", fmt.Sprintf("expected completed workflow after all handoffs complete, got status=%s", finalStatus))
+	}
+	finalStates := handoffStatesByID(finalView)
+	report.MultiProjectHandoffResult = &MultiProjectHandoffSmokeResult{
+		WorkflowID:           workflowID,
+		UpstreamHandoffID:    upstreamID,
+		MidstreamHandoffID:   midstreamID,
+		DownstreamHandoffID:  downstreamID,
+		BlockedStatus:        blockedStatus,
+		DownstreamBlocked:    true,
+		FinalStatus:          finalStatus,
+		UpstreamFinalState:   firstNonEmpty(finalStates[upstreamID], upstreamFinal),
+		MidstreamFinalState:  firstNonEmpty(finalStates[midstreamID], midstreamFinal),
+		DownstreamFinalState: firstNonEmpty(finalStates[downstreamID], downstreamFinal),
+	}
+	return CheckResult{Name: "multi_project_handoff", Status: checkStatusOK, Detail: fmt.Sprintf("workflow_id=%s final_status=%s", workflowID, finalStatus)}
+}
+
+func dispatchAndCompleteSmokeHandoff(ctx context.Context, client smokeMCPClient, opts Options, workflowID, handoffID, actorID, message string) (string, error) {
+	dispatch, err := callStructuredTool(ctx, client, "handoff_dispatch", map[string]any{
+		"handoff_id": handoffID,
+		"adapter":    "manual",
+		"target":     "agent:" + actorID,
+		"message":    message,
+	}, opts)
+	if err != nil {
+		return "", err
+	}
+	if nestedString(dispatch, "attempt", "id") == "" {
+		return "", errors.New("handoff_dispatch did not return attempt.id")
+	}
+	if !containsEventType(dispatch["events"], "transport_requested") {
+		return "", errors.New("handoff_dispatch did not include transport_requested event")
+	}
+	finalState := ""
+	for _, step := range []struct {
+		action string
+		state  string
+	}{
+		{action: "receive", state: "received"},
+		{action: "claim", state: "claimed"},
+		{action: "start", state: "started"},
+		{action: "checkpoint", state: "checkpointed"},
+		{action: "complete", state: "completed"},
+	} {
+		progress, err := callStructuredTool(ctx, client, "handoff_progress", map[string]any{
+			"action":      step.action,
+			"workflow_id": workflowID,
+			"handoff_id":  handoffID,
+			"actor":       map[string]any{"type": "agent", "id": actorID},
+		}, opts)
+		if err != nil {
+			return "", err
+		}
+		finalState = nestedString(progress, "handoff", "state")
+		if finalState != step.state {
+			return "", fmt.Errorf("handoff_progress %s expected state=%s, got state=%s", step.action, step.state, finalState)
+		}
+	}
+	return finalState, nil
+}
+
+func workflowContainsHandoffs(value map[string]any, ids ...string) bool {
+	states := handoffStatesByID(value)
+	for _, id := range ids {
+		if _, ok := states[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func handoffStatesByID(value map[string]any) map[string]string {
+	states := make(map[string]string)
+	rawHandoffs, ok := structuredValue(value, "handoffs")
+	if !ok {
+		return states
+	}
+	handoffs, ok := rawHandoffs.([]any)
+	if !ok {
+		return states
+	}
+	for _, handoff := range handoffs {
+		handoffMap, ok := handoff.(map[string]any)
+		if !ok {
+			continue
+		}
+		id := nestedString(handoffMap, "id")
+		if id == "" {
+			continue
+		}
+		states[id] = nestedString(handoffMap, "state")
+	}
+	return states
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
 func normalizedOpenClawDispatchTarget(target string) string {
 	target = strings.TrimSpace(target)
 	if target == "" {
@@ -529,10 +765,29 @@ func nestedString(value map[string]any, path ...string) string {
 		if !ok {
 			return ""
 		}
-		current = currentMap[key]
+		current, ok = structuredValue(currentMap, key)
+		if !ok {
+			return ""
+		}
 	}
 	text, _ := current.(string)
 	return strings.TrimSpace(text)
+}
+
+func structuredValue(value map[string]any, key string) (any, bool) {
+	if current, ok := value[key]; ok {
+		return current, true
+	}
+	if current, ok := value[strings.ToLower(key)]; ok {
+		return current, true
+	}
+	if key != "" {
+		titleKey := strings.ToUpper(key[:1]) + key[1:]
+		if current, ok := value[titleKey]; ok {
+			return current, true
+		}
+	}
+	return nil, false
 }
 
 func containsEventType(value any, eventType string) bool {

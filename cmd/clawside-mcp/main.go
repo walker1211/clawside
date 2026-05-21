@@ -177,7 +177,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	s := server.NewMCPServer("clawside", "0.1.0", server.WithToolCapabilities(false))
 
 	handoffCreateTool := mcp.NewTool("handoff_create",
-		mcp.WithDescription("Create a new handoff"),
+		mcp.WithDescription("Create a root workflow handoff, or append a handoff to an existing workflow when workflow_id is provided"),
 		mcp.WithInputSchema[toolserver.HandoffCreateInput](),
 		mcp.WithOutputSchema[toolserver.HandoffCreateOutput](),
 	)

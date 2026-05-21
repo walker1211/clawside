@@ -214,16 +214,22 @@ func runHandoffCreate(args []string, stdout, stderr io.Writer) error {
 	var intent string
 	var parentHandoffID string
 	var dependsOn string
+	var workflowID string
+	var payloadRef string
+	var deliveryTargetRef string
 	var required bool
 
 	fs.StringVar(&dbPath, "db", "", "sqlite db path")
 	fs.StringVar(&workflowKind, "workflow-kind", "", "workflow kind")
+	fs.StringVar(&workflowID, "workflow-id", "", "existing workflow id for appending a handoff")
 	fs.StringVar(&sender, "sender", "", "sender actor")
 	fs.StringVar(&receiver, "receiver", "", "receiver actor")
 	fs.StringVar(&taskKind, "task-kind", string(orchestrator.TaskGeneric), "task kind")
 	fs.StringVar(&intent, "intent", "", "intent")
 	fs.StringVar(&parentHandoffID, "parent-handoff-id", "", "parent handoff id")
 	fs.StringVar(&dependsOn, "depends-on", "", "depends on handoff ids")
+	fs.StringVar(&payloadRef, "payload-ref", "", "payload or project reference")
+	fs.StringVar(&deliveryTargetRef, "delivery-target-ref", "", "delivery target reference")
 	fs.BoolVar(&required, "required-for-workflow-completion", false, "required for workflow completion")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -252,7 +258,7 @@ func runHandoffCreate(args []string, stdout, stderr io.Writer) error {
 	if parentHandoffID != "" {
 		parent = &parentHandoffID
 	}
-	result, err := svc.CreateHandoff(context.Background(), orchestrator.CreateHandoffInput{
+	input := orchestrator.CreateHandoffInput{
 		WorkflowKind:                  workflowKind,
 		Sender:                        senderRef,
 		Receiver:                      receiverRef,
@@ -261,7 +267,15 @@ func runHandoffCreate(args []string, stdout, stderr io.Writer) error {
 		ParentHandoffID:               parent,
 		DependsOnHandoffIDs:           splitCSV(dependsOn),
 		RequiredForWorkflowCompletion: required,
-	})
+		PayloadRef:                    payloadRef,
+		DeliveryTargetRef:             deliveryTargetRef,
+	}
+	var result orchestrator.CreateHandoffResult
+	if workflowID == "" {
+		result, err = svc.CreateHandoff(context.Background(), input)
+	} else {
+		result, err = svc.AppendHandoff(context.Background(), orchestrator.AppendHandoffInput{WorkflowID: workflowID, Handoff: input})
+	}
 	if err != nil {
 		return err
 	}

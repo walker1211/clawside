@@ -28,14 +28,19 @@ type ActorRefInput struct {
 
 type HandoffCreateInput struct {
 	WorkflowKind                  string               `json:"workflow_kind"`
+	WorkflowID                    string               `json:"workflow_id,omitempty"`
 	Sender                        ActorRefInput        `json:"sender"`
 	Receiver                      ActorRefInput        `json:"receiver"`
 	Reviewer                      *ActorRefInput       `json:"reviewer,omitempty"`
 	TaskKind                      string               `json:"task_kind"`
 	Intent                        string               `json:"intent"`
+	ParentHandoffID               *string              `json:"parent_handoff_id,omitempty"`
+	DependsOnHandoffIDs           []string             `json:"depends_on_handoff_ids,omitempty"`
 	RequiredForWorkflowCompletion bool                 `json:"required_for_workflow_completion,omitempty"`
 	NeedsReview                   bool                 `json:"needs_review,omitempty"`
 	ArtifactPolicy                *ArtifactPolicyInput `json:"artifact_policy,omitempty"`
+	PayloadRef                    string               `json:"payload_ref,omitempty"`
+	DeliveryTargetRef             string               `json:"delivery_target_ref,omitempty"`
 }
 
 type ArtifactPolicyInput struct {
@@ -249,17 +254,28 @@ func (h *Handlers) HandleHandoffCreate(ctx context.Context, input HandoffCreateI
 			return HandoffCreateOutput{}, err
 		}
 	}
-	result, err := h.svc.CreateHandoff(ctx, orchestrator.CreateHandoffInput{
+	createInput := orchestrator.CreateHandoffInput{
 		WorkflowKind:                  strings.TrimSpace(input.WorkflowKind),
 		Sender:                        sender,
 		Receiver:                      receiver,
 		Reviewer:                      reviewer,
 		TaskKind:                      orchestrator.TaskKind(strings.TrimSpace(input.TaskKind)),
 		Intent:                        strings.TrimSpace(input.Intent),
+		ParentHandoffID:               trimOptionalString(input.ParentHandoffID),
+		DependsOnHandoffIDs:           trimStringSlice(input.DependsOnHandoffIDs),
 		RequiredForWorkflowCompletion: input.RequiredForWorkflowCompletion,
 		NeedsReview:                   input.NeedsReview,
 		ArtifactPolicy:                toArtifactPolicy(input.ArtifactPolicy),
-	})
+		PayloadRef:                    strings.TrimSpace(input.PayloadRef),
+		DeliveryTargetRef:             strings.TrimSpace(input.DeliveryTargetRef),
+	}
+	var result orchestrator.CreateHandoffResult
+	workflowID := strings.TrimSpace(input.WorkflowID)
+	if workflowID == "" {
+		result, err = h.svc.CreateHandoff(ctx, createInput)
+	} else {
+		result, err = h.svc.AppendHandoff(ctx, orchestrator.AppendHandoffInput{WorkflowID: workflowID, Handoff: createInput})
+	}
 	if err != nil {
 		return HandoffCreateOutput{}, err
 	}
@@ -665,6 +681,22 @@ func optionalTime(input *string) (*time.Time, error) {
 		return nil, err
 	}
 	return &parsed, nil
+}
+
+func trimOptionalString(input *string) *string {
+	if input == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*input)
+	return &trimmed
+}
+
+func trimStringSlice(values []string) []string {
+	trimmed := make([]string, 0, len(values))
+	for _, value := range values {
+		trimmed = append(trimmed, strings.TrimSpace(value))
+	}
+	return trimmed
 }
 
 func requireHandoffID(raw string) (string, error) {

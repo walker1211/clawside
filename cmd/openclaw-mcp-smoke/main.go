@@ -44,6 +44,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.StringVar(&defaults.RegistrationConfigPath, "registration-config", defaults.RegistrationConfigPath, "read-only JSON MCP registration config to inspect for safe command, args, and env; never writes config")
 	fs.BoolVar(&defaults.SkipRegistrationCheck, "skip-registration-check", false, "skip read-only MCP registration readiness check")
 	fs.BoolVar(&defaults.OpenClawDispatchSmoke, "openclaw-dispatch-smoke", false, "run an OpenClaw handoff_dispatch smoke through the configured MCP OpenClaw command")
+	fs.BoolVar(&defaults.MultiProjectHandoffSmoke, "multi-project-handoff-smoke", false, "run a multi-project upstream/downstream handoff dependency smoke through MCP")
 	fs.StringVar(&defaults.OpenClawCommand, "openclaw-command", defaults.OpenClawCommand, "server-authorized OpenClaw dispatch command passed to clawside-mcp")
 	fs.Var(&openClawArgs, "openclaw-arg", "argument for the configured OpenClaw dispatch command; repeat for multiple args")
 	fs.StringVar(&defaults.OpenClawTarget, "openclaw-target", defaults.OpenClawTarget, "OpenClaw dispatch target for --openclaw-dispatch-smoke; accepts agent:<id> or <id>")

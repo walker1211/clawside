@@ -59,6 +59,62 @@ func TestHandleHandoffCreateCanRequireWorkflowCompletion(t *testing.T) {
 	}
 }
 
+func TestHandleHandoffCreateAppendsToExistingWorkflow(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	root, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind:                  "multi_project",
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "upstream"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "prepare upstream project",
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    "project://upstream",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate(root): %v", err)
+	}
+	parentID := root.Handoff.ID
+
+	appended, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowID:                    root.Workflow.ID,
+		ParentHandoffID:               &parentID,
+		DependsOnHandoffIDs:           []string{root.Handoff.ID},
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "upstream"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "downstream"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "consume upstream output",
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    "project://downstream",
+		DeliveryTargetRef:             "agent:downstream",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate(append): %v", err)
+	}
+	if appended.Workflow.ID != root.Workflow.ID || appended.Handoff.WorkflowID != root.Workflow.ID {
+		t.Fatalf("expected appended handoff in workflow %s, got workflow=%s handoff.workflow=%s", root.Workflow.ID, appended.Workflow.ID, appended.Handoff.WorkflowID)
+	}
+	if appended.Handoff.ParentHandoffID == nil || *appended.Handoff.ParentHandoffID != root.Handoff.ID {
+		t.Fatalf("expected parent %s, got %+v", root.Handoff.ID, appended.Handoff.ParentHandoffID)
+	}
+	if len(appended.Handoff.DependsOnHandoffIDs) != 1 || appended.Handoff.DependsOnHandoffIDs[0] != root.Handoff.ID {
+		t.Fatalf("expected dependency %s, got %+v", root.Handoff.ID, appended.Handoff.DependsOnHandoffIDs)
+	}
+	if appended.Handoff.PayloadRef != "project://downstream" || appended.Handoff.DeliveryTargetRef != "agent:downstream" {
+		t.Fatalf("expected refs to be persisted, got payload=%q delivery=%q", appended.Handoff.PayloadRef, appended.Handoff.DeliveryTargetRef)
+	}
+
+	view, err := h.HandleWorkflowStatus(context.Background(), WorkflowStatusInput{WorkflowID: root.Workflow.ID})
+	if err != nil {
+		t.Fatalf("HandleWorkflowStatus: %v", err)
+	}
+	if len(view.Handoffs) != 2 {
+		t.Fatalf("expected 2 handoffs, got %d", len(view.Handoffs))
+	}
+	if view.Workflow.Status != orchestrator.WorkflowBlocked {
+		t.Fatalf("expected blocked workflow, got %s", view.Workflow.Status)
+	}
+}
+
 func TestHandleHandoffGetReturnsTimeline(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
