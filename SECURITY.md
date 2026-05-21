@@ -8,4 +8,4 @@ If private reporting is not enabled, open a minimal public issue asking for a pr
 
 ## Supported versions
 
-Security fixes target the current `main` branch until versioned releases are published.
+Security fixes target the latest published release and the current `main` branch.

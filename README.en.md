@@ -241,6 +241,8 @@ curl "http://127.0.0.1:8787/jobs?status=pending&limit=20"
 curl http://127.0.0.1:8787/jobs/<job_id>
 ```
 
+`/jobs` and MCP `sender_job_list` use sender-internal status names: `pending`, `sending`, `retry`, `failed`, and `sent`. `retrying` in A2A bridge output is a delivery-result semantic status that maps to sender `pending` / `sending` / `retry` queue states.
+
 ## OpenClaw MCP / tool server
 
 This section summarizes the v1 tool contract, startup path, and invocation boundaries.
