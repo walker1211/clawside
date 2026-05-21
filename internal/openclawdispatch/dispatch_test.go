@@ -73,6 +73,18 @@ func TestDispatchAgentModeUsesOpenClawAgentFlags(t *testing.T) {
 	}
 }
 
+func TestDispatchExtractsRealOpenClawCamelCaseRunID(t *testing.T) {
+	runner := &fakeRunner{stdout: []byte(`{"runId":"openclaw-run-123","status":"ok","result":{"meta":{"agentMeta":{"sessionId":"openclaw-session-456"}}}}`)}
+
+	result, err := Dispatch(context.Background(), runner, Options{OpenClawCommand: "openclaw", Mode: ModeAgent}, orchestrator.DispatchRequest{Target: "agent:main", Message: "smoke"})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.Status != orchestrator.TransportAccepted || result.ExternalID != "openclaw-run-123" {
+		t.Fatalf("expected accepted run id, got %+v", result)
+	}
+}
+
 func TestDispatchSendModeUsesSessionsSend(t *testing.T) {
 	runner := &fakeRunner{stdout: []byte(`{"external_id":"openclaw-run-456"}`)}
 

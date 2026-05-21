@@ -610,7 +610,7 @@ func TestCheckOpenClawDispatchRunsTruthPlaneLoop(t *testing.T) {
 	}}
 	report := Report{Status: reportStatusOK}
 
-	check := checkOpenClawDispatch(context.Background(), client, &report, Options{OpenClawDispatchSmoke: true, Text: "dispatch task"})
+	check := checkOpenClawDispatch(context.Background(), client, &report, Options{OpenClawDispatchSmoke: true, OpenClawTarget: "agent:main", Text: "dispatch task"})
 
 	if check.Status != checkStatusOK {
 		t.Fatalf("expected openclaw dispatch check ok, got %+v", check)
@@ -634,8 +634,16 @@ func TestCheckOpenClawDispatchRunsTruthPlaneLoop(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected dispatch args map, got %+v", client.calls[1].Params.Arguments)
 	}
-	if dispatchArgs["adapter"] != "openclaw" || dispatchArgs["target"] != "agent:openclaw-smoke" || dispatchArgs["message"] != "dispatch task" {
+	if dispatchArgs["adapter"] != "openclaw" || dispatchArgs["target"] != "agent:main" || dispatchArgs["message"] != "dispatch task" {
 		t.Fatalf("unexpected dispatch args: %+v", dispatchArgs)
+	}
+	progressArgs, ok := client.calls[3].Params.Arguments.(map[string]any)
+	if !ok {
+		t.Fatalf("expected progress args map, got %+v", client.calls[3].Params.Arguments)
+	}
+	actor, ok := progressArgs["actor"].(map[string]any)
+	if !ok || actor["id"] != "main" {
+		t.Fatalf("expected progress actor main, got %+v", progressArgs["actor"])
 	}
 	if _, ok := dispatchArgs["command"]; ok {
 		t.Fatalf("dispatch smoke must not pass caller command: %+v", dispatchArgs)

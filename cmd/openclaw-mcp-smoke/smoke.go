@@ -49,6 +49,7 @@ type Options struct {
 	OpenClawDispatchSmoke                    bool
 	OpenClawCommand                          string
 	OpenClawArgs                             []string
+	OpenClawTarget                           string
 	DeliverMain                              bool
 	IncludeOpenClawToolCallChecklist         bool
 	OpenClawFixtureDir                       string
@@ -393,10 +394,12 @@ func checkOpenClawDispatch(ctx context.Context, client smokeMCPClient, report *R
 	if message == "" {
 		message = "OpenClaw dispatch smoke test"
 	}
+	target := normalizedOpenClawDispatchTarget(opts.OpenClawTarget)
+	actorID := openClawDispatchActorID(target)
 	create, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
 		"workflow_kind": "openclaw_dispatch_smoke",
 		"sender":        map[string]any{"type": "system", "id": "openclaw-mcp-smoke"},
-		"receiver":      map[string]any{"type": "agent", "id": "openclaw-smoke"},
+		"receiver":      map[string]any{"type": "agent", "id": actorID},
 		"task_kind":     "generic_task",
 		"intent":        message,
 	}, opts)
@@ -411,7 +414,7 @@ func checkOpenClawDispatch(ctx context.Context, client smokeMCPClient, report *R
 	dispatch, err := callStructuredTool(ctx, client, "handoff_dispatch", map[string]any{
 		"handoff_id": handoffID,
 		"adapter":    "openclaw",
-		"target":     "agent:openclaw-smoke",
+		"target":     target,
 		"message":    message,
 	}, opts)
 	if err != nil {
@@ -449,7 +452,7 @@ func checkOpenClawDispatch(ctx context.Context, client smokeMCPClient, report *R
 			"action":      step.action,
 			"workflow_id": workflowID,
 			"handoff_id":  handoffID,
-			"actor":       map[string]any{"type": "agent", "id": "openclaw-smoke"},
+			"actor":       map[string]any{"type": "agent", "id": actorID},
 		}, opts)
 		if err != nil {
 			return failedCheck("openclaw_dispatch", err.Error())
@@ -469,6 +472,25 @@ func checkOpenClawDispatch(ctx context.Context, client smokeMCPClient, report *R
 		FinalState:   finalState,
 	}
 	return CheckResult{Name: "openclaw_dispatch", Status: checkStatusOK, Detail: fmt.Sprintf("external_id=%s final_state=%s", externalID, finalState)}
+}
+
+func normalizedOpenClawDispatchTarget(target string) string {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "agent:openclaw-smoke"
+	}
+	if !strings.Contains(target, ":") {
+		return "agent:" + target
+	}
+	return target
+}
+
+func openClawDispatchActorID(target string) string {
+	actorID := strings.TrimSpace(strings.TrimPrefix(target, "agent:"))
+	if actorID == "" {
+		return "openclaw-smoke"
+	}
+	return actorID
 }
 
 func callStructuredTool(ctx context.Context, client smokeMCPClient, name string, arguments map[string]any, opts Options) (map[string]any, error) {

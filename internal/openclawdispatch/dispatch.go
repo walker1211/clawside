@@ -127,7 +127,7 @@ func extractIDFromValue(value any) string {
 	case string:
 		return typed
 	case map[string]any:
-		for _, key := range []string{"external_id", "session_id", "run_id", "task_id", "id"} {
+		for _, key := range []string{"external_id", "externalId", "session_id", "sessionId", "run_id", "runId", "task_id", "taskId", "id"} {
 			if raw, ok := typed[key]; ok {
 				if id := extractIDFromValue(raw); id != "" {
 					return id

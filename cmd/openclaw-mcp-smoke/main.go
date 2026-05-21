@@ -46,6 +46,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&defaults.OpenClawDispatchSmoke, "openclaw-dispatch-smoke", false, "run an OpenClaw handoff_dispatch smoke through the configured MCP OpenClaw command")
 	fs.StringVar(&defaults.OpenClawCommand, "openclaw-command", defaults.OpenClawCommand, "server-authorized OpenClaw dispatch command passed to clawside-mcp")
 	fs.Var(&openClawArgs, "openclaw-arg", "argument for the configured OpenClaw dispatch command; repeat for multiple args")
+	fs.StringVar(&defaults.OpenClawTarget, "openclaw-target", defaults.OpenClawTarget, "OpenClaw dispatch target for --openclaw-dispatch-smoke; accepts agent:<id> or <id>")
 	fs.BoolVar(&defaults.IncludeOpenClawToolCallChecklist, "openclaw-tool-call-checklist", false, "include OpenClaw-side read-only tool call checklist")
 	fs.StringVar(&defaults.OpenClawToolResultsPath, "openclaw-tool-results", defaults.OpenClawToolResultsPath, "read-only JSON file containing OpenClaw-side tool results to validate")
 	fs.StringVar(&defaults.OpenClawTruthPlaneResultsPath, "openclaw-truth-plane-results", defaults.OpenClawTruthPlaneResultsPath, "read-only JSON file containing OpenClaw-side truth-plane results to validate")
