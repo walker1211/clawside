@@ -234,6 +234,42 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return mcp.NewToolResultStructured(toolserver.WorkflowListOutput{Workflows: views}, "Listed workflows"), nil
 	}))
 
+	agentRegisterTool := mcp.NewTool("agent_register",
+		mcp.WithDescription("Register or update an agent's coordination capabilities"),
+		mcp.WithInputSchema[toolserver.AgentRegisterInput](),
+		mcp.WithOutputSchema[toolserver.AgentRegisterOutput](),
+	)
+	s.AddTool(agentRegisterTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.AgentRegisterInput) (toolserver.AgentRegisterOutput, error) {
+		return handlers.HandleAgentRegister(ctx, args)
+	}))
+
+	agentListTool := mcp.NewTool("agent_list",
+		mcp.WithDescription("List registered agents by capability, project ref, task kind, or status"),
+		mcp.WithInputSchema[toolserver.AgentListInput](),
+		mcp.WithOutputSchema[toolserver.AgentListOutput](),
+	)
+	s.AddTool(agentListTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.AgentListInput) (toolserver.AgentListOutput, error) {
+		return handlers.HandleAgentList(ctx, args)
+	}))
+
+	nextWorkTool := mcp.NewTool("next_work",
+		mcp.WithDescription("List executable handoffs for an agent or work filter"),
+		mcp.WithInputSchema[toolserver.WorkQueryInput](),
+		mcp.WithOutputSchema[toolserver.NextWorkOutput](),
+	)
+	s.AddTool(nextWorkTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.WorkQueryInput) (toolserver.NextWorkOutput, error) {
+		return handlers.HandleNextWork(ctx, args)
+	}))
+
+	blockedWorkTool := mcp.NewTool("blocked_work",
+		mcp.WithDescription("List blocked handoffs with deterministic reasons and suggestions"),
+		mcp.WithInputSchema[toolserver.WorkQueryInput](),
+		mcp.WithOutputSchema[toolserver.BlockedWorkOutput](),
+	)
+	s.AddTool(blockedWorkTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.WorkQueryInput) (toolserver.BlockedWorkOutput, error) {
+		return handlers.HandleBlockedWork(ctx, args)
+	}))
+
 	watchListTool := mcp.NewTool("watch_list",
 		mcp.WithDescription("List watches for a handoff"),
 		mcp.WithInputSchema[toolserver.WatchListInput](),

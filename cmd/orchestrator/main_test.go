@@ -37,6 +37,77 @@ func TestRunCreateHandoffPrintsJSON(t *testing.T) {
 	}
 }
 
+func TestRunAgentRegisterListAndWorkNext(t *testing.T) {
+	dbPath, created := seedTestHandoff(t)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	if err := run([]string{
+		"agent", "register",
+		"--db", dbPath,
+		"--actor", "agent:writer",
+		"--capabilities", "writing,go",
+		"--project-refs", "project://draft",
+		"--task-kinds", "generic_task",
+		"--delivery-target-ref", "agent:writer",
+	}, stdout, stderr); err != nil {
+		t.Fatalf("run agent register: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"id": "writer"`) || !strings.Contains(stdout.String(), `"status": "available"`) {
+		t.Fatalf("expected writer registration JSON, got %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := run([]string{
+		"agent", "list",
+		"--db", dbPath,
+		"--capability", "writing",
+		"--task-kind", "generic_task",
+		"--status", "available",
+	}, stdout, stderr); err != nil {
+		t.Fatalf("run agent list: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"id": "writer"`) {
+		t.Fatalf("expected writer in agent list, got %s", stdout.String())
+	}
+
+	stdout.Reset()
+	if err := run([]string{"work", "next", "--db", dbPath, "--agent-id", "writer"}, stdout, stderr); err != nil {
+		t.Fatalf("run work next: %v", err)
+	}
+	if !strings.Contains(stdout.String(), created.Handoff.ID) {
+		t.Fatalf("expected handoff %s in next work JSON, got %s", created.Handoff.ID, stdout.String())
+	}
+}
+
+func TestRunWorkBlockedPrintsDependencyReason(t *testing.T) {
+	dbPath, root := seedTestHandoff(t)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	if err := run([]string{
+		"handoff", "create",
+		"--db", dbPath,
+		"--workflow-id", root.Workflow.ID,
+		"--sender", "agent:writer",
+		"--receiver", "agent:engineer",
+		"--task-kind", "generic_task",
+		"--intent", "consume upstream output",
+		"--depends-on", root.Handoff.ID,
+		"--required-for-workflow-completion", "true",
+	}, stdout, stderr); err != nil {
+		t.Fatalf("run downstream create: %v", err)
+	}
+
+	stdout.Reset()
+	if err := run([]string{"work", "blocked", "--db", dbPath, "--agent-id", "engineer"}, stdout, stderr); err != nil {
+		t.Fatalf("run work blocked: %v", err)
+	}
+	if !strings.Contains(stdout.String(), `"code": "dependency_incomplete"`) || !strings.Contains(stdout.String(), root.Handoff.ID) {
+		t.Fatalf("expected dependency reason for %s, got %s", root.Handoff.ID, stdout.String())
+	}
+}
+
 func TestRunCreateHandoffAppendsExistingWorkflow(t *testing.T) {
 	dbPath, root := seedTestHandoff(t)
 	stdout := new(bytes.Buffer)

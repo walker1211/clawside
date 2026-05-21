@@ -195,6 +195,63 @@ type ObserverHint struct {
 	CreatedAt  time.Time      `json:"created_at"`
 }
 
+type AgentRegistration struct {
+	Actor             ActorRef   `json:"actor"`
+	Capabilities      []string   `json:"capabilities,omitempty"`
+	ProjectRefs       []string   `json:"project_refs,omitempty"`
+	TaskKinds         []TaskKind `json:"task_kinds,omitempty"`
+	DeliveryTargetRef string     `json:"delivery_target_ref,omitempty"`
+	Status            string     `json:"status"`
+	LastHeartbeatAt   *time.Time `json:"last_heartbeat_at,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+type AgentListFilter struct {
+	Capability string
+	ProjectRef string
+	TaskKind   TaskKind
+	Status     string
+}
+
+type WorkQuery struct {
+	AgentID    string   `json:"agent_id,omitempty"`
+	Capability string   `json:"capability,omitempty"`
+	ProjectRef string   `json:"project_ref,omitempty"`
+	WorkflowID string   `json:"workflow_id,omitempty"`
+	TaskKind   TaskKind `json:"task_kind,omitempty"`
+	Limit      int      `json:"limit,omitempty"`
+}
+
+type WorkItem struct {
+	Workflow    Workflow           `json:"workflow"`
+	Handoff     Handoff            `json:"handoff"`
+	ActiveWatch *Watch             `json:"active_watch,omitempty"`
+	Suggestions []ActionSuggestion `json:"suggestions,omitempty"`
+}
+
+type BlockedWorkItem struct {
+	Workflow    Workflow           `json:"workflow"`
+	Handoff     Handoff            `json:"handoff"`
+	Reasons     []WorkBlockReason  `json:"reasons"`
+	Suggestions []ActionSuggestion `json:"suggestions,omitempty"`
+}
+
+type WorkBlockReason struct {
+	Code                string `json:"code"`
+	Detail              string `json:"detail,omitempty"`
+	DependencyHandoffID string `json:"dependency_handoff_id,omitempty"`
+	WatchID             string `json:"watch_id,omitempty"`
+}
+
+type ActionSuggestion struct {
+	Code           string   `json:"code"`
+	Summary        string   `json:"summary,omitempty"`
+	SuggestedActor ActorRef `json:"suggested_actor,omitempty"`
+	Source         string   `json:"source,omitempty"`
+	WatchID        string   `json:"watch_id,omitempty"`
+}
+
 type Handoff struct {
 	ID                            string         `json:"id"`
 	WorkflowID                    string         `json:"workflow_id"`

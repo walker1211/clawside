@@ -16,6 +16,96 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func TestHandleAgentRegisterListAndNextWork(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	ctx := context.Background()
+
+	registered, err := h.HandleAgentRegister(ctx, AgentRegisterInput{
+		Actor:             ActorRefInput{Type: string(orchestrator.ActorAgent), ID: " worker ", Address: " agent:worker "},
+		Capabilities:      []string{" planning ", "go"},
+		ProjectRefs:       []string{" project://alpha "},
+		TaskKinds:         []string{string(orchestrator.TaskGeneric)},
+		DeliveryTargetRef: " agent:worker ",
+	})
+	if err != nil {
+		t.Fatalf("HandleAgentRegister: %v", err)
+	}
+	if registered.Agent.Actor.ID != "worker" || registered.Agent.Actor.Address != "agent:worker" {
+		t.Fatalf("expected trimmed worker registration, got %+v", registered.Agent)
+	}
+
+	listed, err := h.HandleAgentList(ctx, AgentListInput{Capability: " planning ", ProjectRef: " project://alpha ", TaskKind: string(orchestrator.TaskGeneric), Status: " available "})
+	if err != nil {
+		t.Fatalf("HandleAgentList: %v", err)
+	}
+	if len(listed.Agents) != 1 || listed.Agents[0].Actor.ID != "worker" {
+		t.Fatalf("expected worker in agent list, got %+v", listed.Agents)
+	}
+
+	created, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
+		WorkflowKind:                  "generic",
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "worker"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "draft alpha",
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    "project://alpha",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	next, err := h.HandleNextWork(ctx, WorkQueryInput{AgentID: " worker "})
+	if err != nil {
+		t.Fatalf("HandleNextWork: %v", err)
+	}
+	if len(next.Items) != 1 || next.Items[0].Handoff.ID != created.Handoff.ID {
+		t.Fatalf("expected created handoff in next work, got %+v", next.Items)
+	}
+}
+
+func TestHandleBlockedWorkReportsDependencyReason(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	ctx := context.Background()
+
+	root, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
+		WorkflowKind:                  "multi_project",
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "upstream"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "prepare upstream project",
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    "project://upstream",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate(root): %v", err)
+	}
+	downstream, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
+		WorkflowID:                    root.Workflow.ID,
+		DependsOnHandoffIDs:           []string{root.Handoff.ID},
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "upstream"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "downstream"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "consume upstream output",
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    "project://downstream",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate(downstream): %v", err)
+	}
+
+	blocked, err := h.HandleBlockedWork(ctx, WorkQueryInput{AgentID: "downstream"})
+	if err != nil {
+		t.Fatalf("HandleBlockedWork: %v", err)
+	}
+	if len(blocked.Items) != 1 || blocked.Items[0].Handoff.ID != downstream.Handoff.ID {
+		t.Fatalf("expected downstream blocked work, got %+v", blocked.Items)
+	}
+	if len(blocked.Items[0].Reasons) != 1 || blocked.Items[0].Reasons[0].Code != "dependency_incomplete" || blocked.Items[0].Reasons[0].DependencyHandoffID != root.Handoff.ID {
+		t.Fatalf("expected dependency reason, got %+v", blocked.Items[0].Reasons)
+	}
+}
+
 func TestHandleHandoffCreateCreatesWorkflowAndHandoff(t *testing.T) {
 	h := newTestHandlers(t, nil)
 

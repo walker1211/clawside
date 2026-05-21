@@ -12,6 +12,7 @@ REGISTRATION_CONFIG_PATH=""
 SKIP_REGISTRATION_CHECK="false"
 OPENCLAW_DISPATCH_SMOKE="false"
 MULTI_PROJECT_HANDOFF_SMOKE="false"
+MULTI_AGENT_COORDINATION_SMOKE="false"
 OPENCLAW_COMMAND_VALUE=""
 OPENCLAW_ARGS_VALUES=""
 OPENCLAW_TOOL_CALL_CHECKLIST="false"
@@ -53,6 +54,8 @@ usage() {
   printf '                             Run handoff_dispatch adapter=openclaw smoke through MCP\n'
   printf '  --multi-project-handoff-smoke\n'
   printf '                             Run multi-project upstream/downstream handoff dependency smoke through MCP\n'
+  printf '  --multi-agent-coordination-smoke\n'
+  printf '                             Run agent registry, next_work, blocked_work, and watch suggestion smoke through MCP\n'
   printf '  --openclaw-command COMMAND  Server-authorized OpenClaw dispatch command passed to clawside-mcp\n'
   printf '  --openclaw-arg ARG          Argument for the configured OpenClaw dispatch command; repeat for multiple args\n'
   printf '  --openclaw-tool-call-checklist\n'
@@ -151,6 +154,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --multi-project-handoff-smoke)
       MULTI_PROJECT_HANDOFF_SMOKE="true"
+      shift
+      ;;
+    --multi-agent-coordination-smoke)
+      MULTI_AGENT_COORDINATION_SMOKE="true"
       shift
       ;;
     --openclaw-command)
@@ -335,6 +342,9 @@ run_smoke() {
   fi
   if [[ "$MULTI_PROJECT_HANDOFF_SMOKE" == "true" ]]; then
     set -- "$@" --multi-project-handoff-smoke
+  fi
+  if [[ "$MULTI_AGENT_COORDINATION_SMOKE" == "true" ]]; then
+    set -- "$@" --multi-agent-coordination-smoke
   fi
   if [[ -n "$OPENCLAW_COMMAND_VALUE" ]]; then
     set -- "$@" --openclaw-command "$OPENCLAW_COMMAND_VALUE"

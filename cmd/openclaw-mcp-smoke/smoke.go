@@ -48,6 +48,7 @@ type Options struct {
 	SkipRegistrationCheck                    bool
 	OpenClawDispatchSmoke                    bool
 	MultiProjectHandoffSmoke                 bool
+	MultiAgentCoordinationSmoke              bool
 	OpenClawCommand                          string
 	OpenClawArgs                             []string
 	OpenClawTarget                           string
@@ -74,6 +75,10 @@ var expectedV1Tools = []string{
 	"handoff_progress",
 	"workflow_status",
 	"workflow_list",
+	"agent_register",
+	"agent_list",
+	"next_work",
+	"blocked_work",
 	"watch_list",
 	"watch_run",
 	"watch_update",
@@ -95,15 +100,16 @@ var expectedV1Tools = []string{
 }
 
 type Report struct {
-	Status                    string                           `json:"status"`
-	Profile                   string                           `json:"profile,omitempty"`
-	Checks                    []CheckResult                    `json:"checks"`
-	Tools                     []string                         `json:"tools"`
-	DeliveryResult            *a2adelivery.DeliveryResult      `json:"delivery_result,omitempty"`
-	OpenClawDispatchResult    *OpenClawDispatchSmokeResult     `json:"openclaw_dispatch_result,omitempty"`
-	MultiProjectHandoffResult *MultiProjectHandoffSmokeResult  `json:"multi_project_handoff_result,omitempty"`
-	OpenClawToolCallChecklist []OpenClawToolCallChecklistEntry `json:"openclaw_tool_call_checklist,omitempty"`
-	Registration              RegistrationGuidance             `json:"registration"`
+	Status                       string                             `json:"status"`
+	Profile                      string                             `json:"profile,omitempty"`
+	Checks                       []CheckResult                      `json:"checks"`
+	Tools                        []string                           `json:"tools"`
+	DeliveryResult               *a2adelivery.DeliveryResult        `json:"delivery_result,omitempty"`
+	OpenClawDispatchResult       *OpenClawDispatchSmokeResult       `json:"openclaw_dispatch_result,omitempty"`
+	MultiProjectHandoffResult    *MultiProjectHandoffSmokeResult    `json:"multi_project_handoff_result,omitempty"`
+	MultiAgentCoordinationResult *MultiAgentCoordinationSmokeResult `json:"multi_agent_coordination_result,omitempty"`
+	OpenClawToolCallChecklist    []OpenClawToolCallChecklistEntry   `json:"openclaw_tool_call_checklist,omitempty"`
+	Registration                 RegistrationGuidance               `json:"registration"`
 }
 
 type OpenClawDispatchSmokeResult struct {
@@ -127,6 +133,19 @@ type MultiProjectHandoffSmokeResult struct {
 	UpstreamFinalState   string `json:"upstream_final_state"`
 	MidstreamFinalState  string `json:"midstream_final_state"`
 	DownstreamFinalState string `json:"downstream_final_state"`
+}
+
+type MultiAgentCoordinationSmokeResult struct {
+	WorkflowID            string `json:"workflow_id"`
+	UpstreamHandoffID     string `json:"upstream_handoff_id"`
+	DownstreamHandoffID   string `json:"downstream_handoff_id"`
+	WatchWorkflowID       string `json:"watch_workflow_id"`
+	WatchHandoffID        string `json:"watch_handoff_id"`
+	WatchID               string `json:"watch_id"`
+	DependencyReason      string `json:"dependency_reason"`
+	DownstreamReady       bool   `json:"downstream_ready"`
+	WatchSuggestion       string `json:"watch_suggestion"`
+	RegisteredAgentStatus string `json:"registered_agent_status"`
 }
 
 func (r *Report) addCheck(check CheckResult) {
@@ -335,6 +354,9 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	}
 	if opts.MultiProjectHandoffSmoke {
 		report.addCheck(checkMultiProjectHandoff(ctx, mcpClient, &report, opts))
+	}
+	if opts.MultiAgentCoordinationSmoke {
+		report.addCheck(checkMultiAgentCoordination(ctx, mcpClient, &report, opts))
 	}
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
@@ -623,6 +645,172 @@ func checkMultiProjectHandoff(ctx context.Context, client smokeMCPClient, report
 	return CheckResult{Name: "multi_project_handoff", Status: checkStatusOK, Detail: fmt.Sprintf("workflow_id=%s final_status=%s", workflowID, finalStatus)}
 }
 
+func checkMultiAgentCoordination(ctx context.Context, client smokeMCPClient, report *Report, opts Options) CheckResult {
+	if client == nil {
+		return failedCheck("multi_agent_coordination", "mcp client is not initialized; configure --mcp-command before using --multi-agent-coordination-smoke")
+	}
+	message := strings.TrimSpace(opts.Text)
+	if message == "" {
+		message = "Multi-agent coordination smoke test"
+	}
+	for _, agent := range []struct {
+		id          string
+		projectRefs []string
+	}{
+		{id: "upstream", projectRefs: []string{"project://smoke/coordination/upstream"}},
+		{id: "downstream", projectRefs: []string{"project://smoke/coordination/downstream", "project://smoke/coordination/watch"}},
+		{id: "reviewer", projectRefs: []string{"project://smoke/coordination/review"}},
+	} {
+		if err := registerSmokeAgent(ctx, client, opts, agent.id, agent.projectRefs); err != nil {
+			return failedCheck("multi_agent_coordination", err.Error())
+		}
+	}
+	agents, err := callStructuredTool(ctx, client, "agent_list", map[string]any{
+		"capability": "coordination",
+		"task_kind":  "generic_task",
+		"status":     "available",
+	}, opts)
+	if err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	if !agentsContainID(agents, "downstream") {
+		return failedCheck("multi_agent_coordination", "agent_list did not return the downstream agent")
+	}
+
+	upstream, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_kind":                    "multi_agent_coordination_smoke",
+		"sender":                           map[string]any{"type": "system", "id": "openclaw-mcp-smoke"},
+		"receiver":                         map[string]any{"type": "agent", "id": "upstream"},
+		"task_kind":                        "generic_task",
+		"intent":                           message + ": upstream work",
+		"required_for_workflow_completion": true,
+		"payload_ref":                      "project://smoke/coordination/upstream",
+		"delivery_target_ref":              "agent:upstream",
+	}, opts)
+	if err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	workflowID := nestedString(upstream, "workflow", "id")
+	upstreamID := nestedString(upstream, "handoff", "id")
+	if workflowID == "" || upstreamID == "" {
+		return failedCheck("multi_agent_coordination", "upstream handoff_create did not return workflow.id and handoff.id")
+	}
+
+	downstream, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_id":                      workflowID,
+		"workflow_kind":                    "multi_agent_coordination_smoke",
+		"sender":                           map[string]any{"type": "agent", "id": "upstream"},
+		"receiver":                         map[string]any{"type": "agent", "id": "downstream"},
+		"task_kind":                        "generic_task",
+		"intent":                           message + ": downstream work",
+		"parent_handoff_id":                upstreamID,
+		"depends_on_handoff_ids":           []string{upstreamID},
+		"required_for_workflow_completion": true,
+		"payload_ref":                      "project://smoke/coordination/downstream",
+		"delivery_target_ref":              "agent:downstream",
+	}, opts)
+	if err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	downstreamID := nestedString(downstream, "handoff", "id")
+	if nestedString(downstream, "workflow", "id") != workflowID || downstreamID == "" {
+		return failedCheck("multi_agent_coordination", "downstream handoff_create did not append to the upstream workflow")
+	}
+
+	upstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "upstream", "workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	if !workItemsContainHandoff(upstreamNext, upstreamID) {
+		return failedCheck("multi_agent_coordination", "next_work did not return the upstream handoff")
+	}
+	blocked, err := callStructuredTool(ctx, client, "blocked_work", map[string]any{"agent_id": "downstream", "workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	dependencyReason := blockedWorkReasonCode(blocked, downstreamID, "dependency_incomplete", upstreamID)
+	if dependencyReason == "" {
+		return failedCheck("multi_agent_coordination", "blocked_work did not report downstream dependency_incomplete")
+	}
+
+	if _, err := dispatchAndCompleteSmokeHandoff(ctx, client, opts, workflowID, upstreamID, "upstream", message); err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	downstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "downstream", "workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	downstreamReady := workItemsContainHandoff(downstreamNext, downstreamID)
+	if !downstreamReady {
+		return failedCheck("multi_agent_coordination", "next_work did not return downstream after upstream completion")
+	}
+
+	stalled, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_kind":                    "multi_agent_coordination_smoke",
+		"sender":                           map[string]any{"type": "system", "id": "openclaw-mcp-smoke"},
+		"receiver":                         map[string]any{"type": "agent", "id": "downstream"},
+		"task_kind":                        "generic_task",
+		"intent":                           message + ": stalled watch",
+		"required_for_workflow_completion": true,
+		"payload_ref":                      "project://smoke/coordination/watch",
+		"delivery_target_ref":              "agent:downstream",
+	}, opts)
+	if err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	watchWorkflowID := nestedString(stalled, "workflow", "id")
+	watchHandoffID := nestedString(stalled, "handoff", "id")
+	watchID := watchIDByType(stalled, "wait_for_received")
+	if watchWorkflowID == "" || watchHandoffID == "" || watchID == "" {
+		return failedCheck("multi_agent_coordination", "stalled handoff_create did not return workflow.id, handoff.id, and wait_for_received watch")
+	}
+	if _, err := callStructuredTool(ctx, client, "watch_update", map[string]any{"watch_id": watchID, "deadline_at": "2000-01-01T00:00:00Z"}, opts); err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	if _, err := callStructuredTool(ctx, client, "watch_run", map[string]any{"now": "2000-01-01T00:00:01Z"}, opts); err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	watchBlocked, err := callStructuredTool(ctx, client, "blocked_work", map[string]any{"agent_id": "downstream", "workflow_id": watchWorkflowID}, opts)
+	if err != nil {
+		return failedCheck("multi_agent_coordination", err.Error())
+	}
+	watchSuggestion := blockedWorkSuggestionCode(watchBlocked, watchHandoffID, "watch_reminder_sent", watchID)
+	if watchSuggestion != "escalate_or_redispatch" {
+		return failedCheck("multi_agent_coordination", fmt.Sprintf("expected escalate_or_redispatch suggestion, got %s", watchSuggestion))
+	}
+
+	report.MultiAgentCoordinationResult = &MultiAgentCoordinationSmokeResult{
+		WorkflowID:            workflowID,
+		UpstreamHandoffID:     upstreamID,
+		DownstreamHandoffID:   downstreamID,
+		WatchWorkflowID:       watchWorkflowID,
+		WatchHandoffID:        watchHandoffID,
+		WatchID:               watchID,
+		DependencyReason:      dependencyReason,
+		DownstreamReady:       downstreamReady,
+		WatchSuggestion:       watchSuggestion,
+		RegisteredAgentStatus: "available",
+	}
+	return CheckResult{Name: "multi_agent_coordination", Status: checkStatusOK, Detail: fmt.Sprintf("workflow_id=%s downstream_ready=%t watch_suggestion=%s", workflowID, downstreamReady, watchSuggestion)}
+}
+
+func registerSmokeAgent(ctx context.Context, client smokeMCPClient, opts Options, agentID string, projectRefs []string) error {
+	registered, err := callStructuredTool(ctx, client, "agent_register", map[string]any{
+		"actor":               map[string]any{"type": "agent", "id": agentID, "address": "agent:" + agentID},
+		"capabilities":        []string{"coordination"},
+		"project_refs":        projectRefs,
+		"task_kinds":          []string{"generic_task"},
+		"delivery_target_ref": "agent:" + agentID,
+	}, opts)
+	if err != nil {
+		return err
+	}
+	if nestedString(registered, "agent", "actor", "id") != agentID {
+		return fmt.Errorf("agent_register did not return agent %s", agentID)
+	}
+	return nil
+}
+
 func dispatchAndCompleteSmokeHandoff(ctx context.Context, client smokeMCPClient, opts Options, workflowID, handoffID, actorID, message string) (string, error) {
 	dispatch, err := callStructuredTool(ctx, client, "handoff_dispatch", map[string]any{
 		"handoff_id": handoffID,
@@ -675,6 +863,143 @@ func workflowContainsHandoffs(value map[string]any, ids ...string) bool {
 		}
 	}
 	return true
+}
+
+func agentsContainID(value map[string]any, agentID string) bool {
+	rawAgents, ok := structuredValue(value, "agents")
+	if !ok {
+		return false
+	}
+	agents, ok := rawAgents.([]any)
+	if !ok {
+		return false
+	}
+	for _, agent := range agents {
+		agentMap, ok := agent.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nestedString(agentMap, "actor", "id") == agentID {
+			return true
+		}
+	}
+	return false
+}
+
+func workItemsContainHandoff(value map[string]any, handoffID string) bool {
+	rawItems, ok := structuredValue(value, "items")
+	if !ok {
+		return false
+	}
+	items, ok := rawItems.([]any)
+	if !ok {
+		return false
+	}
+	for _, item := range items {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nestedString(itemMap, "handoff", "id") == handoffID {
+			return true
+		}
+	}
+	return false
+}
+
+func blockedWorkReasonCode(value map[string]any, handoffID, code, relatedID string) string {
+	item := blockedWorkItemByHandoffID(value, handoffID)
+	if item == nil {
+		return ""
+	}
+	rawReasons, ok := structuredValue(item, "reasons")
+	if !ok {
+		return ""
+	}
+	reasons, ok := rawReasons.([]any)
+	if !ok {
+		return ""
+	}
+	for _, reason := range reasons {
+		reasonMap, ok := reason.(map[string]any)
+		if !ok || nestedString(reasonMap, "code") != code {
+			continue
+		}
+		if relatedID == "" || nestedString(reasonMap, "dependency_handoff_id") == relatedID || nestedString(reasonMap, "watch_id") == relatedID {
+			return code
+		}
+	}
+	return ""
+}
+
+func blockedWorkSuggestionCode(value map[string]any, handoffID, reasonCode, relatedID string) string {
+	if blockedWorkReasonCode(value, handoffID, reasonCode, relatedID) == "" {
+		return ""
+	}
+	item := blockedWorkItemByHandoffID(value, handoffID)
+	if item == nil {
+		return ""
+	}
+	rawSuggestions, ok := structuredValue(item, "suggestions")
+	if !ok {
+		return ""
+	}
+	suggestions, ok := rawSuggestions.([]any)
+	if !ok {
+		return ""
+	}
+	for _, suggestion := range suggestions {
+		suggestionMap, ok := suggestion.(map[string]any)
+		if !ok {
+			continue
+		}
+		if relatedID == "" || nestedString(suggestionMap, "watch_id") == relatedID {
+			return nestedString(suggestionMap, "code")
+		}
+	}
+	return ""
+}
+
+func blockedWorkItemByHandoffID(value map[string]any, handoffID string) map[string]any {
+	rawItems, ok := structuredValue(value, "items")
+	if !ok {
+		return nil
+	}
+	items, ok := rawItems.([]any)
+	if !ok {
+		return nil
+	}
+	for _, item := range items {
+		itemMap, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nestedString(itemMap, "handoff", "id") == handoffID {
+			return itemMap
+		}
+	}
+	return nil
+}
+
+func watchIDByType(value map[string]any, watchType string) string {
+	rawWatches, ok := structuredValue(value, "watches")
+	if !ok {
+		return ""
+	}
+	watches, ok := rawWatches.([]any)
+	if !ok {
+		return ""
+	}
+	for _, watch := range watches {
+		watchMap, ok := watch.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nestedString(watchMap, "watch_type") == watchType {
+			return nestedString(watchMap, "id")
+		}
+	}
+	return ""
 }
 
 func handoffStatesByID(value map[string]any) map[string]string {

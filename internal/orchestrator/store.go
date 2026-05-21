@@ -51,6 +51,18 @@ func (s *Store) init(ctx context.Context) error {
 			updated_at TEXT NOT NULL,
 			completed_at TEXT
 		)`,
+		`CREATE TABLE IF NOT EXISTS agents (
+			id TEXT PRIMARY KEY,
+			actor_json TEXT NOT NULL,
+			capabilities_json TEXT NOT NULL,
+			project_refs_json TEXT NOT NULL,
+			task_kinds_json TEXT NOT NULL,
+			delivery_target_ref TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			last_heartbeat_at TEXT,
+			created_at TEXT NOT NULL,
+			updated_at TEXT NOT NULL
+		)`,
 		`CREATE TABLE IF NOT EXISTS handoffs (
 			id TEXT PRIMARY KEY,
 			workflow_id TEXT NOT NULL,
@@ -241,6 +253,38 @@ func (s *Store) init(ctx context.Context) error {
 
 func (s *Store) SaveWorkflow(ctx context.Context, workflow Workflow) error {
 	return saveWorkflowExec(ctx, s.db, workflow)
+}
+
+func (s *Store) SaveAgentRegistration(ctx context.Context, agent AgentRegistration) error {
+	return saveAgentRegistrationExec(ctx, s.db, agent)
+}
+
+func (s *Store) ListAgentRegistrations(ctx context.Context, filter AgentListFilter) ([]AgentRegistration, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT id, actor_json, capabilities_json, project_refs_json, task_kinds_json,
+			delivery_target_ref, status, last_heartbeat_at, created_at, updated_at
+		FROM agents
+		ORDER BY updated_at DESC, id
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("query agents: %w", err)
+	}
+	defer rows.Close()
+
+	var agents []AgentRegistration
+	for rows.Next() {
+		agent, err := scanAgentRegistration(rows)
+		if err != nil {
+			return nil, err
+		}
+		if agentMatchesFilter(agent, filter) {
+			agents = append(agents, agent)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate agents: %w", err)
+	}
+	return agents, nil
 }
 
 func (s *Store) SaveHandoff(ctx context.Context, handoff Handoff) error {
@@ -624,6 +668,122 @@ func saveWorkflowExec(ctx context.Context, db execer, workflow Workflow) error {
 		return fmt.Errorf("save workflow %s: %w", workflow.ID, err)
 	}
 	return nil
+}
+
+func saveAgentRegistrationExec(ctx context.Context, db execer, agent AgentRegistration) error {
+	actorJSON, err := marshalJSON(agent.Actor)
+	if err != nil {
+		return err
+	}
+	capabilitiesJSON, err := marshalJSON(agent.Capabilities)
+	if err != nil {
+		return err
+	}
+	projectRefsJSON, err := marshalJSON(agent.ProjectRefs)
+	if err != nil {
+		return err
+	}
+	taskKindsJSON, err := marshalJSON(agent.TaskKinds)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO agents (
+			id, actor_json, capabilities_json, project_refs_json, task_kinds_json,
+			delivery_target_ref, status, last_heartbeat_at, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+			actor_json = excluded.actor_json,
+			capabilities_json = excluded.capabilities_json,
+			project_refs_json = excluded.project_refs_json,
+			task_kinds_json = excluded.task_kinds_json,
+			delivery_target_ref = excluded.delivery_target_ref,
+			status = excluded.status,
+			last_heartbeat_at = excluded.last_heartbeat_at,
+			updated_at = excluded.updated_at
+	`, agent.Actor.ID, actorJSON, capabilitiesJSON, projectRefsJSON, taskKindsJSON, agent.DeliveryTargetRef, agent.Status, nullableTime(agent.LastHeartbeatAt), formatTime(agent.CreatedAt), formatTime(agent.UpdatedAt))
+	if err != nil {
+		return fmt.Errorf("save agent %s: %w", agent.Actor.ID, err)
+	}
+	return nil
+}
+
+func scanAgentRegistration(scanner interface{ Scan(...any) error }) (AgentRegistration, error) {
+	var (
+		agent                                        AgentRegistration
+		ignoredID                                    string
+		actorJSON, capabilitiesJSON, projectRefsJSON string
+		taskKindsJSON                                string
+		lastHeartbeatAt                              sql.NullString
+		createdAt, updatedAt                         string
+	)
+	if err := scanner.Scan(&ignoredID, &actorJSON, &capabilitiesJSON, &projectRefsJSON, &taskKindsJSON, &agent.DeliveryTargetRef, &agent.Status, &lastHeartbeatAt, &createdAt, &updatedAt); err != nil {
+		return AgentRegistration{}, fmt.Errorf("scan agent: %w", err)
+	}
+	if err := unmarshalJSON(actorJSON, &agent.Actor); err != nil {
+		return AgentRegistration{}, err
+	}
+	if err := unmarshalJSON(capabilitiesJSON, &agent.Capabilities); err != nil {
+		return AgentRegistration{}, err
+	}
+	if err := unmarshalJSON(projectRefsJSON, &agent.ProjectRefs); err != nil {
+		return AgentRegistration{}, err
+	}
+	if err := unmarshalJSON(taskKindsJSON, &agent.TaskKinds); err != nil {
+		return AgentRegistration{}, err
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return AgentRegistration{}, fmt.Errorf("parse agent created_at: %w", err)
+	}
+	parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return AgentRegistration{}, fmt.Errorf("parse agent updated_at: %w", err)
+	}
+	agent.CreatedAt = parsedCreatedAt
+	agent.UpdatedAt = parsedUpdatedAt
+	if lastHeartbeatAt.Valid {
+		parsedHeartbeatAt, err := time.Parse(time.RFC3339Nano, lastHeartbeatAt.String)
+		if err != nil {
+			return AgentRegistration{}, fmt.Errorf("parse agent last_heartbeat_at: %w", err)
+		}
+		agent.LastHeartbeatAt = &parsedHeartbeatAt
+	}
+	return agent, nil
+}
+
+func agentMatchesFilter(agent AgentRegistration, filter AgentListFilter) bool {
+	if filter.Capability != "" && !containsString(agent.Capabilities, filter.Capability) {
+		return false
+	}
+	if filter.ProjectRef != "" && !containsString(agent.ProjectRefs, filter.ProjectRef) {
+		return false
+	}
+	if filter.TaskKind != "" && !containsTaskKind(agent.TaskKinds, filter.TaskKind) {
+		return false
+	}
+	if filter.Status != "" && agent.Status != filter.Status {
+		return false
+	}
+	return true
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func containsTaskKind(values []TaskKind, want TaskKind) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
