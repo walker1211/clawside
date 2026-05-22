@@ -291,6 +291,15 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return handlers.HandleCollaborationTemplateApply(ctx, args)
 	}))
 
+	coordinationEvidenceSummaryTool := mcp.NewTool("coordination_evidence_summary",
+		mcp.WithDescription("Export a sanitized read-only coordination evidence summary from the durable truth-plane; this does not launch workers, run commands, inspect stdout/stderr, open sessions, or call sender delivery"),
+		mcp.WithInputSchema[toolserver.CoordinationEvidenceSummaryInput](),
+		mcp.WithOutputSchema[toolserver.CoordinationEvidenceSummaryOutput](),
+	)
+	s.AddTool(coordinationEvidenceSummaryTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.CoordinationEvidenceSummaryInput) (toolserver.CoordinationEvidenceSummaryOutput, error) {
+		return handlers.HandleCoordinationEvidenceSummary(ctx, args)
+	}))
+
 	watchListTool := mcp.NewTool("watch_list",
 		mcp.WithDescription("List watches for a handoff"),
 		mcp.WithInputSchema[toolserver.WatchListInput](),

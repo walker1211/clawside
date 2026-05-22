@@ -3,6 +3,7 @@ package toolserver
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -240,6 +241,133 @@ func validToolserverCollaborationTemplateApplyInput() CollaborationTemplateApply
 			ProjectRef: "project://review",
 		},
 	}
+}
+
+func TestHandleCoordinationEvidenceSummary(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	ctx := context.Background()
+	for _, agent := range []struct {
+		id         string
+		projectRef string
+	}{
+		{id: "upstream", projectRef: "project://upstream"},
+		{id: "downstream", projectRef: "project://downstream"},
+		{id: "reviewer", projectRef: "project://review"},
+	} {
+		if _, err := h.HandleAgentRegister(ctx, AgentRegisterInput{
+			Actor:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: agent.id},
+			ProjectRefs: []string{agent.projectRef},
+			TaskKinds:   []string{string(orchestrator.TaskGeneric)},
+		}); err != nil {
+			t.Fatalf("HandleAgentRegister(%s): %v", agent.id, err)
+		}
+	}
+	applied, err := h.HandleCollaborationTemplateApply(ctx, validToolserverCollaborationTemplateApplyInput())
+	if err != nil {
+		t.Fatalf("HandleCollaborationTemplateApply: %v", err)
+	}
+
+	result, err := h.HandleCoordinationEvidenceSummary(ctx, CoordinationEvidenceSummaryInput{})
+	if err != nil {
+		t.Fatalf("HandleCoordinationEvidenceSummary: %v", err)
+	}
+
+	if result.Summary.WorkflowCount != 1 || result.Summary.HandoffCount != 3 || result.Summary.WatchCount != 9 {
+		t.Fatalf("expected workflow/handoff/watch counts 1/3/9, got %+v", result.Summary)
+	}
+	if result.Summary.BlockedCount != 2 || result.Summary.NextWorkCount != 1 {
+		t.Fatalf("expected blocked/next counts 2/1, got %+v", result.Summary)
+	}
+	if len(result.Summary.Workflows) != 1 || result.Summary.Workflows[0].ID != applied.Workflow.ID {
+		t.Fatalf("expected applied workflow summary, got %+v", result.Summary.Workflows)
+	}
+}
+
+func TestHandleCoordinationEvidenceSummaryFiltersWorkflow(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	ctx := context.Background()
+	first, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "first workflow",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate(first): %v", err)
+	}
+	second, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
+		WorkflowKind: "generic",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "second workflow",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate(second): %v", err)
+	}
+
+	result, err := h.HandleCoordinationEvidenceSummary(ctx, CoordinationEvidenceSummaryInput{WorkflowID: first.Workflow.ID})
+	if err != nil {
+		t.Fatalf("HandleCoordinationEvidenceSummary: %v", err)
+	}
+	encoded := mustMarshalToolserverCoordinationEvidence(t, result.Summary)
+	if result.Summary.WorkflowCount != 1 || len(result.Summary.Workflows) != 1 || result.Summary.Workflows[0].ID != first.Workflow.ID {
+		t.Fatalf("expected first workflow only, got %+v", result.Summary)
+	}
+	if strings.Contains(encoded, second.Workflow.ID) {
+		t.Fatalf("expected filtered summary not to include workflow %s", second.Workflow.ID)
+	}
+}
+
+func TestHandleCoordinationEvidenceSummaryOmitsUnsafeFields(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	ctx := context.Background()
+	if _, err := h.HandleAgentRegister(ctx, AgentRegisterInput{
+		Actor:             ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer", Address: "local/agent/socket"},
+		Capabilities:      []string{"writing"},
+		ProjectRefs:       []string{"project://secret"},
+		TaskKinds:         []string{string(orchestrator.TaskGeneric)},
+		DeliveryTargetRef: "agent:writer-private",
+	}); err != nil {
+		t.Fatalf("HandleAgentRegister: %v", err)
+	}
+	if _, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
+		WorkflowKind:                  "generic",
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner", Address: "local/planner/socket"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer", Address: "local/writer/socket"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "private prompt with token",
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    "project://secret",
+		DeliveryTargetRef:             "agent:writer-private",
+	}); err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	result, err := h.HandleCoordinationEvidenceSummary(ctx, CoordinationEvidenceSummaryInput{IncludeAgents: true})
+	if err != nil {
+		t.Fatalf("HandleCoordinationEvidenceSummary: %v", err)
+	}
+	encoded := mustMarshalToolserverCoordinationEvidence(t, result.Summary)
+	for _, forbidden := range []string{
+		`"intent"`, `"payload_ref"`, `"delivery_target_ref"`, `"address"`,
+		"private prompt", "project://secret", "agent:writer-private", "local/planner/socket", "local/writer/socket", "local/agent/socket",
+		`"command"`, `"args"`, `"cwd"`, `"path"`, `"prompt"`, `"session_id"`, `"token"`, `"secret"`, `"stdout"`, `"stderr"`,
+	} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("expected evidence summary to omit %q, got %s", forbidden, encoded)
+		}
+	}
+}
+
+func mustMarshalToolserverCoordinationEvidence(t *testing.T, summary orchestrator.CoordinationEvidenceSummary) string {
+	t.Helper()
+	encoded, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal summary: %v", err)
+	}
+	return string(encoded)
 }
 
 func TestHandleHandoffCreateCreatesWorkflowAndHandoff(t *testing.T) {

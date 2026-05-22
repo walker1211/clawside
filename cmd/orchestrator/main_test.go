@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -770,6 +771,227 @@ func TestRunWorkflowListPrintsProjectedStatuses(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), `"status": "completed"`) {
 		t.Fatalf("expected projected completed workflow in list, got %s", stdout.String())
+	}
+}
+
+func TestRunWorkflowEvidenceRequiresDB(t *testing.T) {
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{"workflow", "evidence"}, stdout, stderr)
+	if err == nil {
+		t.Fatalf("expected missing db error")
+	}
+	if !strings.Contains(err.Error(), "missing db") {
+		t.Fatalf("expected missing db error, got %v", err)
+	}
+}
+
+func TestRunWorkflowEvidenceRejectsMissingDBWithoutCreatingIt(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "missing.db")
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{"workflow", "evidence", "--db", dbPath}, stdout, stderr)
+	if err == nil {
+		t.Fatalf("expected missing db to be rejected")
+	}
+	if !strings.Contains(err.Error(), "open read-only db") {
+		t.Fatalf("expected read-only open error, got %v", err)
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("expected missing db not to be created, stat err=%v", statErr)
+	}
+}
+
+func TestRunWorkflowEvidencePrintsSummaryJSON(t *testing.T) {
+	dbPath, created := seedTestHandoff(t)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{"workflow", "evidence", "--db", dbPath}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run workflow evidence: %v", err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{
+		`"workflow_count": 1`,
+		`"handoff_count": 1`,
+		`"watch_count": 3`,
+		`"next_work_count": 1`,
+		created.Workflow.ID,
+		created.Handoff.ID,
+	} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected %q in workflow evidence JSON, got %s", expected, output)
+		}
+	}
+}
+
+func TestRunWorkflowEvidenceReadsDBPathWithURISpecialCharacters(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "hash#dir", "orchestrator.db")
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
+		t.Fatalf("make db dir: %v", err)
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	svc := orchestrator.NewService(store, nil)
+	created, err := svc.CreateHandoff(context.Background(), orchestrator.CreateHandoffInput{
+		WorkflowKind:                  "generic",
+		Sender:                        orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "planner"},
+		Receiver:                      orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer"},
+		TaskKind:                      orchestrator.TaskGeneric,
+		Intent:                        "write summary",
+		RequiredForWorkflowCompletion: true,
+	})
+	if err != nil {
+		t.Fatalf("create handoff: %v", err)
+	}
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err = run([]string{"workflow", "evidence", "--db", dbPath}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run workflow evidence: %v", err)
+	}
+	if !strings.Contains(stdout.String(), created.Workflow.ID) {
+		t.Fatalf("expected workflow id in evidence JSON, got %s", stdout.String())
+	}
+}
+
+func TestRunWorkflowEvidenceFiltersWorkflow(t *testing.T) {
+	dbPath, first := seedTestHandoff(t)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	svc := orchestrator.NewService(store, nil)
+	second, err := svc.CreateHandoff(context.Background(), orchestrator.CreateHandoffInput{
+		WorkflowKind:                  "generic",
+		Sender:                        orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "planner-two"},
+		Receiver:                      orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer-two"},
+		TaskKind:                      orchestrator.TaskGeneric,
+		Intent:                        "write second summary",
+		RequiredForWorkflowCompletion: true,
+	})
+	if err != nil {
+		t.Fatalf("create second handoff: %v", err)
+	}
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err = run([]string{"workflow", "evidence", "--db", dbPath, "--workflow-id", first.Workflow.ID}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run workflow evidence: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, first.Workflow.ID) || strings.Contains(output, second.Workflow.ID) {
+		t.Fatalf("expected only workflow %s, got %s", first.Workflow.ID, output)
+	}
+	if !strings.Contains(output, `"workflow_count": 1`) {
+		t.Fatalf("expected filtered workflow count, got %s", output)
+	}
+}
+
+func TestRunWorkflowEvidenceIncludesAgentsWhenRequested(t *testing.T) {
+	dbPath, _ := seedTestHandoff(t)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	if err := run([]string{
+		"agent", "register",
+		"--db", dbPath,
+		"--actor", "agent:writer",
+		"--capabilities", "writing,go",
+		"--project-refs", "project://secret",
+		"--task-kinds", "generic_task",
+		"--delivery-target-ref", "local/agent/socket",
+	}, stdout, stderr); err != nil {
+		t.Fatalf("run agent register: %v", err)
+	}
+
+	stdout.Reset()
+	err := run([]string{"workflow", "evidence", "--db", dbPath, "--include-agents"}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run workflow evidence: %v", err)
+	}
+	output := stdout.String()
+	for _, expected := range []string{`"agent_count": 1`, `"agents":`, `"id": "writer"`, `"capabilities":`} {
+		if !strings.Contains(output, expected) {
+			t.Fatalf("expected %q in workflow evidence JSON, got %s", expected, output)
+		}
+	}
+	for _, forbidden := range []string{`"project_refs"`, `"delivery_target_ref"`, "project://secret", "local/agent/socket"} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("expected workflow evidence to omit %q, got %s", forbidden, output)
+		}
+	}
+}
+
+func TestRunWorkflowEvidenceOmitsUnsafeFields(t *testing.T) {
+	dbPath := testDBPath(t)
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	defer db.Close()
+	store, err := orchestrator.NewStore(context.Background(), db)
+	if err != nil {
+		t.Fatalf("new store: %v", err)
+	}
+	svc := orchestrator.NewService(store, nil)
+	if _, err := svc.CreateHandoff(context.Background(), orchestrator.CreateHandoffInput{
+		WorkflowKind:                  "generic",
+		Sender:                        orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "planner", Address: "local/planner/socket"},
+		Receiver:                      orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer-private", Address: "local/writer/socket"},
+		TaskKind:                      orchestrator.TaskGeneric,
+		Intent:                        "private prompt with token secret stdout stderr session",
+		PayloadRef:                    "project://secret",
+		DeliveryTargetRef:             "agent:writer-private",
+		RequiredForWorkflowCompletion: true,
+	}); err != nil {
+		t.Fatalf("create handoff: %v", err)
+	}
+	_, err = svc.RegisterAgent(context.Background(), orchestrator.AgentRegistration{
+		Actor:             orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "writer", Address: "local/agent/socket"},
+		Capabilities:      []string{"writing"},
+		ProjectRefs:       []string{"project://secret"},
+		TaskKinds:         []orchestrator.TaskKind{orchestrator.TaskGeneric},
+		DeliveryTargetRef: "agent:writer-private",
+	})
+	if err != nil {
+		t.Fatalf("register agent: %v", err)
+	}
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err = run([]string{"workflow", "evidence", "--db", dbPath, "--include-agents"}, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run workflow evidence: %v", err)
+	}
+	output := stdout.String()
+	for _, forbidden := range []string{
+		`"intent"`, `"payload_ref"`, `"delivery_target_ref"`, `"address"`,
+		"private prompt", "project://secret", "agent:writer-private",
+		"local/planner/socket", "local/writer/socket", "local/agent/socket",
+		`"command"`, `"args"`, `"cwd"`, `"path"`, `"prompt"`,
+		`"session_id"`, `"token"`, `"secret"`, `"stdout"`, `"stderr"`,
+	} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("expected workflow evidence to omit %q, got %s", forbidden, output)
+		}
 	}
 }
 

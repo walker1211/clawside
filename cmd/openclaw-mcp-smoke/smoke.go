@@ -82,6 +82,7 @@ var expectedV1Tools = []string{
 	"blocked_work",
 	"collaboration_template_list",
 	"collaboration_template_apply",
+	"coordination_evidence_summary",
 	"watch_list",
 	"watch_run",
 	"watch_update",
