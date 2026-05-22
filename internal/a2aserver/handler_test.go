@@ -509,6 +509,164 @@ func TestTaskEventsEmitsProgressChange(t *testing.T) {
 	}
 }
 
+func TestA2AMinimumClosedLoopValidation(t *testing.T) {
+	handler, handlers := newTestA2AHandler(t, Config{PublicURL: "http://127.0.0.1:8789", AuthKey: "rpc-secret"})
+	ctx := context.Background()
+
+	cardRecorder := httptest.NewRecorder()
+	cardRequest := httptest.NewRequest(http.MethodGet, "/.well-known/agent-card.json", nil)
+	handler.ServeHTTP(cardRecorder, cardRequest)
+	if cardRecorder.Code != http.StatusOK {
+		t.Fatalf("expected agent card status 200, got %d: %s", cardRecorder.Code, cardRecorder.Body.String())
+	}
+	if strings.Contains(cardRecorder.Body.String(), "rpc-secret") {
+		t.Fatalf("agent card leaked auth key: %s", cardRecorder.Body.String())
+	}
+
+	var card AgentCard
+	if err := json.Unmarshal(cardRecorder.Body.Bytes(), &card); err != nil {
+		t.Fatalf("decode agent card: %v", err)
+	}
+	if !card.Capabilities.Streaming || card.Capabilities.PushNotifications {
+		t.Fatalf("expected streaming non-push card capabilities, got %+v", card.Capabilities)
+	}
+	for _, method := range []string{MethodTaskCreate, MethodTasksGet, MethodTasksEvents} {
+		if !cardHasSkill(card, method) {
+			t.Fatalf("expected agent card to include skill %s, got %+v", method, card.Skills)
+		}
+	}
+	unsupportedMethods := []string{
+		"message/send",
+		"message/stream",
+		"tasks/cancel",
+		"tasks.cancel",
+		"tasks/pushNotification/set",
+		"tasks/pushNotification/get",
+		"handoff_create",
+	}
+	for _, method := range unsupportedMethods {
+		if cardHasSkill(card, method) {
+			t.Fatalf("agent card must not advertise unsupported method %s, got %+v", method, card.Skills)
+		}
+		assertRPCError(t, postRPCJSON(t, handler, "rpc-secret", method, map[string]any{}), rpcMethodNotFound)
+	}
+
+	createResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTaskCreate, validTaskCreateParams("closed-loop-external-task-1")))
+	assertNoForbiddenA2AFields(t, createResult)
+	var created TaskCreateOutput
+	if err := json.Unmarshal(createResult, &created); err != nil {
+		t.Fatalf("decode task create output: %v; body=%s", err, string(createResult))
+	}
+	if created.WorkflowID == "" || created.HandoffID == "" {
+		t.Fatalf("expected workflow and handoff ids, got %+v", created)
+	}
+	if created.Task.ID != created.HandoffID || created.Task.ContextID != created.WorkflowID {
+		t.Fatalf("expected task ids to match created handoff, got %+v", created.Task)
+	}
+	if created.Task.Status.State != "submitted" {
+		t.Fatalf("expected created task to be submitted, got %+v", created.Task.Status)
+	}
+	if created.Task.Metadata["workflowKind"] != "a2a_inbound" || created.Task.Metadata["intent"] != "Review downstream API compatibility" {
+		t.Fatalf("unexpected created task metadata: %+v", created.Task.Metadata)
+	}
+
+	taskResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{
+		"id":            created.HandoffID,
+		"historyLength": 1,
+	}))
+	assertNoForbiddenA2AFields(t, taskResult)
+	var task A2ATask
+	if err := json.Unmarshal(taskResult, &task); err != nil {
+		t.Fatalf("decode tasks/get result: %v; body=%s", err, string(taskResult))
+	}
+	if task.ID != created.HandoffID || task.ContextID != created.WorkflowID {
+		t.Fatalf("expected tasks/get to return created task, got %+v", task)
+	}
+	if task.Status.State != "submitted" {
+		t.Fatalf("expected tasks/get state submitted, got %+v", task.Status)
+	}
+
+	if _, err := handlers.HandleHandoffDispatch(ctx, toolserver.HandoffDispatchInput{
+		HandoffID: created.HandoffID,
+		Adapter:   "manual",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("dispatch handoff: %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	requestCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, server.URL+"/a2a/tasks/"+created.HandoffID+"/events?historyLength=1&pollIntervalMs=250", nil)
+	if err != nil {
+		t.Fatalf("new task events request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer rpc-secret")
+	request.Header.Set("Accept", "text/event-stream")
+
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("task events request: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected task events status 200, got %d", response.StatusCode)
+	}
+	if contentType := response.Header.Get("Content-Type"); !strings.Contains(contentType, "text/event-stream") {
+		t.Fatalf("expected text/event-stream content type, got %q", contentType)
+	}
+
+	reader := bufio.NewReader(response.Body)
+	initial := readSSEEvent(t, reader)
+	if initial.name != "task" || initial.id == "" {
+		t.Fatalf("expected initial task event with id, got %+v", initial)
+	}
+	assertNoForbiddenA2AFields(t, initial.data)
+	var initialPayload TaskStreamEvent
+	if err := json.Unmarshal(initial.data, &initialPayload); err != nil {
+		t.Fatalf("decode initial task event: %v; data=%s", err, string(initial.data))
+	}
+	if initialPayload.HandoffID != created.HandoffID || initialPayload.WorkflowID != created.WorkflowID || initialPayload.EventID != initial.id {
+		t.Fatalf("unexpected initial task event ids: %+v", initialPayload)
+	}
+	if initialPayload.Task.ID != created.HandoffID || initialPayload.Task.ContextID != created.WorkflowID {
+		t.Fatalf("unexpected initial streamed task: %+v", initialPayload.Task)
+	}
+	if initialPayload.Task.Status.State != "submitted" {
+		t.Fatalf("expected initial streamed task submitted, got %+v", initialPayload.Task.Status)
+	}
+
+	if _, err := handlers.HandleHandoffProgress(ctx, toolserver.HandoffProgressInput{
+		Action:    "receive",
+		HandoffID: created.HandoffID,
+		Actor:     toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+	}); err != nil {
+		t.Fatalf("receive handoff: %v", err)
+	}
+	changed := readSSEEvent(t, reader)
+	if changed.name != "task" || changed.id == "" || changed.id == initial.id {
+		t.Fatalf("expected changed task event after progress, initial=%+v changed=%+v", initial, changed)
+	}
+	assertNoForbiddenA2AFields(t, changed.data)
+	var changedPayload TaskStreamEvent
+	if err := json.Unmarshal(changed.data, &changedPayload); err != nil {
+		t.Fatalf("decode changed task event: %v; data=%s", err, string(changed.data))
+	}
+	if changedPayload.HandoffID != created.HandoffID || changedPayload.WorkflowID != created.WorkflowID || changedPayload.EventID != changed.id {
+		t.Fatalf("unexpected changed task event ids: %+v", changedPayload)
+	}
+	if changedPayload.Task.ID != created.HandoffID || changedPayload.Task.ContextID != created.WorkflowID {
+		t.Fatalf("unexpected changed streamed task: %+v", changedPayload.Task)
+	}
+	if changedPayload.Task.Status.State != "working" {
+		t.Fatalf("expected changed streamed task working, got %+v", changedPayload.Task.Status)
+	}
+	if len(changedPayload.Task.History) != 1 || changedPayload.Task.History[0].Type != string(orchestrator.EventReceived) {
+		t.Fatalf("expected latest received history item, got %+v", changedPayload.Task.History)
+	}
+}
+
 func TestTaskCreateAdvertisedAndMutationBoundaries(t *testing.T) {
 	handler, _ := newTestA2AHandler(t, Config{PublicURL: "http://127.0.0.1:8789", AuthKey: "rpc-secret"})
 
@@ -663,6 +821,62 @@ func TestTaskCreateIdempotency(t *testing.T) {
 	if len(list.Workflows) != 1 || list.Workflows[0].Workflow.ID != first.WorkflowID {
 		t.Fatalf("expected exactly one workflow after conflict, got %+v", list.Workflows)
 	}
+}
+
+func assertNoForbiddenA2AFields(t *testing.T, raw []byte) {
+	t.Helper()
+	var payload any
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("decode A2A payload for forbidden-field check: %v; payload=%s", err, string(raw))
+	}
+	if key, ok := findForbiddenA2AField(payload); ok {
+		t.Fatalf("A2A payload leaked forbidden field %q: %s", key, string(raw))
+	}
+}
+
+func findForbiddenA2AField(value any) (string, bool) {
+	forbiddenFields := map[string]struct{}{
+		"command":         {},
+		"args":            {},
+		"cwd":             {},
+		"local_path":      {},
+		"localPath":       {},
+		"session_id":      {},
+		"sessionId":       {},
+		"prompt":          {},
+		"stdout":          {},
+		"stderr":          {},
+		"token":           {},
+		"sender":          {},
+		"sender_id":       {},
+		"senderId":        {},
+		"sender_job":      {},
+		"senderJob":       {},
+		"sender_job_id":   {},
+		"senderJobId":     {},
+		"delivery_job":    {},
+		"deliveryJob":     {},
+		"delivery_job_id": {},
+		"deliveryJobId":   {},
+	}
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if _, ok := forbiddenFields[key]; ok {
+				return key, true
+			}
+			if key, ok := findForbiddenA2AField(child); ok {
+				return key, true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if key, ok := findForbiddenA2AField(child); ok {
+				return key, true
+			}
+		}
+	}
+	return "", false
 }
 
 func validTaskCreateParams(idempotencyKey string) map[string]any {
