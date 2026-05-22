@@ -56,6 +56,29 @@ type HandoffCreateOutput struct {
 	Watches  []orchestrator.Watch  `json:"watches"`
 }
 
+type ControlledTaskCreateInput struct {
+	IdempotencyKey string                      `json:"idempotency_key"`
+	PayloadHash    string                      `json:"payload_hash"`
+	Intent         string                      `json:"intent"`
+	ReceiverID     string                      `json:"receiver_id"`
+	ProjectRef     string                      `json:"project_ref,omitempty"`
+	ArtifactRefs   []ControlledTaskArtifactRef `json:"artifact_refs,omitempty"`
+}
+
+type ControlledTaskArtifactRef struct {
+	URI      string `json:"uri"`
+	Type     string `json:"type,omitempty"`
+	Version  string `json:"version,omitempty"`
+	Checksum string `json:"checksum,omitempty"`
+}
+
+type ControlledTaskCreateOutput struct {
+	Workflow orchestrator.Workflow `json:"workflow"`
+	Handoff  orchestrator.Handoff  `json:"handoff"`
+	Watches  []orchestrator.Watch  `json:"watches"`
+	Replayed bool                  `json:"replayed,omitempty"`
+}
+
 type HandoffGetInput struct {
 	HandoffID string `json:"handoff_id"`
 }
@@ -322,6 +345,41 @@ func (h *Handlers) HandleHandoffCreate(ctx context.Context, input HandoffCreateI
 		return HandoffCreateOutput{}, err
 	}
 	return HandoffCreateOutput(result), nil
+}
+
+func (h *Handlers) HandleControlledTaskCreate(ctx context.Context, input ControlledTaskCreateInput) (ControlledTaskCreateOutput, error) {
+	artifactRefs := make([]orchestrator.InboundArtifactRef, 0, len(input.ArtifactRefs))
+	for _, artifactRef := range input.ArtifactRefs {
+		artifactRefs = append(artifactRefs, orchestrator.InboundArtifactRef{
+			URI:      strings.TrimSpace(artifactRef.URI),
+			Type:     strings.TrimSpace(artifactRef.Type),
+			Version:  strings.TrimSpace(artifactRef.Version),
+			Checksum: strings.TrimSpace(artifactRef.Checksum),
+		})
+	}
+	result, err := h.svc.CreateHandoffIdempotent(ctx, orchestrator.IdempotentCreateHandoffInput{
+		IdempotencyKey: strings.TrimSpace(input.IdempotencyKey),
+		PayloadHash:    strings.TrimSpace(input.PayloadHash),
+		Handoff: orchestrator.CreateHandoffInput{
+			WorkflowKind:                  "a2a_inbound",
+			Sender:                        orchestrator.ActorRef{Type: orchestrator.ActorWebhook, ID: "a2a-inbound"},
+			Receiver:                      orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: strings.TrimSpace(input.ReceiverID)},
+			TaskKind:                      orchestrator.TaskGeneric,
+			Intent:                        strings.TrimSpace(input.Intent),
+			RequiredForWorkflowCompletion: true,
+			PayloadRef:                    strings.TrimSpace(input.ProjectRef),
+		},
+		ArtifactRefs: artifactRefs,
+	})
+	if err != nil {
+		return ControlledTaskCreateOutput{}, err
+	}
+	return ControlledTaskCreateOutput{
+		Workflow: result.Workflow,
+		Handoff:  result.Handoff,
+		Watches:  result.Watches,
+		Replayed: result.Replayed,
+	}, nil
 }
 
 func (h *Handlers) HandleHandoffGet(ctx context.Context, input HandoffGetInput) (HandoffGetOutput, error) {

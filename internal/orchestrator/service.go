@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -45,6 +46,27 @@ type CreateHandoffResult struct {
 	Handoff  Handoff
 	Watches  []Watch
 }
+
+type IdempotentCreateHandoffInput struct {
+	IdempotencyKey string
+	PayloadHash    string
+	Handoff        CreateHandoffInput
+	ArtifactRefs   []InboundArtifactRef
+}
+
+type InboundArtifactRef struct {
+	URI      string
+	Type     string
+	Version  string
+	Checksum string
+}
+
+type IdempotentCreateHandoffResult struct {
+	CreateHandoffResult
+	Replayed bool
+}
+
+var ErrIdempotencyConflict = errors.New("idempotency conflict")
 
 type RecordEventInput struct {
 	Event EventRecord
@@ -595,10 +617,120 @@ func (s *Service) CreateHandoff(ctx context.Context, input CreateHandoffInput) (
 	if input.ParentHandoffID != nil || len(input.DependsOnHandoffIDs) > 0 {
 		return CreateHandoffResult{}, fmt.Errorf("workflow_id is required when creating a handoff with parent or dependencies")
 	}
+	workflow, handoff, watches := newRootHandoffCreation(input, s.now().UTC())
+
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return CreateHandoffResult{}, fmt.Errorf("begin create handoff tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := saveWorkflowExec(ctx, tx, workflow); err != nil {
+		return CreateHandoffResult{}, err
+	}
+	if err := saveHandoffExec(ctx, tx, handoff); err != nil {
+		return CreateHandoffResult{}, err
+	}
+	for _, watch := range watches {
+		if err := saveWatchExec(ctx, tx, watch); err != nil {
+			return CreateHandoffResult{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return CreateHandoffResult{}, fmt.Errorf("commit create handoff tx: %w", err)
+	}
+
+	return CreateHandoffResult{Workflow: workflow, Handoff: handoff, Watches: watches}, nil
+}
+
+func (s *Service) CreateHandoffIdempotent(ctx context.Context, input IdempotentCreateHandoffInput) (IdempotentCreateHandoffResult, error) {
+	if strings.TrimSpace(input.IdempotencyKey) == "" {
+		return IdempotentCreateHandoffResult{}, fmt.Errorf("idempotency_key is required")
+	}
+	if strings.TrimSpace(input.PayloadHash) == "" {
+		return IdempotentCreateHandoffResult{}, fmt.Errorf("payload_hash is required")
+	}
+	if input.Handoff.ParentHandoffID != nil || len(input.Handoff.DependsOnHandoffIDs) > 0 {
+		return IdempotentCreateHandoffResult{}, fmt.Errorf("workflow_id is required when creating a handoff with parent or dependencies")
+	}
+
 	now := s.now().UTC()
+	workflow, handoff, watches := newRootHandoffCreation(input.Handoff, now)
+	artifacts := make([]Artifact, 0, len(input.ArtifactRefs))
+	for _, ref := range input.ArtifactRefs {
+		artifacts = append(artifacts, Artifact{
+			ID:        NewID("art"),
+			HandoffID: handoff.ID,
+			Type:      ref.Type,
+			URI:       ref.URI,
+			Version:   ref.Version,
+			Checksum:  ref.Checksum,
+			Metadata:  map[string]any{},
+			CreatedBy: input.Handoff.Sender,
+			CreatedAt: now,
+		})
+	}
+	handoff.ArtifactCount = len(artifacts)
+
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return IdempotentCreateHandoffResult{}, fmt.Errorf("begin idempotent create handoff tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	record, ok, err := loadA2AInboundTaskCreationTx(ctx, tx, input.IdempotencyKey)
+	if err != nil {
+		return IdempotentCreateHandoffResult{}, err
+	}
+	if ok {
+		if record.PayloadHash != input.PayloadHash {
+			return IdempotentCreateHandoffResult{}, ErrIdempotencyConflict
+		}
+		workflow, err := loadWorkflowTx(ctx, tx, record.WorkflowID)
+		if err != nil {
+			return IdempotentCreateHandoffResult{}, err
+		}
+		handoff, err := loadHandoffTx(ctx, tx, record.HandoffID)
+		if err != nil {
+			return IdempotentCreateHandoffResult{}, err
+		}
+		return IdempotentCreateHandoffResult{CreateHandoffResult: CreateHandoffResult{Workflow: workflow, Handoff: handoff}, Replayed: true}, nil
+	}
+
+	if err := saveWorkflowExec(ctx, tx, workflow); err != nil {
+		return IdempotentCreateHandoffResult{}, err
+	}
+	if err := saveHandoffExec(ctx, tx, handoff); err != nil {
+		return IdempotentCreateHandoffResult{}, err
+	}
+	for _, artifact := range artifacts {
+		if err := saveArtifactExec(ctx, tx, artifact); err != nil {
+			return IdempotentCreateHandoffResult{}, err
+		}
+	}
+	for _, watch := range watches {
+		if err := saveWatchExec(ctx, tx, watch); err != nil {
+			return IdempotentCreateHandoffResult{}, err
+		}
+	}
+	if err := saveA2AInboundTaskCreationExec(ctx, tx, a2aInboundTaskCreationRecord{
+		IdempotencyKey: input.IdempotencyKey,
+		PayloadHash:    input.PayloadHash,
+		WorkflowID:     workflow.ID,
+		HandoffID:      handoff.ID,
+		CreatedAt:      now,
+	}); err != nil {
+		return IdempotentCreateHandoffResult{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return IdempotentCreateHandoffResult{}, fmt.Errorf("commit idempotent create handoff tx: %w", err)
+	}
+
+	return IdempotentCreateHandoffResult{CreateHandoffResult: CreateHandoffResult{Workflow: workflow, Handoff: handoff, Watches: watches}}, nil
+}
+
+func newRootHandoffCreation(input CreateHandoffInput, now time.Time) (Workflow, Handoff, []Watch) {
 	workflowID := NewID("wf")
 	handoffID := NewID("hf")
-
 	workflow := Workflow{
 		ID:               workflowID,
 		Kind:             input.WorkflowKind,
@@ -634,29 +766,7 @@ func (s *Service) CreateHandoff(ctx context.Context, input CreateHandoffInput) (
 		CreatedAt:                     now,
 		UpdatedAt:                     now,
 	}
-	watches := CreateDefaultWatches(handoff, now)
-
-	tx, err := s.store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return CreateHandoffResult{}, fmt.Errorf("begin create handoff tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := saveWorkflowExec(ctx, tx, workflow); err != nil {
-		return CreateHandoffResult{}, err
-	}
-	if err := saveHandoffExec(ctx, tx, handoff); err != nil {
-		return CreateHandoffResult{}, err
-	}
-	for _, watch := range watches {
-		if err := saveWatchExec(ctx, tx, watch); err != nil {
-			return CreateHandoffResult{}, err
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return CreateHandoffResult{}, fmt.Errorf("commit create handoff tx: %w", err)
-	}
-
-	return CreateHandoffResult{Workflow: workflow, Handoff: handoff, Watches: watches}, nil
+	return workflow, handoff, CreateDefaultWatches(handoff, now)
 }
 
 func (s *Service) AppendHandoff(ctx context.Context, input AppendHandoffInput) (CreateHandoffResult, error) {

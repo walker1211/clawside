@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -1498,6 +1499,91 @@ func TestServiceInvalidateEventRollsBackRepairOnRebuildFailure(t *testing.T) {
 	}
 	if repairCount != 0 {
 		t.Fatalf("expected failed invalidate to roll back repair rows, got %d", repairCount)
+	}
+}
+
+func TestServiceCreateHandoffIdempotentReplaysSamePayload(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	input := IdempotentCreateHandoffInput{
+		IdempotencyKey: "external-task-1",
+		PayloadHash:    "hash-1",
+		Handoff: CreateHandoffInput{
+			WorkflowKind:                  "a2a_inbound",
+			Sender:                        ActorRef{Type: ActorWebhook, ID: "a2a-inbound"},
+			Receiver:                      ActorRef{Type: ActorAgent, ID: "writer"},
+			TaskKind:                      TaskGeneric,
+			Intent:                        "Review downstream API compatibility",
+			RequiredForWorkflowCompletion: true,
+			PayloadRef:                    "project://downstream-api",
+		},
+		ArtifactRefs: []InboundArtifactRef{{URI: "https://example.invalid/specs/api.md", Type: "spec", Checksum: "sha256:abc123"}},
+	}
+
+	first, err := svc.CreateHandoffIdempotent(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateHandoffIdempotent first: %v", err)
+	}
+	if first.Replayed {
+		t.Fatalf("first create should not be replayed")
+	}
+	if first.Handoff.ArtifactCount != 1 {
+		t.Fatalf("expected artifact count 1, got %d", first.Handoff.ArtifactCount)
+	}
+
+	replay, err := svc.CreateHandoffIdempotent(ctx, input)
+	if err != nil {
+		t.Fatalf("CreateHandoffIdempotent replay: %v", err)
+	}
+	if !replay.Replayed || replay.Workflow.ID != first.Workflow.ID || replay.Handoff.ID != first.Handoff.ID {
+		t.Fatalf("expected replay to return original ids, first=%+v replay=%+v", first, replay)
+	}
+
+	loadedWorkflow, err := svc.store.LoadWorkflow(ctx, first.Workflow.ID)
+	if err != nil {
+		t.Fatalf("LoadWorkflow: %v", err)
+	}
+	loadedHandoff, err := svc.store.LoadHandoff(ctx, first.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff: %v", err)
+	}
+	if loadedWorkflow.RootHandoffID != first.Handoff.ID || loadedHandoff.WorkflowID != first.Workflow.ID {
+		t.Fatalf("expected created ids to be queryable, workflow=%+v handoff=%+v", loadedWorkflow, loadedHandoff)
+	}
+}
+
+func TestServiceCreateHandoffIdempotentRejectsConflict(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	input := IdempotentCreateHandoffInput{
+		IdempotencyKey: "external-task-1",
+		PayloadHash:    "hash-1",
+		Handoff: CreateHandoffInput{
+			WorkflowKind:                  "a2a_inbound",
+			Sender:                        ActorRef{Type: ActorWebhook, ID: "a2a-inbound"},
+			Receiver:                      ActorRef{Type: ActorAgent, ID: "writer"},
+			TaskKind:                      TaskGeneric,
+			Intent:                        "Review downstream API compatibility",
+			RequiredForWorkflowCompletion: true,
+			PayloadRef:                    "project://downstream-api",
+		},
+	}
+	if _, err := svc.CreateHandoffIdempotent(ctx, input); err != nil {
+		t.Fatalf("CreateHandoffIdempotent first: %v", err)
+	}
+
+	input.PayloadHash = "hash-2"
+	_, err := svc.CreateHandoffIdempotent(ctx, input)
+	if !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("expected idempotency conflict, got %v", err)
+	}
+
+	workflows, err := svc.store.ListWorkflows(ctx)
+	if err != nil {
+		t.Fatalf("ListWorkflows: %v", err)
+	}
+	if len(workflows) != 1 {
+		t.Fatalf("expected conflict to avoid duplicate workflow, got %+v", workflows)
 	}
 }
 

@@ -9,6 +9,7 @@ const (
 	MethodAgentList      = "clawside.agent.list"
 	MethodNextWork       = "clawside.work.next"
 	MethodBlockedWork    = "clawside.work.blocked"
+	MethodTaskCreate     = "clawside.task.create"
 	MethodTasksGet       = "tasks/get"
 )
 
@@ -83,6 +84,32 @@ type RPCError struct {
 type TasksGetInput struct {
 	ID            string `json:"id"`
 	HistoryLength *int   `json:"historyLength,omitempty"`
+}
+
+type TaskCreateInput struct {
+	IdempotencyKey string               `json:"idempotency_key"`
+	Intent         string               `json:"intent"`
+	Receiver       TaskCreateActorInput `json:"receiver"`
+	ProjectRef     string               `json:"project_ref,omitempty"`
+	ArtifactRefs   []TaskArtifactRef    `json:"artifact_refs,omitempty"`
+}
+
+type TaskCreateActorInput struct {
+	ID string `json:"id"`
+}
+
+type TaskArtifactRef struct {
+	URI      string `json:"uri"`
+	Type     string `json:"type,omitempty"`
+	Version  string `json:"version,omitempty"`
+	Checksum string `json:"checksum,omitempty"`
+}
+
+type TaskCreateOutput struct {
+	Task                A2ATask `json:"task"`
+	WorkflowID          string  `json:"workflowId"`
+	HandoffID           string  `json:"handoffId"`
+	IdempotencyReplayed bool    `json:"idempotencyReplayed,omitempty"`
 }
 
 type A2ATask struct {
