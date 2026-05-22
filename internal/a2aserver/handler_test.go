@@ -306,6 +306,174 @@ func TestTasksGetHistoryLength(t *testing.T) {
 	}
 }
 
+func TestTaskCreateAdvertisedAndMutationBoundaries(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{PublicURL: "http://127.0.0.1:8789", AuthKey: "rpc-secret"})
+
+	cardRecorder := httptest.NewRecorder()
+	cardRequest := httptest.NewRequest(http.MethodGet, "/.well-known/agent-card.json", nil)
+	handler.ServeHTTP(cardRecorder, cardRequest)
+	if cardRecorder.Code != http.StatusOK {
+		t.Fatalf("expected agent card status 200, got %d: %s", cardRecorder.Code, cardRecorder.Body.String())
+	}
+
+	var card AgentCard
+	if err := json.Unmarshal(cardRecorder.Body.Bytes(), &card); err != nil {
+		t.Fatalf("decode agent card: %v", err)
+	}
+	if !cardHasSkill(card, "clawside.task.create") {
+		t.Fatalf("expected agent card to include clawside.task.create, got %+v", card.Skills)
+	}
+	if card.Capabilities.Streaming || card.Capabilities.PushNotifications {
+		t.Fatalf("task create must not imply streaming or push support, got %+v", card.Capabilities)
+	}
+	if strings.Contains(strings.ToLower(card.Description), "read-only") {
+		t.Fatalf("agent card description must not call the endpoint read-only after task create support, got %q", card.Description)
+	}
+
+	rawHandoffCreate := postRPC(t, handler, "rpc-secret", `{"jsonrpc":"2.0","id":"1","method":"handoff_create","params":{}}`)
+	assertRPCError(t, rawHandoffCreate, -32601)
+
+	messageSend := postRPC(t, handler, "rpc-secret", `{"jsonrpc":"2.0","id":"1","method":"message/send","params":{}}`)
+	assertRPCError(t, messageSend, -32601)
+}
+
+func TestTaskCreateRejectsUnsafeParams(t *testing.T) {
+	handler, handlers := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+
+	for name, params := range map[string]map[string]any{
+		"blank idempotency key":              {"idempotency_key": "   ", "intent": "review", "receiver": map[string]any{"id": "writer"}},
+		"blank intent":                       {"idempotency_key": "task-1", "intent": "   ", "receiver": map[string]any{"id": "writer"}},
+		"blank receiver":                     {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "   "}},
+		"command":                            {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "command": "rm -rf /"},
+		"args":                               {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "args": []string{"--danger"}},
+		"cwd":                                {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "cwd": "/tmp/project"},
+		"session id":                         {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "session_id": "secret-session"},
+		"prompt":                             {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "prompt": "private prompt"},
+		"file project ref":                   {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "file:///Users/example/project"},
+		"absolute project ref":               {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "/Users/example/project"},
+		"relative project ref":               {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "../secret"},
+		"bare relative project ref":          {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "secrets/config.yaml"},
+		"dot project ref":                    {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "."},
+		"dotdot project ref":                 {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": ".."},
+		"backslash relative project ref":     {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": `..\secret`},
+		"windows drive-relative project ref": {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "C:secret.txt"},
+		"home project ref":                   {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "~/project"},
+		"file artifact ref":                  {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "artifact_refs": []map[string]any{{"uri": "file:///tmp/evidence.txt"}}},
+		"bare relative artifact ref":         {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "artifact_refs": []map[string]any{{"uri": "evidence.txt"}}},
+		"backslash artifact ref":             {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "artifact_refs": []map[string]any{{"uri": `.\evidence.txt`}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := postRPCJSON(t, handler, "rpc-secret", "clawside.task.create", params)
+			assertRPCError(t, recorder, -32602)
+		})
+	}
+
+	workflows, err := handlers.HandleWorkflowList(context.Background())
+	if err != nil {
+		t.Fatalf("HandleWorkflowList: %v", err)
+	}
+	if len(workflows) != 0 {
+		t.Fatalf("unsafe task create requests should not create workflows, got %+v", workflows)
+	}
+}
+
+func TestTaskCreateCreatesQueryableTask(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+
+	createResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", "clawside.task.create", validTaskCreateParams("external-task-1")))
+	var output struct {
+		Task       A2ATask `json:"task"`
+		WorkflowID string  `json:"workflowId"`
+		HandoffID  string  `json:"handoffId"`
+	}
+	if err := json.Unmarshal(createResult, &output); err != nil {
+		t.Fatalf("decode task create output: %v; body=%s", err, string(createResult))
+	}
+	if output.WorkflowID == "" || output.HandoffID == "" {
+		t.Fatalf("expected workflow and handoff ids, got %+v", output)
+	}
+	if output.Task.ID != output.HandoffID || output.Task.ContextID != output.WorkflowID {
+		t.Fatalf("expected task ids to match created handoff, got %+v", output.Task)
+	}
+	if output.Task.Status.State != "submitted" {
+		t.Fatalf("expected new task to be submitted, got %+v", output.Task.Status)
+	}
+	if output.Task.Metadata["workflowKind"] != "a2a_inbound" || output.Task.Metadata["intent"] != "Review downstream API compatibility" {
+		t.Fatalf("unexpected task metadata: %+v", output.Task.Metadata)
+	}
+
+	workflowStatus := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodWorkflowStatus, map[string]any{"workflow_id": output.WorkflowID}))
+	if !strings.Contains(string(workflowStatus), output.WorkflowID) || !strings.Contains(string(workflowStatus), output.HandoffID) {
+		t.Fatalf("expected workflow status to include created ids, got %s", string(workflowStatus))
+	}
+
+	handoffGet := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodHandoffGet, map[string]any{"handoff_id": output.HandoffID}))
+	if !strings.Contains(string(handoffGet), output.HandoffID) {
+		t.Fatalf("expected handoff get to include %s, got %s", output.HandoffID, string(handoffGet))
+	}
+
+	taskGet := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{"id": output.HandoffID}))
+	var task A2ATask
+	if err := json.Unmarshal(taskGet, &task); err != nil {
+		t.Fatalf("decode tasks/get result: %v; body=%s", err, string(taskGet))
+	}
+	if task.ID != output.HandoffID || task.ContextID != output.WorkflowID {
+		t.Fatalf("expected tasks/get to return created task, got %+v", task)
+	}
+}
+
+func TestTaskCreateIdempotency(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+
+	firstResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", "clawside.task.create", validTaskCreateParams("external-task-1")))
+	var first struct {
+		WorkflowID string `json:"workflowId"`
+		HandoffID  string `json:"handoffId"`
+	}
+	if err := json.Unmarshal(firstResult, &first); err != nil {
+		t.Fatalf("decode first create output: %v; body=%s", err, string(firstResult))
+	}
+
+	replayResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", "clawside.task.create", validTaskCreateParams("external-task-1")))
+	var replay struct {
+		WorkflowID          string `json:"workflowId"`
+		HandoffID           string `json:"handoffId"`
+		IdempotencyReplayed bool   `json:"idempotencyReplayed"`
+	}
+	if err := json.Unmarshal(replayResult, &replay); err != nil {
+		t.Fatalf("decode replay output: %v; body=%s", err, string(replayResult))
+	}
+	if replay.WorkflowID != first.WorkflowID || replay.HandoffID != first.HandoffID || !replay.IdempotencyReplayed {
+		t.Fatalf("expected idempotent replay of first create, first=%+v replay=%+v", first, replay)
+	}
+
+	conflictingParams := validTaskCreateParams("external-task-1")
+	conflictingParams["intent"] = "Different intent"
+	conflict := postRPCJSON(t, handler, "rpc-secret", "clawside.task.create", conflictingParams)
+	assertRPCError(t, conflict, -32602)
+
+	workflowList := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodWorkflowList, map[string]any{}))
+	var list toolserver.WorkflowListOutput
+	if err := json.Unmarshal(workflowList, &list); err != nil {
+		t.Fatalf("decode workflow list: %v; body=%s", err, string(workflowList))
+	}
+	if len(list.Workflows) != 1 || list.Workflows[0].Workflow.ID != first.WorkflowID {
+		t.Fatalf("expected exactly one workflow after conflict, got %+v", list.Workflows)
+	}
+}
+
+func validTaskCreateParams(idempotencyKey string) map[string]any {
+	return map[string]any{
+		"idempotency_key": idempotencyKey,
+		"intent":          "Review downstream API compatibility",
+		"receiver":        map[string]any{"id": "writer"},
+		"project_ref":     "project://downstream-api",
+		"artifact_refs": []map[string]any{
+			{"uri": "https://example.invalid/specs/api.md", "type": "spec", "checksum": "sha256:abc123"},
+		},
+	}
+}
+
 func newTestA2AHandler(t *testing.T, cfg Config) (http.Handler, *toolserver.Handlers) {
 	t.Helper()
 	dbName := strings.NewReplacer("/", "_", " ", "_").Replace(t.Name())

@@ -2,13 +2,16 @@ package a2aserver
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/walker1211/clawside/internal/orchestrator"
 	"github.com/walker1211/clawside/internal/toolserver"
@@ -205,6 +208,23 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
 		}
 		return result, nil
+	case MethodTaskCreate:
+		var input TaskCreateInput
+		if err := decodeRPCParams(params, &input); err != nil {
+			return nil, &RPCError{Code: rpcInvalidParams, Message: "invalid params"}
+		}
+		normalized, ok := normalizeTaskCreateInput(input)
+		if !ok {
+			return nil, &RPCError{Code: rpcInvalidParams, Message: "invalid params"}
+		}
+		result, err := h.handleTaskCreate(r, normalized)
+		if err != nil {
+			if errors.Is(err, orchestrator.ErrIdempotencyConflict) {
+				return nil, &RPCError{Code: rpcInvalidParams, Message: "invalid params"}
+			}
+			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
+		}
+		return result, nil
 	case MethodTasksGet:
 		var input TasksGetInput
 		if err := decodeRPCParams(params, &input); err != nil {
@@ -223,6 +243,40 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 	}
 }
 
+func (h *Handler) handleTaskCreate(r *http.Request, input TaskCreateInput) (TaskCreateOutput, error) {
+	payloadHash, err := taskCreatePayloadHash(input)
+	if err != nil {
+		return TaskCreateOutput{}, err
+	}
+	artifactRefs := make([]toolserver.ControlledTaskArtifactRef, 0, len(input.ArtifactRefs))
+	for _, artifactRef := range input.ArtifactRefs {
+		artifactRefs = append(artifactRefs, toolserver.ControlledTaskArtifactRef{
+			URI:      artifactRef.URI,
+			Type:     artifactRef.Type,
+			Version:  artifactRef.Version,
+			Checksum: artifactRef.Checksum,
+		})
+	}
+	result, err := h.handlers.HandleControlledTaskCreate(r.Context(), toolserver.ControlledTaskCreateInput{
+		IdempotencyKey: input.IdempotencyKey,
+		PayloadHash:    payloadHash,
+		Intent:         input.Intent,
+		ReceiverID:     input.Receiver.ID,
+		ProjectRef:     input.ProjectRef,
+		ArtifactRefs:   artifactRefs,
+	})
+	if err != nil {
+		return TaskCreateOutput{}, err
+	}
+	task := toA2ATask(toolserver.HandoffGetOutput{Handoff: result.Handoff}, nil)
+	return TaskCreateOutput{
+		Task:                task,
+		WorkflowID:          result.Workflow.ID,
+		HandoffID:           result.Handoff.ID,
+		IdempotencyReplayed: result.Replayed,
+	}, nil
+}
+
 func (h *Handler) handleTasksGet(r *http.Request, input TasksGetInput) (A2ATask, error) {
 	result, err := h.handlers.HandleHandoffGet(r.Context(), toolserver.HandoffGetInput{HandoffID: strings.TrimSpace(input.ID)})
 	if err != nil {
@@ -236,6 +290,87 @@ func validTasksGetInput(input TasksGetInput) bool {
 		return false
 	}
 	return input.HistoryLength == nil || *input.HistoryLength >= 0
+}
+
+const (
+	maxTaskCreateIDLength     = 200
+	maxTaskCreateIntentLength = 2000
+	maxTaskCreateRefLength    = 1000
+	maxTaskCreateArtifacts    = 32
+)
+
+func normalizeTaskCreateInput(input TaskCreateInput) (TaskCreateInput, bool) {
+	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
+	input.Intent = strings.TrimSpace(input.Intent)
+	input.Receiver.ID = strings.TrimSpace(input.Receiver.ID)
+	input.ProjectRef = strings.TrimSpace(input.ProjectRef)
+	if !validRequiredTaskCreateString(input.IdempotencyKey, maxTaskCreateIDLength) {
+		return TaskCreateInput{}, false
+	}
+	if !validRequiredTaskCreateString(input.Intent, maxTaskCreateIntentLength) {
+		return TaskCreateInput{}, false
+	}
+	if !validRequiredTaskCreateString(input.Receiver.ID, maxTaskCreateIDLength) {
+		return TaskCreateInput{}, false
+	}
+	if !validOptionalTaskCreateString(input.ProjectRef, maxTaskCreateRefLength) || !safeTaskCreateExternalRef(input.ProjectRef) {
+		return TaskCreateInput{}, false
+	}
+	if len(input.ArtifactRefs) > maxTaskCreateArtifacts {
+		return TaskCreateInput{}, false
+	}
+	for i := range input.ArtifactRefs {
+		input.ArtifactRefs[i].URI = strings.TrimSpace(input.ArtifactRefs[i].URI)
+		input.ArtifactRefs[i].Type = strings.TrimSpace(input.ArtifactRefs[i].Type)
+		input.ArtifactRefs[i].Version = strings.TrimSpace(input.ArtifactRefs[i].Version)
+		input.ArtifactRefs[i].Checksum = strings.TrimSpace(input.ArtifactRefs[i].Checksum)
+		if !validRequiredTaskCreateString(input.ArtifactRefs[i].URI, maxTaskCreateRefLength) || !safeTaskCreateExternalRef(input.ArtifactRefs[i].URI) {
+			return TaskCreateInput{}, false
+		}
+		if !validOptionalTaskCreateString(input.ArtifactRefs[i].Type, maxTaskCreateIDLength) {
+			return TaskCreateInput{}, false
+		}
+		if !validOptionalTaskCreateString(input.ArtifactRefs[i].Version, maxTaskCreateIDLength) {
+			return TaskCreateInput{}, false
+		}
+		if !validOptionalTaskCreateString(input.ArtifactRefs[i].Checksum, maxTaskCreateIDLength) {
+			return TaskCreateInput{}, false
+		}
+	}
+	return input, true
+}
+
+func taskCreatePayloadHash(input TaskCreateInput) (string, error) {
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(payload)
+	return fmt.Sprintf("%x", sum), nil
+}
+
+func validRequiredTaskCreateString(value string, maxLength int) bool {
+	return value != "" && validOptionalTaskCreateString(value, maxLength)
+}
+
+func validOptionalTaskCreateString(value string, maxLength int) bool {
+	if len(value) > maxLength || !utf8.ValidString(value) {
+		return false
+	}
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func safeTaskCreateExternalRef(ref string) bool {
+	if ref == "" {
+		return true
+	}
+	lower := strings.ToLower(ref)
+	return strings.HasPrefix(lower, "project://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "http://")
 }
 
 func toA2ATask(result toolserver.HandoffGetOutput, historyLength *int) A2ATask {
@@ -391,7 +526,7 @@ func buildAgentCard(rpcURL string) AgentCard {
 	return AgentCard{
 		ProtocolVersion: "0.3.0",
 		Name:            "clawside-coordination",
-		Description:     "Read-only Clawside coordination and workflow status queries.",
+		Description:     "Clawside coordination queries and controlled inbound task creation.",
 		URL:             rpcURL,
 		Provider: AgentProvider{
 			Organization: "clawside",
@@ -409,6 +544,7 @@ func buildAgentCard(rpcURL string) AgentCard {
 			newSkill(MethodAgentList, "List agents", "List registered agents by coordination filters."),
 			newSkill(MethodNextWork, "Next work", "List executable handoffs for an agent or work filter."),
 			newSkill(MethodBlockedWork, "Blocked work", "List blocked handoffs with reasons and suggestions."),
+			newSkill(MethodTaskCreate, "Create controlled task", "Create an idempotent controlled inbound task without runtime or delivery execution."),
 			newSkill(MethodTasksGet, "Get task", "Get A2A-compatible read-only task status for a Clawside handoff."),
 		},
 		SecuritySchemes: map[string]AgentCardSecurity{

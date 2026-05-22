@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -168,6 +169,15 @@ func (s *Store) init(ctx context.Context) error {
 			metadata_json TEXT NOT NULL,
 			created_by_json TEXT NOT NULL,
 			created_at TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS a2a_inbound_task_creations (
+			idempotency_key TEXT PRIMARY KEY,
+			payload_hash TEXT NOT NULL,
+			workflow_id TEXT NOT NULL,
+			handoff_id TEXT NOT NULL,
+			created_at TEXT NOT NULL,
+			FOREIGN KEY (workflow_id) REFERENCES workflows(id),
+			FOREIGN KEY (handoff_id) REFERENCES handoffs(id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS watches (
 			id TEXT PRIMARY KEY,
@@ -786,6 +796,14 @@ func containsTaskKind(values []TaskKind, want TaskKind) bool {
 	return false
 }
 
+type a2aInboundTaskCreationRecord struct {
+	IdempotencyKey string
+	PayloadHash    string
+	WorkflowID     string
+	HandoffID      string
+	CreatedAt      time.Time
+}
+
 func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
 	dependsJSON, err := marshalJSON(handoff.DependsOnHandoffIDs)
 	if err != nil {
@@ -924,6 +942,64 @@ func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
 		return fmt.Errorf("save handoff %s: %w", handoff.ID, err)
 	}
 	return saveOwnershipBindingExec(ctx, db, OwnershipBindingFromHandoff(handoff))
+}
+
+func saveArtifactExec(ctx context.Context, db execer, artifact Artifact) error {
+	metadata := artifact.Metadata
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	metadataJSON, err := marshalJSON(metadata)
+	if err != nil {
+		return err
+	}
+	createdByJSON, err := marshalJSON(artifact.CreatedBy)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+		INSERT INTO artifacts (
+			id, handoff_id, type, uri, version, checksum, metadata_json, created_by_json, created_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, artifact.ID, artifact.HandoffID, artifact.Type, artifact.URI, artifact.Version, artifact.Checksum, metadataJSON, createdByJSON, formatTime(artifact.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("save artifact %s: %w", artifact.ID, err)
+	}
+	return nil
+}
+
+func loadA2AInboundTaskCreationTx(ctx context.Context, db queryer, idempotencyKey string) (a2aInboundTaskCreationRecord, bool, error) {
+	row := db.QueryRowContext(ctx, `
+		SELECT idempotency_key, payload_hash, workflow_id, handoff_id, created_at
+		FROM a2a_inbound_task_creations
+		WHERE idempotency_key = ?
+	`, idempotencyKey)
+	var record a2aInboundTaskCreationRecord
+	var createdAt string
+	if err := row.Scan(&record.IdempotencyKey, &record.PayloadHash, &record.WorkflowID, &record.HandoffID, &createdAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return a2aInboundTaskCreationRecord{}, false, nil
+		}
+		return a2aInboundTaskCreationRecord{}, false, fmt.Errorf("load a2a inbound task creation %s: %w", idempotencyKey, err)
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return a2aInboundTaskCreationRecord{}, false, fmt.Errorf("parse a2a inbound task creation created_at: %w", err)
+	}
+	record.CreatedAt = parsedCreatedAt
+	return record, true, nil
+}
+
+func saveA2AInboundTaskCreationExec(ctx context.Context, db execer, record a2aInboundTaskCreationRecord) error {
+	_, err := db.ExecContext(ctx, `
+		INSERT INTO a2a_inbound_task_creations (
+			idempotency_key, payload_hash, workflow_id, handoff_id, created_at
+		) VALUES (?, ?, ?, ?, ?)
+	`, record.IdempotencyKey, record.PayloadHash, record.WorkflowID, record.HandoffID, formatTime(record.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("save a2a inbound task creation %s: %w", record.IdempotencyKey, err)
+	}
+	return nil
 }
 
 func updateHandoffOwnershipExec(ctx context.Context, db execer, handoff Handoff) error {
@@ -1161,6 +1237,44 @@ func (s *Store) LoadHandoff(ctx context.Context, handoffID string) (Handoff, err
 
 func (s *Store) LoadWorkflow(ctx context.Context, workflowID string) (Workflow, error) {
 	row := s.db.QueryRowContext(ctx, `
+		SELECT id, kind, initiator_actor_json, status, root_handoff_id, current_handoff_id, created_at, updated_at, completed_at
+		FROM workflows WHERE id = ?
+	`, workflowID)
+
+	var (
+		workflow             Workflow
+		initiatorJSON        string
+		createdAt, updatedAt string
+		completedAt          sql.NullString
+	)
+	if err := row.Scan(&workflow.ID, &workflow.Kind, &initiatorJSON, &workflow.Status, &workflow.RootHandoffID, &workflow.CurrentHandoffID, &createdAt, &updatedAt, &completedAt); err != nil {
+		return Workflow{}, fmt.Errorf("load workflow %s: %w", workflowID, err)
+	}
+	if err := unmarshalJSON(initiatorJSON, &workflow.InitiatorActor); err != nil {
+		return Workflow{}, err
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return Workflow{}, fmt.Errorf("parse workflow created_at: %w", err)
+	}
+	parsedUpdatedAt, err := time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return Workflow{}, fmt.Errorf("parse workflow updated_at: %w", err)
+	}
+	workflow.CreatedAt = parsedCreatedAt
+	workflow.UpdatedAt = parsedUpdatedAt
+	if completedAt.Valid {
+		parsed, err := time.Parse(time.RFC3339Nano, completedAt.String)
+		if err != nil {
+			return Workflow{}, fmt.Errorf("parse workflow completed_at: %w", err)
+		}
+		workflow.CompletedAt = &parsed
+	}
+	return workflow, nil
+}
+
+func loadWorkflowTx(ctx context.Context, db queryer, workflowID string) (Workflow, error) {
+	row := db.QueryRowContext(ctx, `
 		SELECT id, kind, initiator_actor_json, status, root_handoff_id, current_handoff_id, created_at, updated_at, completed_at
 		FROM workflows WHERE id = ?
 	`, workflowID)
