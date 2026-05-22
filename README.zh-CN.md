@@ -20,7 +20,7 @@
 - **A2A delivery bridge skill**：在官方 announce / nested 回传链路不稳定时，为主 agent 提供显式消息投递桥
 - **MCP + skill v1 surface**：让 OpenClaw 可以安装、注册并消费 handoff、workflow、watch、repair、agent coordination 和 A2A delivery 工具
 - **Agent coordination policy**：基于 registry 的 work projection，支持 heartbeat 默认值、stale/offline owner 信号和 expired lease 建议
-- **A2A compatibility endpoint**：实验性 Agent Card + JSON-RPC 入口，用于 coordination 查询、标准 task status 查询和受控幂等 inbound task creation
+- **A2A compatibility endpoint**：实验性 Agent Card + JSON-RPC 入口，用于 coordination 查询、标准 task status 查询、受控幂等 inbound task creation 和只读 task event streaming
 
 当前版本已把最小可用 v1 收口为可安装、可注册、可验证的 MCP server + skill 产品套件。
 
@@ -75,7 +75,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `cmd/config-builder/`：生成 sender 派生配置的 Go CLI
 - `cmd/orchestrator/`：低层 orchestrator 调试 / 操作入口
 - `cmd/clawside-mcp/`：stdio MCP server 入口
-- `cmd/clawside-a2a/`：实验性的 A2A compatibility HTTP endpoint，支持受控查询和 inbound task creation
+- `cmd/clawside-a2a/`：实验性的 A2A compatibility HTTP endpoint，支持受控查询、inbound task creation 和只读 task events
 - `cmd/openclaw-mcp-smoke/`：OpenClaw 消费 clawside MCP v1 surface 的本地 smoke verifier
 - `cmd/openclaw-dispatch/`：把 `handoff_dispatch adapter=openclaw` 请求适配到 OpenClaw-compatible CLI command 的本地 helper
 - `cmd/openclaw-tool-results-extract/`：从 OpenClaw trajectory 提取 clawside tool structured result 的本地只读 CLI
@@ -347,7 +347,7 @@ go run ./cmd/clawside-mcp \
 
 ## A2A compatibility endpoint
 
-`clawside-a2a` 是实验性的兼容入口，用于 A2A-style discovery、coordination 查询、标准 task status 查询和受控 inbound task creation。它暴露 Agent Card，以及一个由同一份 sqlite truth store 支撑的小型 JSON-RPC allowlist。
+`clawside-a2a` 是实验性的兼容入口，用于 A2A-style discovery、coordination 查询、标准 task status 查询、受控 inbound task creation 和只读 task event streaming。它暴露 Agent Card、小型 JSON-RPC allowlist，以及由同一份 sqlite truth store 支撑的 SSE task stream。
 
 用独立的 A2A auth key 启动：
 
@@ -386,6 +386,14 @@ curl -sS http://127.0.0.1:8789/a2a/rpc \
   -d '{"jsonrpc":"2.0","id":"1","method":"tasks/get","params":{"id":"hf_example","historyLength":0}}'
 ```
 
+订阅某个 Clawside handoff 的只读 task projection events：
+
+```bash
+curl -N http://127.0.0.1:8789/a2a/tasks/hf_example/events?historyLength=1 \
+  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+  -H "Accept: text/event-stream"
+```
+
 创建一条受控 inbound task。该调用会创建一个 root workflow / handoff，并返回之后可由 `tasks/get` 读取的同一 task view：
 
 ```bash
@@ -408,9 +416,9 @@ curl -sS http://127.0.0.1:8789/a2a/rpc \
   }'
 ```
 
-支持的 JSON-RPC methods 包括标准风格的只读 `tasks/get` handoff status mapping、受控幂等的 `clawside.task.create` inbound creation method，以及刻意放在 `clawside.*` 命名空间下的查询：`clawside.workflow.list`、`clawside.workflow.status`、`clawside.handoff.get`、`clawside.agent.list`、`clawside.work.next` 和 `clawside.work.blocked`。
+支持的 JSON-RPC methods 包括标准风格的只读 `tasks/get` handoff status mapping、受控幂等的 `clawside.task.create` inbound creation method，以及刻意放在 `clawside.*` 命名空间下的查询：`clawside.workflow.list`、`clawside.workflow.status`、`clawside.handoff.get`、`clawside.agent.list`、`clawside.work.next` 和 `clawside.work.blocked`。SSE endpoint 是 `GET /a2a/tasks/<handoff-id>/events`；它只输出 task projection snapshot，不暴露 raw event payload。
 
-边界：这个 endpoint 只允许受控幂等的 `clawside.task.create` mutation；不实现完整 Google A2A message runtime、raw `handoff_create`、`message/send`、`tasks/cancel`、SSE、push notification、sandbox、OpenClaw / Claude managed session、command / args / 本地路径 / runtime session / private prompt / worker launch 参数、sender delivery 或动态 mutating JSON-RPC mapping。
+边界：这个 endpoint 只允许受控幂等的 `clawside.task.create` mutation，以及只读 task event streaming；不实现完整 Google A2A message runtime、raw `handoff_create`、`message/send`、`tasks/cancel`、push notification、sandbox、OpenClaw / Claude managed session、command / args / 本地路径 / runtime session / private prompt / worker launch 参数、sender delivery 或动态 mutating JSON-RPC mapping。
 
 ## OpenClaw MCP smoke verifier
 

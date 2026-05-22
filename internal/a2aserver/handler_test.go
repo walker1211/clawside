@@ -1,12 +1,14 @@
 package a2aserver
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -37,13 +39,17 @@ func TestAgentCardAndHealthz(t *testing.T) {
 	if card.Name != "clawside-coordination" || card.URL != "http://127.0.0.1:8789/a2a/rpc" {
 		t.Fatalf("unexpected card identity: %+v", card)
 	}
-	if card.Capabilities.Streaming || card.Capabilities.PushNotifications {
-		t.Fatalf("expected non-streaming non-push card capabilities, got %+v", card.Capabilities)
+	if !card.Capabilities.Streaming || card.Capabilities.PushNotifications {
+		t.Fatalf("expected streaming non-push card capabilities, got %+v", card.Capabilities)
 	}
-	for _, method := range []string{MethodWorkflowList, MethodWorkflowStatus, MethodHandoffGet, MethodAgentList, MethodNextWork, MethodBlockedWork, MethodTasksGet} {
+	for _, method := range []string{MethodWorkflowList, MethodWorkflowStatus, MethodHandoffGet, MethodAgentList, MethodNextWork, MethodBlockedWork, MethodTasksGet, "tasks/events"} {
 		if !cardHasSkill(card, method) {
 			t.Fatalf("expected agent card to include skill %s, got %+v", method, card.Skills)
 		}
+	}
+	taskEventsSkill, ok := cardSkill(card, "tasks/events")
+	if !ok || !containsString(taskEventsSkill.OutputModes, "text/event-stream") {
+		t.Fatalf("expected tasks/events skill to advertise text/event-stream output, got %+v", taskEventsSkill)
 	}
 
 	healthRecorder := httptest.NewRecorder()
@@ -306,6 +312,203 @@ func TestTasksGetHistoryLength(t *testing.T) {
 	}
 }
 
+func TestTaskEventsRequiresAuthAndGet(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+
+	missingAuth := requestTaskEvents(t, handler, http.MethodGet, "", "/a2a/tasks/hf_test/events", "")
+	if missingAuth.Code != http.StatusUnauthorized {
+		t.Fatalf("expected missing auth 401, got %d: %s", missingAuth.Code, missingAuth.Body.String())
+	}
+
+	invalidAuth := requestTaskEvents(t, handler, http.MethodGet, "wrong-secret", "/a2a/tasks/hf_test/events", "")
+	if invalidAuth.Code != http.StatusForbidden {
+		t.Fatalf("expected invalid auth 403, got %d: %s", invalidAuth.Code, invalidAuth.Body.String())
+	}
+	if strings.Contains(invalidAuth.Body.String(), "rpc-secret") {
+		t.Fatalf("auth error leaked configured auth key: %s", invalidAuth.Body.String())
+	}
+
+	post := requestTaskEvents(t, handler, http.MethodPost, "rpc-secret", "/a2a/tasks/hf_test/events", "")
+	if post.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected non-GET request 405, got %d: %s", post.Code, post.Body.String())
+	}
+}
+
+func TestTaskEventsRejectsUnsafeParams(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+
+	for name, request := range map[string]struct {
+		target string
+		body   string
+	}{
+		"blank handoff id":   {target: "/a2a/tasks//events"},
+		"slash handoff id":   {target: "/a2a/tasks/hf/unsafe/events"},
+		"backslash handoff":  {target: "/a2a/tasks/hf%5Cunsafe/events"},
+		"control handoff":    {target: "/a2a/tasks/hf%7Funsafe/events"},
+		"negative history":   {target: "/a2a/tasks/hf_test/events?historyLength=-1"},
+		"nonnumeric history": {target: "/a2a/tasks/hf_test/events?historyLength=abc"},
+		"high history":       {target: "/a2a/tasks/hf_test/events?historyLength=101"},
+		"duplicate history":  {target: "/a2a/tasks/hf_test/events?historyLength=1&historyLength=2"},
+		"unknown query":      {target: "/a2a/tasks/hf_test/events?command=rm"},
+		"low poll interval":  {target: "/a2a/tasks/hf_test/events?pollIntervalMs=249"},
+		"high poll interval": {target: "/a2a/tasks/hf_test/events?pollIntervalMs=10001"},
+		"nonnumeric poll":    {target: "/a2a/tasks/hf_test/events?pollIntervalMs=abc"},
+		"body":               {target: "/a2a/tasks/hf_test/events", body: `{"prompt":"private"}`},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := requestTaskEvents(t, handler, http.MethodGet, "rpc-secret", request.target, request.body)
+			if recorder.Code != http.StatusBadRequest {
+				t.Fatalf("expected invalid task events request 400, got %d: %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+
+	chunkedBody := httptest.NewRequest(http.MethodGet, "/a2a/tasks/hf_test/events", strings.NewReader(`{"prompt":"private"}`))
+	chunkedBody.Header.Set("Authorization", "Bearer rpc-secret")
+	chunkedBody.ContentLength = -1
+	chunkedRecorder := httptest.NewRecorder()
+	handler.ServeHTTP(chunkedRecorder, chunkedBody)
+	if chunkedRecorder.Code != http.StatusBadRequest {
+		t.Fatalf("expected chunked body task events request 400, got %d: %s", chunkedRecorder.Code, chunkedRecorder.Body.String())
+	}
+}
+
+func TestTaskEventsStreamsInitialTaskSnapshot(t *testing.T) {
+	handler, handlers := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+	ctx := context.Background()
+	created, err := handlers.HandleHandoffCreate(ctx, toolserver.HandoffCreateInput{
+		WorkflowKind: "multi_project",
+		Sender:       toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "write draft",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	requestCtx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, server.URL+"/a2a/tasks/"+created.Handoff.ID+"/events?historyLength=1", nil)
+	if err != nil {
+		t.Fatalf("new task events request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer rpc-secret")
+	request.Header.Set("Accept", "text/event-stream")
+
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("task events request: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected task events status 200, got %d", response.StatusCode)
+	}
+	if contentType := response.Header.Get("Content-Type"); !strings.Contains(contentType, "text/event-stream") {
+		t.Fatalf("expected text/event-stream content type, got %q", contentType)
+	}
+
+	event := readSSEEvent(t, bufio.NewReader(response.Body))
+	if event.name != "task" {
+		t.Fatalf("expected task event, got %+v", event)
+	}
+	if event.id != created.Handoff.ID {
+		t.Fatalf("expected initial event id %s, got %+v", created.Handoff.ID, event)
+	}
+	for _, forbidden := range []string{"command", "session_id", "prompt"} {
+		if strings.Contains(string(event.data), forbidden) {
+			t.Fatalf("task event leaked forbidden field %q: %s", forbidden, string(event.data))
+		}
+	}
+	var payload struct {
+		Task       A2ATask `json:"task"`
+		HandoffID  string  `json:"handoffId"`
+		WorkflowID string  `json:"workflowId"`
+		EventID    string  `json:"eventId"`
+		Timestamp  string  `json:"timestamp"`
+	}
+	if err := json.Unmarshal(event.data, &payload); err != nil {
+		t.Fatalf("decode task event data: %v; data=%s", err, string(event.data))
+	}
+	if payload.HandoffID != created.Handoff.ID || payload.WorkflowID != created.Workflow.ID || payload.EventID != created.Handoff.ID {
+		t.Fatalf("unexpected task event ids: %+v", payload)
+	}
+	if payload.Task.ID != created.Handoff.ID || payload.Task.ContextID != created.Workflow.ID {
+		t.Fatalf("unexpected streamed task: %+v", payload.Task)
+	}
+	if payload.Task.Status.State != "submitted" || payload.Timestamp == "" {
+		t.Fatalf("unexpected streamed task status/timestamp: %+v", payload)
+	}
+}
+
+func TestTaskEventsEmitsProgressChange(t *testing.T) {
+	handler, handlers := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+	ctx := context.Background()
+	created, err := handlers.HandleHandoffCreate(ctx, toolserver.HandoffCreateInput{
+		WorkflowKind: "multi_project",
+		Sender:       toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "write draft",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if _, err := handlers.HandleHandoffDispatch(ctx, toolserver.HandoffDispatchInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("dispatch handoff: %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	requestCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, server.URL+"/a2a/tasks/"+created.Handoff.ID+"/events?historyLength=1&pollIntervalMs=250", nil)
+	if err != nil {
+		t.Fatalf("new task events request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer rpc-secret")
+	request.Header.Set("Accept", "text/event-stream")
+
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("task events request: %v", err)
+	}
+	defer response.Body.Close()
+	reader := bufio.NewReader(response.Body)
+	initial := readSSEEvent(t, reader)
+	if initial.id == "" || initial.name != "task" {
+		t.Fatalf("expected initial task event, got %+v", initial)
+	}
+
+	if _, err := handlers.HandleHandoffProgress(ctx, toolserver.HandoffProgressInput{
+		Action:    "receive",
+		HandoffID: created.Handoff.ID,
+		Actor:     toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+	}); err != nil {
+		t.Fatalf("receive handoff: %v", err)
+	}
+	changed := readSSEEvent(t, reader)
+	if changed.name != "task" || changed.id == "" || changed.id == initial.id {
+		t.Fatalf("expected changed task event after progress, initial=%+v changed=%+v", initial, changed)
+	}
+	var payload TaskStreamEvent
+	if err := json.Unmarshal(changed.data, &payload); err != nil {
+		t.Fatalf("decode changed task event: %v; data=%s", err, string(changed.data))
+	}
+	if payload.Task.Status.State != "working" {
+		t.Fatalf("expected progressed task to be working, got %+v", payload.Task.Status)
+	}
+	if len(payload.Task.History) != 1 || payload.Task.History[0].Type != string(orchestrator.EventReceived) {
+		t.Fatalf("expected latest received history item, got %+v", payload.Task.History)
+	}
+}
+
 func TestTaskCreateAdvertisedAndMutationBoundaries(t *testing.T) {
 	handler, _ := newTestA2AHandler(t, Config{PublicURL: "http://127.0.0.1:8789", AuthKey: "rpc-secret"})
 
@@ -323,8 +526,8 @@ func TestTaskCreateAdvertisedAndMutationBoundaries(t *testing.T) {
 	if !cardHasSkill(card, "clawside.task.create") {
 		t.Fatalf("expected agent card to include clawside.task.create, got %+v", card.Skills)
 	}
-	if card.Capabilities.Streaming || card.Capabilities.PushNotifications {
-		t.Fatalf("task create must not imply streaming or push support, got %+v", card.Capabilities)
+	if !card.Capabilities.Streaming || card.Capabilities.PushNotifications {
+		t.Fatalf("task create must keep push disabled while advertising read-only streaming, got %+v", card.Capabilities)
 	}
 	if strings.Contains(strings.ToLower(card.Description), "read-only") {
 		t.Fatalf("agent card description must not call the endpoint read-only after task create support, got %q", card.Description)
@@ -494,12 +697,67 @@ func newTestA2AHandler(t *testing.T, cfg Config) (http.Handler, *toolserver.Hand
 }
 
 func cardHasSkill(card AgentCard, id string) bool {
+	_, ok := cardSkill(card, id)
+	return ok
+}
+
+func cardSkill(card AgentCard, id string) (AgentSkill, bool) {
 	for _, skill := range card.Skills {
 		if skill.ID == id {
-			return true
+			return skill, true
 		}
 	}
-	return false
+	return AgentSkill{}, false
+}
+
+func containsString(values []string, target string) bool {
+	return slices.Contains(values, target)
+}
+
+type testSSEEvent struct {
+	name string
+	id   string
+	data []byte
+}
+
+func readSSEEvent(t *testing.T, reader *bufio.Reader) testSSEEvent {
+	t.Helper()
+	var event testSSEEvent
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read SSE event: %v", err)
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			return event
+		}
+		switch {
+		case strings.HasPrefix(line, "event: "):
+			event.name = strings.TrimPrefix(line, "event: ")
+		case strings.HasPrefix(line, "id: "):
+			event.id = strings.TrimPrefix(line, "id: ")
+		case strings.HasPrefix(line, "data: "):
+			event.data = append(event.data, strings.TrimPrefix(line, "data: ")...)
+		}
+	}
+}
+
+func requestTaskEvents(t *testing.T, handler http.Handler, method, authKey, target, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	var reader *strings.Reader
+	if body != "" {
+		reader = strings.NewReader(body)
+	} else {
+		reader = strings.NewReader("")
+	}
+	request := httptest.NewRequest(method, target, reader)
+	if authKey != "" {
+		request.Header.Set("Authorization", "Bearer "+authKey)
+	}
+	handler.ServeHTTP(recorder, request)
+	return recorder
 }
 
 func postRPC(t *testing.T, handler http.Handler, authKey string, body string) *httptest.ResponseRecorder {

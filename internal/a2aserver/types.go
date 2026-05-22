@@ -11,6 +11,7 @@ const (
 	MethodBlockedWork    = "clawside.work.blocked"
 	MethodTaskCreate     = "clawside.task.create"
 	MethodTasksGet       = "tasks/get"
+	MethodTasksEvents    = "tasks/events"
 )
 
 const (
@@ -131,4 +132,12 @@ type A2ATaskEvent struct {
 	Type      string `json:"type"`
 	Timestamp string `json:"timestamp,omitempty"`
 	Accepted  bool   `json:"accepted"`
+}
+
+type TaskStreamEvent struct {
+	Task       A2ATask `json:"task"`
+	HandoffID  string  `json:"handoffId"`
+	WorkflowID string  `json:"workflowId"`
+	EventID    string  `json:"eventId,omitempty"`
+	Timestamp  string  `json:"timestamp,omitempty"`
 }
