@@ -19,6 +19,7 @@
 - **OpenClaw adapter foundations**：用于把调度和桥接动作接到现有 OpenClaw 兼容入口
 - **A2A delivery bridge skill**：在官方 announce / nested 回传链路不稳定时，为主 agent 提供显式消息投递桥
 - **MCP + skill v1 surface**：让 OpenClaw 可以安装、注册并消费 handoff、workflow、watch、repair 和 A2A delivery 工具
+- **A2A compatibility endpoint**：实验性的只读 Agent Card + JSON-RPC 入口，用于查询 coordination 状态
 
 当前版本已把最小可用 v1 收口为可安装、可注册、可验证的 MCP server + skill 产品套件。
 
@@ -73,6 +74,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `cmd/config-builder/`：生成 sender 派生配置的 Go CLI
 - `cmd/orchestrator/`：低层 orchestrator 调试 / 操作入口
 - `cmd/clawside-mcp/`：stdio MCP server 入口
+- `cmd/clawside-a2a/`：实验性的只读 A2A compatibility HTTP endpoint
 - `cmd/openclaw-mcp-smoke/`：OpenClaw 消费 clawside MCP v1 surface 的本地 smoke verifier
 - `cmd/openclaw-dispatch/`：把 `handoff_dispatch adapter=openclaw` 请求适配到 OpenClaw-compatible CLI command 的本地 helper
 - `cmd/openclaw-tool-results-extract/`：从 OpenClaw trajectory 提取 clawside tool structured result 的本地只读 CLI
@@ -88,6 +90,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `internal/configbuilder/`：从 OpenClaw 源配置提取 sender 所需最小配置
 - `internal/orchestrator/`：handoff、workflow、event、watch、repair、adapter 基础实现
 - `internal/toolserver/`：MCP tool handler
+- `internal/a2aserver/`：Agent Card 与受控 JSON-RPC compatibility server
 - `internal/a2adelivery/`：A2A delivery bridge、轮询与编排逻辑
 - `main.go` + `http_handler.go` + `worker.go`：sender 服务入口、HTTP API 和发送 worker
 - `.claude/skills/openclaw-a2a-delivery/`：OpenClaw A2A delivery skill 定义
@@ -331,6 +334,42 @@ go run ./cmd/clawside-mcp \
 - `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
 
 如果要在 OpenClaw 中注册，核心是把它作为一个 stdio MCP server 注册，并让 OpenClaw 通过该 server 调用上述 tools。`command` 建议指向当前仓库的 `scripts/start_mcp.sh`。
+
+## A2A compatibility endpoint
+
+`clawside-a2a` 是实验性的只读兼容入口，用于 A2A-style discovery 和 coordination 查询。它暴露 Agent Card，以及一个由同一份 sqlite truth store 支撑的小型 JSON-RPC allowlist。
+
+用独立的 A2A auth key 启动：
+
+```bash
+CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
+  go run ./cmd/clawside-a2a --db ./sender.db --addr 127.0.0.1:8789
+```
+
+查看命令帮助：
+
+```bash
+go run ./cmd/clawside-a2a --help
+```
+
+读取公开 Agent Card：
+
+```bash
+curl -sS http://127.0.0.1:8789/.well-known/agent-card.json
+```
+
+执行只读 workflow 查询：
+
+```bash
+curl -sS http://127.0.0.1:8789/a2a/rpc \
+  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"clawside.workflow.list","params":{}}'
+```
+
+支持的 JSON-RPC methods 会刻意放在 `clawside.*` 命名空间下：`clawside.workflow.list`、`clawside.workflow.status`、`clawside.handoff.get`、`clawside.agent.list`、`clawside.work.next` 和 `clawside.work.blocked`。
+
+边界：这个 endpoint 不实现完整 Google A2A message runtime、SSE、push notification、sandbox、OpenClaw / Claude managed session、任意 command execution、sender delivery 或 mutating JSON-RPC methods。
 
 ## OpenClaw MCP smoke verifier
 

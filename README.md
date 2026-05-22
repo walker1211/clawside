@@ -2,7 +2,7 @@
 
 `clawside` is a local MCP sidecar / truth layer for OpenClaw.
 
-It currently provides a local Telegram sender, handoff/workflow orchestration foundations, and a productized OpenClaw-consumable MCP + skill v1 surface.
+It currently provides a local Telegram sender, handoff/workflow orchestration foundations, a productized OpenClaw-consumable MCP + skill v1 surface, and an experimental read-only A2A compatibility endpoint.
 
 [中文](./README.zh-CN.md) | [English](./README.en.md)
 
