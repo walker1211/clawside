@@ -46,6 +46,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&defaults.OpenClawDispatchSmoke, "openclaw-dispatch-smoke", false, "run an OpenClaw handoff_dispatch smoke through the configured MCP OpenClaw command")
 	fs.BoolVar(&defaults.MultiProjectHandoffSmoke, "multi-project-handoff-smoke", false, "run a multi-project upstream/downstream handoff dependency smoke through MCP")
 	fs.BoolVar(&defaults.MultiAgentCoordinationSmoke, "multi-agent-coordination-smoke", false, "run agent registry, next_work, blocked_work, and watch suggestion smoke through MCP")
+	fs.BoolVar(&defaults.CollaborationTemplateSmoke, "collaboration-template-smoke", false, "run a durable collaboration template smoke through MCP")
 	fs.StringVar(&defaults.OpenClawCommand, "openclaw-command", defaults.OpenClawCommand, "server-authorized OpenClaw dispatch command passed to clawside-mcp")
 	fs.Var(&openClawArgs, "openclaw-arg", "argument for the configured OpenClaw dispatch command; repeat for multiple args")
 	fs.StringVar(&defaults.OpenClawTarget, "openclaw-target", defaults.OpenClawTarget, "OpenClaw dispatch target for --openclaw-dispatch-smoke; accepts agent:<id> or <id>")

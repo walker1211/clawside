@@ -270,6 +270,27 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return handlers.HandleBlockedWork(ctx, args)
 	}))
 
+	collaborationTemplateListTool := mcp.NewTool("collaboration_template_list",
+		mcp.WithDescription("List built-in collaboration templates that only create durable truth-plane workflows and handoffs; this does not launch workers or run commands"),
+		mcp.WithOutputSchema[toolserver.CollaborationTemplateListOutput](),
+	)
+	s.AddTool(collaborationTemplateListTool, mcp.NewTypedToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, error) {
+		result, err := handlers.HandleCollaborationTemplateList(ctx)
+		if err != nil {
+			return mcp.NewToolResultError(err.Error()), nil
+		}
+		return mcp.NewToolResultStructured(result, "Listed collaboration templates"), nil
+	}))
+
+	collaborationTemplateApplyTool := mcp.NewTool("collaboration_template_apply",
+		mcp.WithDescription("Apply a built-in collaboration template by creating durable truth-plane workflows and handoffs only; this does not launch workers, run commands, open sessions, or call sender delivery"),
+		mcp.WithInputSchema[toolserver.CollaborationTemplateApplyInput](),
+		mcp.WithOutputSchema[toolserver.CollaborationTemplateApplyOutput](),
+	)
+	s.AddTool(collaborationTemplateApplyTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.CollaborationTemplateApplyInput) (toolserver.CollaborationTemplateApplyOutput, error) {
+		return handlers.HandleCollaborationTemplateApply(ctx, args)
+	}))
+
 	watchListTool := mcp.NewTool("watch_list",
 		mcp.WithDescription("List watches for a handoff"),
 		mcp.WithInputSchema[toolserver.WatchListInput](),

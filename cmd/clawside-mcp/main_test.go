@@ -17,16 +17,17 @@ import (
 )
 
 var documentedV1ToolGroups = map[string][]string{
-	"handoff lifecycle":    {"handoff_create", "handoff_get", "handoff_dispatch", "handoff_progress"},
-	"workflow query":       {"workflow_status", "workflow_list"},
-	"agent coordination":   {"agent_register", "agent_list", "next_work", "blocked_work"},
-	"watch ownership":      {"watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update"},
-	"repair divergence":    {"repair_list", "repair_invalidate_event", "repair_backfill_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_record", "divergence_list"},
-	"sender observability": {"sender_health", "sender_ready", "sender_stats", "sender_job_list", "sender_job_get"},
-	"a2a delivery":         {"a2a_deliver"},
+	"handoff lifecycle":       {"handoff_create", "handoff_get", "handoff_dispatch", "handoff_progress"},
+	"workflow query":          {"workflow_status", "workflow_list"},
+	"agent coordination":      {"agent_register", "agent_list", "next_work", "blocked_work"},
+	"collaboration templates": {"collaboration_template_list", "collaboration_template_apply"},
+	"watch ownership":         {"watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update"},
+	"repair divergence":       {"repair_list", "repair_invalidate_event", "repair_backfill_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_record", "divergence_list"},
+	"sender observability":    {"sender_health", "sender_ready", "sender_stats", "sender_job_list", "sender_job_get"},
+	"a2a delivery":            {"a2a_deliver"},
 }
 
-var documentedNoInputV1Tools = []string{"workflow_list", "sender_health", "sender_ready", "sender_stats"}
+var documentedNoInputV1Tools = []string{"workflow_list", "collaboration_template_list", "sender_health", "sender_ready", "sender_stats"}
 
 func TestResolveSenderAuthKeyPrefersExplicitFlag(t *testing.T) {
 	t.Setenv("SENDER_AUTH_KEY", "env-secret")
@@ -260,20 +261,119 @@ func TestServerCoordinationToolSchemasDoNotAcceptLocalExecutionFields(t *testing
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	wanted := map[string]bool{"agent_register": true, "agent_list": true, "next_work": true, "blocked_work": true}
+	wanted := map[string]bool{"agent_register": true, "agent_list": true, "next_work": true, "blocked_work": true, "collaboration_template_apply": true}
 	for _, tool := range tools.Tools {
 		if !wanted[tool.Name] {
 			continue
 		}
 		delete(wanted, tool.Name)
-		for _, forbidden := range []string{"command", "args"} {
-			if _, ok := tool.InputSchema.Properties[forbidden]; ok {
+		for _, forbidden := range []string{"command", "args", "path", "cwd", "prompt", "session_id", "token", "secret", "sender_job", "delivery_job"} {
+			if schemaContainsKey(t, tool.InputSchema, forbidden) {
 				t.Fatalf("expected %s schema not to accept %s: %+v", tool.Name, forbidden, tool.InputSchema.Properties)
 			}
 		}
 	}
 	if len(wanted) != 0 {
 		t.Fatalf("expected coordination tools, missing %+v", wanted)
+	}
+}
+
+func TestServerCollaborationTemplateApplySchemaListsOnlyTemplateFields(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	tools, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var properties map[string]any
+	for _, tool := range tools.Tools {
+		if tool.Name == "collaboration_template_apply" {
+			properties = tool.InputSchema.Properties
+			break
+		}
+	}
+	if properties == nil {
+		t.Fatalf("expected collaboration_template_apply properties")
+	}
+	want := []string{"template_name", "workflow_kind", "intent", "upstream", "downstream", "reviewer"}
+	for _, field := range want {
+		if _, ok := properties[field]; !ok {
+			t.Fatalf("expected collaboration_template_apply field %q in %+v", field, properties)
+		}
+	}
+	for field := range properties {
+		if !slices.Contains(want, field) {
+			t.Fatalf("unexpected collaboration_template_apply field %q in %+v", field, properties)
+		}
+	}
+}
+
+func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	listed, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "collaboration_template_list"}})
+	if err != nil {
+		t.Fatalf("CallTool(collaboration_template_list): %v", err)
+	}
+	if listed.IsError {
+		t.Fatalf("expected collaboration_template_list success")
+	}
+	assertStructuredObject(t, listed, "templates")
+
+	applied, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "collaboration_template_apply", Arguments: map[string]any{
+		"template_name": "upstream_downstream_review",
+		"intent":        "Coordinate upstream API change through downstream implementation and review",
+		"upstream":      map[string]any{"receiver_id": "upstream", "project_ref": "project://upstream"},
+		"downstream":    map[string]any{"receiver_id": "downstream", "project_ref": "project://downstream"},
+		"reviewer":      map[string]any{"receiver_id": "reviewer", "project_ref": "project://review"},
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(collaboration_template_apply): %v", err)
+	}
+	if applied.IsError {
+		t.Fatalf("expected collaboration_template_apply success")
+	}
+	var payload struct {
+		TemplateName string `json:"template_name"`
+		Workflow     struct {
+			ID string `json:"id"`
+		} `json:"workflow"`
+		Handoffs []struct {
+			ID                  string   `json:"id"`
+			WorkflowID          string   `json:"workflow_id"`
+			DependsOnHandoffIDs []string `json:"depends_on_handoff_ids"`
+		} `json:"handoffs"`
+	}
+	decodeStructuredContent(t, applied, &payload)
+	if payload.TemplateName != "upstream_downstream_review" {
+		t.Fatalf("expected template name, got %q", payload.TemplateName)
+	}
+	if payload.Workflow.ID == "" {
+		t.Fatalf("expected workflow id")
+	}
+	if len(payload.Handoffs) != 3 {
+		t.Fatalf("expected 3 handoffs, got %+v", payload.Handoffs)
+	}
+	for _, handoff := range payload.Handoffs {
+		if handoff.WorkflowID != payload.Workflow.ID {
+			t.Fatalf("expected handoff %s in workflow %s, got %s", handoff.ID, payload.Workflow.ID, handoff.WorkflowID)
+		}
+	}
+	if len(payload.Handoffs[1].DependsOnHandoffIDs) != 1 || payload.Handoffs[1].DependsOnHandoffIDs[0] != payload.Handoffs[0].ID {
+		t.Fatalf("expected downstream dependency on upstream, got %+v", payload.Handoffs[1].DependsOnHandoffIDs)
+	}
+	if len(payload.Handoffs[2].DependsOnHandoffIDs) != 1 || payload.Handoffs[2].DependsOnHandoffIDs[0] != payload.Handoffs[1].ID {
+		t.Fatalf("expected reviewer dependency on downstream, got %+v", payload.Handoffs[2].DependsOnHandoffIDs)
 	}
 }
 
@@ -1650,6 +1750,37 @@ func TestServerLocalGoldenPathConsumesWorkflowTools(t *testing.T) {
 	if !polledJob {
 		t.Fatalf("expected a2a_deliver to poll sender job status")
 	}
+}
+
+func schemaContainsKey(t *testing.T, schema any, key string) bool {
+	t.Helper()
+	raw, err := json.Marshal(schema)
+	if err != nil {
+		t.Fatalf("marshal schema: %v", err)
+	}
+	var value any
+	if err := json.Unmarshal(raw, &value); err != nil {
+		t.Fatalf("unmarshal schema: %v", err)
+	}
+	return jsonObjectContainsKey(value, key)
+}
+
+func jsonObjectContainsKey(value any, key string) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for currentKey, child := range typed {
+			if currentKey == key || jsonObjectContainsKey(child, key) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if jsonObjectContainsKey(child, key) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func assertStructuredObject(t *testing.T, result *mcp.CallToolResult, key string) {

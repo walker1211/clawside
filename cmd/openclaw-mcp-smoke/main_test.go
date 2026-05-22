@@ -886,6 +886,93 @@ func TestCheckMultiAgentCoordinationCoversRegistryWorkAndWatchSuggestions(t *tes
 	}
 }
 
+func TestCheckCollaborationTemplateCreatesChainAndProjection(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{"templates": []any{
+			map[string]any{"name": "upstream_downstream_review", "handoff_count": float64(3), "requires_review": true},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"template_name": "upstream_downstream_review",
+			"workflow":      map[string]any{"id": "workflow-1"},
+			"handoffs": []any{
+				map[string]any{"id": "upstream-1", "workflow_id": "workflow-1"},
+				map[string]any{"id": "downstream-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"upstream-1"}},
+				map[string]any{"id": "reviewer-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"downstream-1"}},
+			},
+		}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "upstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{
+				"handoff": map[string]any{"id": "downstream-1"},
+				"reasons": []any{map[string]any{"code": "dependency_incomplete", "dependency_handoff_id": "upstream-1"}},
+			},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-upstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "downstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-downstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "reviewer-1"}},
+		}}),
+	}}
+	report := Report{Status: reportStatusOK}
+
+	check := checkCollaborationTemplate(context.Background(), client, &report, Options{Text: "coordinate template"})
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected collaboration template check ok, got %+v", check)
+	}
+	if report.CollaborationTemplateResult == nil {
+		t.Fatalf("expected report collaboration template result")
+	}
+	if report.CollaborationTemplateResult.DependencyReason != "dependency_incomplete" || !report.CollaborationTemplateResult.DownstreamReady || !report.CollaborationTemplateResult.ReviewerReady {
+		t.Fatalf("unexpected collaboration template result: %+v", report.CollaborationTemplateResult)
+	}
+	wantNames := []string{
+		"collaboration_template_list", "collaboration_template_apply", "next_work", "blocked_work",
+		"handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
+		"next_work", "handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
+		"next_work",
+	}
+	if len(client.calls) != len(wantNames) {
+		t.Fatalf("expected calls %+v, got %+v", wantNames, client.calls)
+	}
+	for i, want := range wantNames {
+		if client.calls[i].Params.Name != want {
+			t.Fatalf("call %d: expected %q, got %+v", i, want, client.calls[i])
+		}
+	}
+	applyArgs, ok := client.calls[1].Params.Arguments.(map[string]any)
+	if !ok {
+		t.Fatalf("expected template apply args map, got %+v", client.calls[1].Params.Arguments)
+	}
+	if applyArgs["template_name"] != "upstream_downstream_review" || applyArgs["intent"] != "coordinate template" {
+		t.Fatalf("unexpected template apply args: %+v", applyArgs)
+	}
+	if _, ok := applyArgs["command"]; ok {
+		t.Fatalf("collaboration template smoke must not pass caller command: %+v", applyArgs)
+	}
+}
+
 func TestCheckA2AMainDeliveryRedactsLastErrorInReportAndDetail(t *testing.T) {
 	const secret = "super-secret-sender-key"
 	const telegramToken = "bot123456:SECRET_TOKEN"

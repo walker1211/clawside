@@ -127,6 +127,121 @@ func TestHandleBlockedWorkReportsDependencyReason(t *testing.T) {
 	}
 }
 
+func TestHandleCollaborationTemplateList(t *testing.T) {
+	h := newTestHandlers(t, nil)
+
+	listed, err := h.HandleCollaborationTemplateList(context.Background())
+	if err != nil {
+		t.Fatalf("HandleCollaborationTemplateList: %v", err)
+	}
+	if len(listed.Templates) != 1 {
+		t.Fatalf("expected 1 template, got %+v", listed.Templates)
+	}
+	if listed.Templates[0].Name != "upstream_downstream_review" {
+		t.Fatalf("expected upstream_downstream_review, got %q", listed.Templates[0].Name)
+	}
+}
+
+func TestHandleCollaborationTemplateApplyCreatesChain(t *testing.T) {
+	h := newTestHandlers(t, nil)
+
+	result, err := h.HandleCollaborationTemplateApply(context.Background(), validToolserverCollaborationTemplateApplyInput())
+	if err != nil {
+		t.Fatalf("HandleCollaborationTemplateApply: %v", err)
+	}
+	if result.TemplateName != "upstream_downstream_review" {
+		t.Fatalf("expected template name, got %q", result.TemplateName)
+	}
+	if len(result.Handoffs) != 3 {
+		t.Fatalf("expected 3 handoffs, got %+v", result.Handoffs)
+	}
+	if result.Workflow.ID == "" || result.Workflow.ID != result.Handoffs[0].WorkflowID || result.Workflow.ID != result.Handoffs[2].WorkflowID {
+		t.Fatalf("expected one workflow, got workflow=%+v handoffs=%+v", result.Workflow, result.Handoffs)
+	}
+	if len(result.Handoffs[1].DependsOnHandoffIDs) != 1 || result.Handoffs[1].DependsOnHandoffIDs[0] != result.Handoffs[0].ID {
+		t.Fatalf("expected downstream dependency on upstream, got %+v", result.Handoffs[1].DependsOnHandoffIDs)
+	}
+	if len(result.Handoffs[2].DependsOnHandoffIDs) != 1 || result.Handoffs[2].DependsOnHandoffIDs[0] != result.Handoffs[1].ID {
+		t.Fatalf("expected reviewer dependency on downstream, got %+v", result.Handoffs[2].DependsOnHandoffIDs)
+	}
+}
+
+func TestHandleCollaborationTemplateApplyReportsBlockedDownstream(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	ctx := context.Background()
+	for _, agent := range []struct {
+		id         string
+		projectRef string
+	}{
+		{id: "upstream", projectRef: "project://upstream"},
+		{id: "downstream", projectRef: "project://downstream"},
+	} {
+		if _, err := h.HandleAgentRegister(ctx, AgentRegisterInput{
+			Actor:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: agent.id},
+			ProjectRefs: []string{agent.projectRef},
+			TaskKinds:   []string{string(orchestrator.TaskGeneric)},
+		}); err != nil {
+			t.Fatalf("HandleAgentRegister(%s): %v", agent.id, err)
+		}
+	}
+
+	result, err := h.HandleCollaborationTemplateApply(ctx, validToolserverCollaborationTemplateApplyInput())
+	if err != nil {
+		t.Fatalf("HandleCollaborationTemplateApply: %v", err)
+	}
+	upstream, downstream := result.Handoffs[0], result.Handoffs[1]
+	upstreamNext, err := h.HandleNextWork(ctx, WorkQueryInput{AgentID: "upstream"})
+	if err != nil {
+		t.Fatalf("HandleNextWork(upstream): %v", err)
+	}
+	if len(upstreamNext.Items) != 1 || upstreamNext.Items[0].Handoff.ID != upstream.ID {
+		t.Fatalf("expected upstream next work, got %+v", upstreamNext.Items)
+	}
+	downstreamBlocked, err := h.HandleBlockedWork(ctx, WorkQueryInput{AgentID: "downstream"})
+	if err != nil {
+		t.Fatalf("HandleBlockedWork(downstream): %v", err)
+	}
+	if len(downstreamBlocked.Items) != 1 || downstreamBlocked.Items[0].Handoff.ID != downstream.ID {
+		t.Fatalf("expected downstream blocked work, got %+v", downstreamBlocked.Items)
+	}
+	if len(downstreamBlocked.Items[0].Reasons) != 1 || downstreamBlocked.Items[0].Reasons[0].Code != "dependency_incomplete" || downstreamBlocked.Items[0].Reasons[0].DependencyHandoffID != upstream.ID {
+		t.Fatalf("expected dependency_incomplete on upstream, got %+v", downstreamBlocked.Items[0].Reasons)
+	}
+}
+
+func TestHandleCollaborationTemplateApplyRejectsUnsafeProjectRef(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	input := validToolserverCollaborationTemplateApplyInput()
+	input.Upstream.ProjectRef = "/tmp/private-repo"
+
+	_, err := h.HandleCollaborationTemplateApply(context.Background(), input)
+	if err == nil {
+		t.Fatalf("expected unsafe project ref to fail")
+	}
+	if !strings.Contains(err.Error(), "project_ref") {
+		t.Fatalf("expected project_ref error, got %v", err)
+	}
+}
+
+func validToolserverCollaborationTemplateApplyInput() CollaborationTemplateApplyInput {
+	return CollaborationTemplateApplyInput{
+		TemplateName: "upstream_downstream_review",
+		Intent:       "Coordinate upstream API change through downstream implementation and review",
+		Upstream: CollaborationTemplateRoleInput{
+			ReceiverID: "upstream",
+			ProjectRef: "project://upstream",
+		},
+		Downstream: CollaborationTemplateRoleInput{
+			ReceiverID: "downstream",
+			ProjectRef: "project://downstream",
+		},
+		Reviewer: CollaborationTemplateRoleInput{
+			ReceiverID: "reviewer",
+			ProjectRef: "project://review",
+		},
+	}
+}
+
 func TestHandleHandoffCreateCreatesWorkflowAndHandoff(t *testing.T) {
 	h := newTestHandlers(t, nil)
 
