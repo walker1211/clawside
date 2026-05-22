@@ -52,6 +52,18 @@ func TestServiceRegisterAgentDefaultsAndLists(t *testing.T) {
 	}
 }
 
+func TestServiceRegisterAgentDefaultsHeartbeat(t *testing.T) {
+	svc := newTestService(t)
+
+	registered, err := svc.RegisterAgent(context.Background(), AgentRegistration{Actor: ActorRef{Type: ActorAgent, ID: "worker"}})
+	if err != nil {
+		t.Fatalf("RegisterAgent: %v", err)
+	}
+	if registered.LastHeartbeatAt == nil || !registered.LastHeartbeatAt.Equal(testNow()) {
+		t.Fatalf("expected default heartbeat %s, got %+v", testNow(), registered.LastHeartbeatAt)
+	}
+}
+
 func TestServiceRegisterAgentRejectsNonAgentActor(t *testing.T) {
 	svc := newTestService(t)
 
@@ -195,9 +207,179 @@ func TestServiceNextWorkSuggestsOwnerForOwnerlessExecutableHandoff(t *testing.T)
 	}
 }
 
+func TestServiceNextWorkAssignOwnerSuggestionRequiresLiveAvailableAgent(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	staleHeartbeat := testNow().Add(-6 * time.Minute)
+	offlineHeartbeat := testNow()
+	for _, agent := range []AgentRegistration{
+		{
+			Actor:           ActorRef{Type: ActorAgent, ID: "aaa-stale"},
+			Capabilities:    []string{"writing"},
+			TaskKinds:       []TaskKind{TaskGeneric},
+			Status:          "available",
+			LastHeartbeatAt: &staleHeartbeat,
+		},
+		{
+			Actor:           ActorRef{Type: ActorAgent, ID: "bbb-offline"},
+			Capabilities:    []string{"writing"},
+			TaskKinds:       []TaskKind{TaskGeneric},
+			Status:          "offline",
+			LastHeartbeatAt: &offlineHeartbeat,
+		},
+	} {
+		if _, err := svc.RegisterAgent(ctx, agent); err != nil {
+			t.Fatalf("RegisterAgent(%s): %v", agent.Actor.ID, err)
+		}
+	}
+	mustRegisterTestAgent(t, svc, "writer", []string{"writing"}, nil, []TaskKind{TaskGeneric})
+	created := mustCreateTestHandoff(t, svc)
+	if _, err := svc.UpdateOwnership(ctx, UpdateOwnershipInput{HandoffID: created.Handoff.ID, CurrentOwner: &ActorRef{}}); err != nil {
+		t.Fatalf("UpdateOwnership ownerless: %v", err)
+	}
+
+	items, err := svc.NextWork(ctx, WorkQuery{Capability: "writing"})
+	if err != nil {
+		t.Fatalf("NextWork: %v", err)
+	}
+	if len(items) != 1 || len(items[0].Suggestions) != 1 || items[0].Suggestions[0].SuggestedActor.ID != "writer" {
+		t.Fatalf("expected live available writer suggestion, got %+v", items)
+	}
+}
+
+func TestServiceClaimSetsDefaultLeaseExpiry(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	created := mustCreateTestHandoff(t, svc)
+	mustRecordAcceptedEvent(t, svc, created, EventReceived, created.Handoff.ReceiverActor)
+	claim := mustRecordAcceptedEvent(t, svc, created, EventClaimed, created.Handoff.ReceiverActor)
+
+	loaded, err := svc.store.LoadHandoff(ctx, created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff: %v", err)
+	}
+	if loaded.LeaseHolder.ID != created.Handoff.ReceiverActor.ID {
+		t.Fatalf("expected receiver lease holder, got %+v", loaded.LeaseHolder)
+	}
+	if loaded.LeasedAt == nil || !loaded.LeasedAt.Equal(claim.IngestedAt) {
+		t.Fatalf("expected leased_at %s, got %+v", claim.IngestedAt, loaded.LeasedAt)
+	}
+	expectedExpiry := claim.IngestedAt.Add(defaultHandoffLeaseTTL)
+	if loaded.LeaseExpiresAt == nil || !loaded.LeaseExpiresAt.Equal(expectedExpiry) {
+		t.Fatalf("expected lease expiry %s, got %+v", expectedExpiry, loaded.LeaseExpiresAt)
+	}
+}
+
+func TestServiceWorkProjectionReportsExpiredLease(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	mustRegisterTestAgent(t, svc, "writer", []string{"writing"}, nil, []TaskKind{TaskGeneric})
+	created := mustCreateTestHandoff(t, svc)
+	owner := ActorRef{Type: ActorAgent, ID: "writer"}
+	leasedAt := testNow().Add(-31 * time.Minute)
+	leaseExpiresAt := testNow().Add(-time.Minute)
+	if _, err := svc.UpdateOwnership(ctx, UpdateOwnershipInput{
+		HandoffID:      created.Handoff.ID,
+		CurrentOwner:   &owner,
+		LeaseHolder:    &owner,
+		LeasedAt:       &leasedAt,
+		LeaseExpiresAt: &leaseExpiresAt,
+	}); err != nil {
+		t.Fatalf("UpdateOwnership expired lease: %v", err)
+	}
+
+	blocked, err := svc.BlockedWork(ctx, WorkQuery{AgentID: "writer"})
+	if err != nil {
+		t.Fatalf("BlockedWork: %v", err)
+	}
+	if len(blocked) != 1 || blocked[0].Handoff.ID != created.Handoff.ID {
+		t.Fatalf("expected expired-lease blocked work, got %+v", blocked)
+	}
+	if len(blocked[0].Reasons) != 1 || blocked[0].Reasons[0].Code != "lease_expired" {
+		t.Fatalf("expected lease_expired reason, got %+v", blocked[0].Reasons)
+	}
+	if len(blocked[0].Suggestions) != 1 || blocked[0].Suggestions[0].Code != "reclaim_expired_lease" || blocked[0].Suggestions[0].SuggestedActor.ID != "writer" {
+		t.Fatalf("expected reclaim_expired_lease writer suggestion, got %+v", blocked[0].Suggestions)
+	}
+
+	next, err := svc.NextWork(ctx, WorkQuery{AgentID: "writer"})
+	if err != nil {
+		t.Fatalf("NextWork: %v", err)
+	}
+	if len(next) != 1 || next[0].Handoff.ID != created.Handoff.ID {
+		t.Fatalf("expected expired-lease next work warning, got %+v", next)
+	}
+	if len(next[0].Warnings) != 1 || next[0].Warnings[0].Code != "lease_expired" {
+		t.Fatalf("expected lease_expired warning, got %+v", next[0].Warnings)
+	}
+	if len(next[0].Suggestions) != 1 || next[0].Suggestions[0].Code != "reclaim_expired_lease" || next[0].Suggestions[0].SuggestedActor.ID != "writer" {
+		t.Fatalf("expected next work reclaim_expired_lease writer suggestion, got %+v", next[0].Suggestions)
+	}
+	loaded, err := svc.store.LoadHandoff(ctx, created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff: %v", err)
+	}
+	if loaded.LeaseExpiresAt == nil || !loaded.LeaseExpiresAt.Equal(leaseExpiresAt) {
+		t.Fatalf("expected projection not to mutate lease expiry, got %+v", loaded.LeaseExpiresAt)
+	}
+}
+
+func TestServiceWorkProjectionReportsUnavailableOwner(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	staleHeartbeat := testNow().Add(-6 * time.Minute)
+	if _, err := svc.RegisterAgent(ctx, AgentRegistration{
+		Actor:           ActorRef{Type: ActorAgent, ID: "writer"},
+		Capabilities:    []string{"writing"},
+		TaskKinds:       []TaskKind{TaskGeneric},
+		Status:          "available",
+		LastHeartbeatAt: &staleHeartbeat,
+	}); err != nil {
+		t.Fatalf("RegisterAgent(writer): %v", err)
+	}
+	mustRegisterTestAgent(t, svc, "backup", []string{"writing"}, nil, []TaskKind{TaskGeneric})
+	created := mustCreateTestHandoff(t, svc)
+
+	blocked, err := svc.BlockedWork(ctx, WorkQuery{AgentID: "writer"})
+	if err != nil {
+		t.Fatalf("BlockedWork: %v", err)
+	}
+	if len(blocked) != 1 || blocked[0].Handoff.ID != created.Handoff.ID {
+		t.Fatalf("expected unavailable-owner blocked work, got %+v", blocked)
+	}
+	if len(blocked[0].Reasons) != 1 || blocked[0].Reasons[0].Code != "owner_unavailable" {
+		t.Fatalf("expected owner_unavailable reason, got %+v", blocked[0].Reasons)
+	}
+	if len(blocked[0].Suggestions) != 1 || blocked[0].Suggestions[0].Code != "reassign_owner" || blocked[0].Suggestions[0].SuggestedActor.ID != "backup" {
+		t.Fatalf("expected reassign_owner backup suggestion, got %+v", blocked[0].Suggestions)
+	}
+
+	next, err := svc.NextWork(ctx, WorkQuery{AgentID: "writer"})
+	if err != nil {
+		t.Fatalf("NextWork: %v", err)
+	}
+	if len(next) != 1 || next[0].Handoff.ID != created.Handoff.ID {
+		t.Fatalf("expected unavailable-owner next work warning, got %+v", next)
+	}
+	if len(next[0].Warnings) != 1 || next[0].Warnings[0].Code != "owner_unavailable" {
+		t.Fatalf("expected owner_unavailable warning, got %+v", next[0].Warnings)
+	}
+	if len(next[0].Suggestions) != 1 || next[0].Suggestions[0].Code != "reassign_owner" || next[0].Suggestions[0].SuggestedActor.ID != "backup" {
+		t.Fatalf("expected next work reassign_owner backup suggestion, got %+v", next[0].Suggestions)
+	}
+	loaded, err := svc.store.LoadHandoff(ctx, created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("LoadHandoff: %v", err)
+	}
+	if loaded.CurrentOwner.ID != "writer" {
+		t.Fatalf("expected projection not to mutate owner, got %+v", loaded.CurrentOwner)
+	}
+}
+
 func TestServiceBlockedWorkSuggestsActionForExpiredWatch(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
+	mustRegisterTestAgent(t, svc, "writer", []string{"writing"}, nil, []TaskKind{TaskGeneric})
 	created := mustCreateTestHandoff(t, svc)
 	if _, err := svc.RunWatchdog(ctx, RunWatchdogInput{Now: testNow().Add(6 * time.Minute)}); err != nil {
 		t.Fatalf("RunWatchdog: %v", err)

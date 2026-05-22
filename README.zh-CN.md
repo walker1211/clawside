@@ -18,7 +18,8 @@
 - **orchestrator CLI / store / state machine / watch / repair foundations**：提供 handoff、event、workflow、watch、repair 的基础骨架
 - **OpenClaw adapter foundations**：用于把调度和桥接动作接到现有 OpenClaw 兼容入口
 - **A2A delivery bridge skill**：在官方 announce / nested 回传链路不稳定时，为主 agent 提供显式消息投递桥
-- **MCP + skill v1 surface**：让 OpenClaw 可以安装、注册并消费 handoff、workflow、watch、repair 和 A2A delivery 工具
+- **MCP + skill v1 surface**：让 OpenClaw 可以安装、注册并消费 handoff、workflow、watch、repair、agent coordination 和 A2A delivery 工具
+- **Agent coordination policy**：基于 registry 的 work projection，支持 heartbeat 默认值、stale/offline owner 信号和 expired lease 建议
 - **A2A compatibility endpoint**：实验性的只读 Agent Card + JSON-RPC 入口，用于查询 coordination 状态
 
 当前版本已把最小可用 v1 收口为可安装、可注册、可验证的 MCP server + skill 产品套件。
@@ -279,6 +280,10 @@ go run ./cmd/clawside-mcp \
 - `handoff_progress`
 - `workflow_status`
 - `workflow_list`
+- `agent_register`
+- `agent_list`
+- `next_work`
+- `blocked_work`
 - `watch_list`
 - `watch_run`
 - `watch_update`
@@ -306,6 +311,10 @@ go run ./cmd/clawside-mcp \
 - `handoff_progress`：推进 handoff 协议动作，如 `receive` / `claim` / `start` / `submit` / `approve` / `complete`
 - `workflow_status`：查询单个 workflow 聚合视图
 - `workflow_list`：列出当前所有 workflow 及其 projected handoffs
+- `agent_register`：注册或更新 agent 的能力和 heartbeat；省略 heartbeat 时默认使用服务端时间
+- `agent_list`：按 capability、project ref、task kind 或 status 列出已注册 agents
+- `next_work`：列出可执行 handoffs，并包含非阻断的 liveness / lease warnings 和 suggestions
+- `blocked_work`：列出带有 dependency、watch、reviewer、liveness、lease 原因与建议的 handoffs
 - `watch_list`：列出单个 handoff 当前挂载的 watches
 - `watch_run`：按给定 RFC3339 时间运行 due watch 检查
 - `watch_update`：更新单个 watch 的 deadline、status 或 escalation policy
@@ -331,7 +340,8 @@ go run ./cmd/clawside-mcp \
 - invalidate/backfill/reopen repair 之外的更深层 truth-plane 操作仍不属于 v1 MCP surface
 - `a2a_deliver` 和 `sender_*` observability tools 依赖本地 sender sidecar 正常运行
 - `sender_*` observability tools 只读，不暴露原始消息文本、raw idempotency key 或 Telegram bot token
-- `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
+- `handoff_*` / `workflow_*` / `agent_*` / `*_work` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
+- Agent liveness 和 lease policy 只作为 projection signal：不会启动 worker、执行命令、清空 owner、抢占 lease，也不会自动改写 handoff lifecycle state
 
 如果要在 OpenClaw 中注册，核心是把它作为一个 stdio MCP server 注册，并让 OpenClaw 通过该 server 调用上述 tools。`command` 建议指向当前仓库的 `scripts/start_mcp.sh`。
 

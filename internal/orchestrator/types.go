@@ -227,6 +227,7 @@ type WorkItem struct {
 	Workflow    Workflow           `json:"workflow"`
 	Handoff     Handoff            `json:"handoff"`
 	ActiveWatch *Watch             `json:"active_watch,omitempty"`
+	Warnings    []WorkBlockReason  `json:"warnings,omitempty"`
 	Suggestions []ActionSuggestion `json:"suggestions,omitempty"`
 }
 

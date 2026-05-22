@@ -71,6 +71,8 @@ func (m *StateMachine) Apply(event EventRecord) (Handoff, Decision) {
 		}
 		if !leasedAt.IsZero() {
 			next.LeasedAt = &leasedAt
+			leaseExpiresAt := leasedAt.Add(defaultHandoffLeaseTTL)
+			next.LeaseExpiresAt = &leaseExpiresAt
 		}
 	case EventStarted:
 		if err := validateWorkerActor(next, event, "started"); err != nil {
