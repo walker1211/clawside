@@ -1,0 +1,78 @@
+{
+  "generated_at": "2026-05-23T00:00:00Z",
+  "workflow_count": 1,
+  "handoff_count": 3,
+  "watch_count": 9,
+  "blocked_count": 1,
+  "next_work_count": 1,
+  "workflows": [
+    {
+      "id": "workflow-fixture",
+      "kind": "upstream_downstream_review",
+      "status": "active",
+      "current_handoff_id": "handoff-planning",
+      "handoff_count": 3,
+      "watch_count": 9,
+      "blocked_count": 1,
+      "next_work_count": 1,
+      "handoffs": [
+        {
+          "id": "handoff-planning",
+          "workflow_id": "workflow-fixture",
+          "state": "created",
+          "task_kind": "planning",
+          "required": true,
+          "receiver_id": "agent-planner",
+          "watch_count": 3
+        },
+        {
+          "id": "handoff-implementation",
+          "workflow_id": "workflow-fixture",
+          "state": "created",
+          "task_kind": "implementation",
+          "required": true,
+          "depends_on_handoff_ids": ["handoff-planning"],
+          "receiver_id": "agent-implementer",
+          "watch_count": 3
+        },
+        {
+          "id": "handoff-review",
+          "workflow_id": "workflow-fixture",
+          "state": "created",
+          "task_kind": "review",
+          "required": true,
+          "depends_on_handoff_ids": ["handoff-implementation"],
+          "receiver_id": "agent-reviewer",
+          "current_owner_id": "agent-reviewer",
+          "watch_count": 3
+        }
+      ]
+    }
+  ],
+  "blocked_reasons": [
+    {
+      "workflow_id": "workflow-fixture",
+      "handoff_id": "handoff-review",
+      "type": "dependency_not_completed",
+      "detail": "dependency=handoff-implementation"
+    }
+  ],
+  "suggestions": [
+    {
+      "workflow_id": "workflow-fixture",
+      "handoff_id": "handoff-review",
+      "action": "wait_for_dependency",
+      "reason": "upstream work is still active"
+    }
+  ],
+  "agent_count": 1,
+  "agents": [
+    {
+      "id": "agent-reviewer",
+      "status": "ready",
+      "capabilities": ["review"],
+      "task_kinds": ["review"],
+      "last_heartbeat_at": "2026-05-23T00:00:00Z"
+    }
+  ]
+}

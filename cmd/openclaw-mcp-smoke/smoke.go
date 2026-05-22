@@ -65,6 +65,7 @@ type Options struct {
 	OpenClawTruthPlaneContinuityResultsPath  string
 	OpenClawTruthPlaneDivergenceResultsPath  string
 	OpenClawTruthPlaneDeliveryResultsPath    string
+	CoordinationEvidenceSummaryPath          string
 	ChatID                                   int64
 	Text                                     string
 }
@@ -222,6 +223,7 @@ func applyFixturesProfileDefaults(opts Options) Options {
 	opts.OpenClawTruthPlaneContinuityResultsPath = filepath.Join(fixtureDir, "continuity-results.json")
 	opts.OpenClawTruthPlaneDivergenceResultsPath = filepath.Join(fixtureDir, "divergence-results.json")
 	opts.OpenClawTruthPlaneDeliveryResultsPath = filepath.Join(fixtureDir, "delivery-results.json")
+	opts.CoordinationEvidenceSummaryPath = filepath.Join(fixtureDir, "coordination-evidence-summary.json")
 	return opts
 }
 
@@ -307,6 +309,7 @@ func truthPlaneFullEvidencePaths(opts Options) []requiredProfilePath {
 		{flagName: "openclaw-truth-plane-continuity-results", value: opts.OpenClawTruthPlaneContinuityResultsPath},
 		{flagName: "openclaw-truth-plane-divergence-results", value: opts.OpenClawTruthPlaneDivergenceResultsPath},
 		{flagName: "openclaw-truth-plane-delivery-results", value: opts.OpenClawTruthPlaneDeliveryResultsPath},
+		{flagName: "coordination-evidence-summary", value: opts.CoordinationEvidenceSummaryPath},
 	}
 }
 
@@ -367,6 +370,7 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	report.addCheck(checkOpenClawTruthPlaneContinuityResults(opts))
 	report.addCheck(checkOpenClawTruthPlaneDivergenceResults(opts))
 	report.addCheck(checkOpenClawTruthPlaneDeliveryResults(opts))
+	report.addCheck(checkCoordinationEvidenceSummary(opts))
 	if opts.OpenClawDispatchSmoke {
 		report.addCheck(checkOpenClawDispatch(ctx, mcpClient, &report, opts))
 	}
