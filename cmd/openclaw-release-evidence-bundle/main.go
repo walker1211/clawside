@@ -28,10 +28,32 @@ type plannedEvidence struct {
 	EventsPath string
 }
 
+type copiedEvidenceSpec struct {
+	Name       string
+	SourceFlag string
+	VerifyFlag string
+	OutputFile string
+}
+
+type plannedCopiedEvidence struct {
+	Spec       copiedEvidenceSpec
+	SourcePath string
+}
+
 type bundlePlan struct {
-	OutputDir string
-	Evidence  []plannedEvidence
-	Verify    bool
+	OutputDir      string
+	Evidence       []plannedEvidence
+	CopiedEvidence []plannedCopiedEvidence
+	Verify         bool
+}
+
+var copiedEvidenceSpecs = []copiedEvidenceSpec{
+	{
+		Name:       "coordination-evidence-summary",
+		SourceFlag: "coordination-evidence-summary",
+		VerifyFlag: "coordination-evidence-summary",
+		OutputFile: "coordination-evidence-summary.json",
+	},
 }
 
 var evidenceSpecs = []evidenceSpec{
@@ -151,13 +173,21 @@ func verifyBundleManifest(bundleDir string) error {
 	if len(manifest.VerifyCommand) != 1 || manifest.VerifyCommand[0] != "./verify-release-evidence.sh" {
 		return fmt.Errorf("manifest verify_command = %#v, want [./verify-release-evidence.sh]", manifest.VerifyCommand)
 	}
-	if len(manifest.Evidence) != len(evidenceSpecs) {
-		return fmt.Errorf("manifest evidence count = %d, want %d", len(manifest.Evidence), len(evidenceSpecs))
+	wantEvidenceCount := len(evidenceSpecs) + len(copiedEvidenceSpecs)
+	if len(manifest.Evidence) != wantEvidenceCount {
+		return fmt.Errorf("manifest evidence count = %d, want %d", len(manifest.Evidence), wantEvidenceCount)
 	}
-	for i, evidence := range manifest.Evidence {
-		spec := evidenceSpecs[i]
+	for i, spec := range evidenceSpecs {
+		evidence := manifest.Evidence[i]
 		if evidence.Name != spec.Name || evidence.OutputFile != spec.OutputFile || evidence.VerifyFlag != spec.VerifyFlag {
 			return fmt.Errorf("manifest evidence[%d] metadata mismatch", i)
+		}
+	}
+	for i, spec := range copiedEvidenceSpecs {
+		evidenceIndex := len(evidenceSpecs) + i
+		evidence := manifest.Evidence[evidenceIndex]
+		if evidence.Name != spec.Name || evidence.OutputFile != spec.OutputFile || evidence.VerifyFlag != spec.VerifyFlag {
+			return fmt.Errorf("manifest evidence[%d] metadata mismatch", evidenceIndex)
 		}
 	}
 	for _, evidence := range manifest.Evidence {
@@ -228,6 +258,12 @@ func runWithRunner(ctx context.Context, args []string, stdout, stderr io.Writer,
 			return fmt.Errorf("extract %s: %w", evidence.Spec.Name, err)
 		}
 	}
+	for _, evidence := range plan.CopiedEvidence {
+		outputPath := filepath.Join(plan.OutputDir, evidence.Spec.OutputFile)
+		if err := copyEvidenceFile(evidence.SourcePath, outputPath); err != nil {
+			return fmt.Errorf("copy %s: %w", evidence.Spec.Name, err)
+		}
+	}
 	if err := writeBundleArtifacts(plan); err != nil {
 		return err
 	}
@@ -277,6 +313,18 @@ func writeBundleArtifacts(plan bundlePlan) error {
 			SHA256:     sha256Value,
 		})
 	}
+	for _, evidence := range plan.CopiedEvidence {
+		sha256Value, err := fileSHA256(filepath.Join(plan.OutputDir, evidence.Spec.OutputFile))
+		if err != nil {
+			return fmt.Errorf("checksum %s: %w", evidence.Spec.Name, err)
+		}
+		manifest.Evidence = append(manifest.Evidence, manifestEvidence{
+			Name:       evidence.Spec.Name,
+			OutputFile: evidence.Spec.OutputFile,
+			VerifyFlag: evidence.Spec.VerifyFlag,
+			SHA256:     sha256Value,
+		})
+	}
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode manifest: %w", err)
@@ -285,7 +333,7 @@ func writeBundleArtifacts(plan bundlePlan) error {
 	if err := os.WriteFile(filepath.Join(plan.OutputDir, "manifest.json"), manifestData, 0o600); err != nil {
 		return fmt.Errorf("write manifest: %w", err)
 	}
-	return writePortableVerifyScript(filepath.Join(plan.OutputDir, "verify-release-evidence.sh"), plan.Evidence)
+	return writePortableVerifyScript(filepath.Join(plan.OutputDir, "verify-release-evidence.sh"), plan)
 }
 
 func fileSHA256(path string) (string, error) {
@@ -295,6 +343,14 @@ func fileSHA256(path string) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+func copyEvidenceFile(sourcePath, outputPath string) error {
+	data, err := os.ReadFile(sourcePath)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(outputPath, data, 0o600)
 }
 
 func releaseEvidenceVerifyCommand(plan bundlePlan) ([]string, error) {
@@ -310,10 +366,13 @@ func releaseEvidenceVerifyCommand(plan bundlePlan) ([]string, error) {
 	for _, evidence := range plan.Evidence {
 		command = append(command, "--"+evidence.Spec.VerifyFlag, filepath.Join(outputDir, evidence.Spec.OutputFile))
 	}
+	for _, evidence := range plan.CopiedEvidence {
+		command = append(command, "--"+evidence.Spec.VerifyFlag, filepath.Join(outputDir, evidence.Spec.OutputFile))
+	}
 	return command, nil
 }
 
-func writePortableVerifyScript(path string, evidence []plannedEvidence) error {
+func writePortableVerifyScript(path string, plan bundlePlan) error {
 	var b strings.Builder
 	b.WriteString("#!/usr/bin/env bash\n")
 	b.WriteString("set -euo pipefail\n\n")
@@ -321,7 +380,14 @@ func writePortableVerifyScript(path string, evidence []plannedEvidence) error {
 	b.WriteString("REPO_ROOT=\"$(git -C \"$BUNDLE_DIR\" rev-parse --show-toplevel)\"\n\n")
 	b.WriteString("go run -C \"$REPO_ROOT\" ./cmd/openclaw-release-evidence-bundle verify-manifest --bundle-dir \"$BUNDLE_DIR\"\n\n")
 	b.WriteString("\"$REPO_ROOT/scripts/verify_openclaw_mcp.sh\" \\\n  --profile release-evidence")
-	for _, item := range evidence {
+	for _, item := range plan.Evidence {
+		b.WriteString(" \\\n  --")
+		b.WriteString(item.Spec.VerifyFlag)
+		b.WriteString(" \"$BUNDLE_DIR/")
+		b.WriteString(item.Spec.OutputFile)
+		b.WriteString("\"")
+	}
+	for _, item := range plan.CopiedEvidence {
 		b.WriteString(" \\\n  --")
 		b.WriteString(item.Spec.VerifyFlag)
 		b.WriteString(" \"$BUNDLE_DIR/")
@@ -345,6 +411,10 @@ func buildPlan(args []string) (bundlePlan, error) {
 	eventPaths := make(map[string]*string, len(evidenceSpecs))
 	for _, spec := range evidenceSpecs {
 		eventPaths[spec.EventFlag] = flags.String(spec.EventFlag, "", "events.jsonl path for "+spec.Name)
+	}
+	copyPaths := make(map[string]*string, len(copiedEvidenceSpecs))
+	for _, spec := range copiedEvidenceSpecs {
+		copyPaths[spec.SourceFlag] = flags.String(spec.SourceFlag, "", "pre-generated JSON path for "+spec.Name)
 	}
 	if err := flags.Parse(args); err != nil {
 		return plan, err
@@ -371,11 +441,18 @@ func buildPlan(args []string) (bundlePlan, error) {
 		}
 		plan.Evidence = append(plan.Evidence, plannedEvidence{Spec: spec, EventsPath: eventsPath})
 	}
+	for _, spec := range copiedEvidenceSpecs {
+		sourcePath := *copyPaths[spec.SourceFlag]
+		if sourcePath == "" {
+			return plan, fmt.Errorf("%s path is required; pass --%s", spec.SourceFlag, spec.SourceFlag)
+		}
+		plan.CopiedEvidence = append(plan.CopiedEvidence, plannedCopiedEvidence{Spec: spec, SourcePath: sourcePath})
+	}
 	return plan, nil
 }
 
 func writeUsage(w io.Writer) error {
-	_, err := fmt.Fprintln(w, "Usage: openclaw-release-evidence-bundle --output-dir DIR [--events PATH] [--tool-events PATH ...] [--verify]")
+	_, err := fmt.Fprintln(w, "Usage: openclaw-release-evidence-bundle --output-dir DIR [--events PATH] --coordination-evidence-summary PATH [--tool-events PATH ...] [--verify]")
 	if err != nil {
 		return err
 	}
