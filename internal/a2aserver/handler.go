@@ -2,6 +2,7 @@ package a2aserver
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -39,13 +41,15 @@ func NewHandler(handlers *toolserver.Handlers, cfg Config) http.Handler {
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	switch r.URL.Path {
-	case "/healthz":
+	switch {
+	case r.URL.Path == "/healthz":
 		h.handleHealthz(w, r)
-	case "/.well-known/agent-card.json":
+	case r.URL.Path == "/.well-known/agent-card.json":
 		h.handleAgentCard(w, r)
-	case "/a2a/rpc":
+	case r.URL.Path == "/a2a/rpc":
 		h.handleRPC(w, r)
+	case isTaskEventsPath(r.URL.Path):
+		h.handleTaskEvents(w, r)
 	default:
 		writeJSON(w, http.StatusNotFound, httpErrorResponse{Error: "not found"})
 	}
@@ -283,6 +287,173 @@ func (h *Handler) handleTasksGet(r *http.Request, input TasksGetInput) (A2ATask,
 		return A2ATask{}, err
 	}
 	return toA2ATask(result, input.HistoryLength), nil
+}
+
+const (
+	taskEventsPathPrefix           = "/a2a/tasks/"
+	taskEventsPathSuffix           = "/events"
+	defaultTaskEventsPollMs        = 1000
+	minimumTaskEventsPollMs        = 250
+	maximumTaskEventsPollMs        = 10000
+	maximumTaskEventsHistoryLength = 100
+)
+
+func (h *Handler) handleTaskEvents(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeJSON(w, http.StatusMethodNotAllowed, httpErrorResponse{Error: "method not allowed"})
+		return
+	}
+	if !h.authorized(r.Header.Get("Authorization")) {
+		if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
+			writeJSON(w, http.StatusUnauthorized, httpErrorResponse{Error: "missing authorization"})
+			return
+		}
+		writeJSON(w, http.StatusForbidden, httpErrorResponse{Error: "invalid authorization"})
+		return
+	}
+	if r.ContentLength != 0 {
+		writeJSON(w, http.StatusBadRequest, httpErrorResponse{Error: "invalid request"})
+		return
+	}
+	handoffID, ok := parseTaskEventsHandoffID(r.URL.Path)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, httpErrorResponse{Error: "invalid request"})
+		return
+	}
+	historyLength, pollInterval, ok := parseTaskEventsQuery(r)
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, httpErrorResponse{Error: "invalid request"})
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, httpErrorResponse{Error: "streaming unsupported"})
+		return
+	}
+	snapshot, err := h.taskStreamSnapshot(r.Context(), handoffID, historyLength)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, httpErrorResponse{Error: "not found"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	if err := writeSSEJSON(w, "task", snapshot.EventID, snapshot); err != nil {
+		return
+	}
+	flusher.Flush()
+	lastFingerprint := taskStreamFingerprint(snapshot)
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			snapshot, err := h.taskStreamSnapshot(r.Context(), handoffID, historyLength)
+			if err != nil {
+				return
+			}
+			fingerprint := taskStreamFingerprint(snapshot)
+			if fingerprint == lastFingerprint {
+				continue
+			}
+			if err := writeSSEJSON(w, "task", snapshot.EventID, snapshot); err != nil {
+				return
+			}
+			flusher.Flush()
+			lastFingerprint = fingerprint
+		}
+	}
+}
+
+func (h *Handler) taskStreamSnapshot(ctx context.Context, handoffID string, historyLength int) (TaskStreamEvent, error) {
+	result, err := h.handlers.HandleHandoffGet(ctx, toolserver.HandoffGetInput{HandoffID: handoffID})
+	if err != nil {
+		return TaskStreamEvent{}, err
+	}
+	eventID, timestamp := taskStreamCursor(result)
+	return TaskStreamEvent{
+		Task:       toA2ATask(result, &historyLength),
+		HandoffID:  result.Handoff.ID,
+		WorkflowID: result.Handoff.WorkflowID,
+		EventID:    eventID,
+		Timestamp:  timestamp.UTC().Format(time.RFC3339Nano),
+	}, nil
+}
+
+func taskStreamCursor(result toolserver.HandoffGetOutput) (string, time.Time) {
+	eventID := result.Handoff.ID
+	timestamp := result.Handoff.UpdatedAt
+	if len(result.Timeline) == 0 {
+		return eventID, timestamp
+	}
+	latest := result.Timeline[len(result.Timeline)-1]
+	eventID = latest.ID
+	timestamp = latest.IngestedAt
+	if timestamp.IsZero() {
+		timestamp = latest.ProducerEventTime
+	}
+	return eventID, timestamp
+}
+
+func taskStreamFingerprint(event TaskStreamEvent) string {
+	return event.EventID + "\x00" + event.Task.Status.State + "\x00" + event.Task.Status.Timestamp
+}
+
+func isTaskEventsPath(path string) bool {
+	return strings.HasPrefix(path, taskEventsPathPrefix) && strings.HasSuffix(path, taskEventsPathSuffix)
+}
+
+func parseTaskEventsHandoffID(path string) (string, bool) {
+	if !isTaskEventsPath(path) {
+		return "", false
+	}
+	handoffID := strings.TrimSuffix(strings.TrimPrefix(path, taskEventsPathPrefix), taskEventsPathSuffix)
+	handoffID = strings.TrimSpace(handoffID)
+	if !validRequiredTaskCreateString(handoffID, maxTaskCreateIDLength) {
+		return "", false
+	}
+	if strings.ContainsAny(handoffID, `/\\`) {
+		return "", false
+	}
+	return handoffID, true
+}
+
+func parseTaskEventsQuery(r *http.Request) (int, time.Duration, bool) {
+	query := r.URL.Query()
+	for key := range query {
+		if key != "historyLength" && key != "pollIntervalMs" {
+			return 0, 0, false
+		}
+	}
+	historyLength, ok := parseOptionalTaskEventsInt(query["historyLength"], 0)
+	if !ok || historyLength < 0 || historyLength > maximumTaskEventsHistoryLength {
+		return 0, 0, false
+	}
+	pollIntervalMs, ok := parseOptionalTaskEventsInt(query["pollIntervalMs"], defaultTaskEventsPollMs)
+	if !ok || pollIntervalMs < minimumTaskEventsPollMs || pollIntervalMs > maximumTaskEventsPollMs {
+		return 0, 0, false
+	}
+	return historyLength, time.Duration(pollIntervalMs) * time.Millisecond, true
+}
+
+func parseOptionalTaskEventsInt(values []string, defaultValue int) (int, bool) {
+	if len(values) == 0 {
+		return defaultValue, true
+	}
+	if len(values) != 1 {
+		return 0, false
+	}
+	value := strings.TrimSpace(values[0])
+	if value == "" {
+		return 0, false
+	}
+	parsed, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false
+	}
+	return parsed, true
 }
 
 func validTasksGetInput(input TasksGetInput) bool {
@@ -532,7 +703,7 @@ func buildAgentCard(rpcURL string) AgentCard {
 			Organization: "clawside",
 		},
 		Capabilities: AgentCapabilities{
-			Streaming:         false,
+			Streaming:         true,
 			PushNotifications: false,
 		},
 		DefaultInputModes:  []string{"application/json"},
@@ -546,6 +717,7 @@ func buildAgentCard(rpcURL string) AgentCard {
 			newSkill(MethodBlockedWork, "Blocked work", "List blocked handoffs with reasons and suggestions."),
 			newSkill(MethodTaskCreate, "Create controlled task", "Create an idempotent controlled inbound task without runtime or delivery execution."),
 			newSkill(MethodTasksGet, "Get task", "Get A2A-compatible read-only task status for a Clawside handoff."),
+			newStreamingSkill(MethodTasksEvents, "Task events", "Subscribe to read-only A2A task projection events for a Clawside handoff."),
 		},
 		SecuritySchemes: map[string]AgentCardSecurity{
 			"bearer": {Type: "http", Scheme: "bearer"},
@@ -564,8 +736,31 @@ func newSkill(id, name, description string) AgentSkill {
 	}
 }
 
+func newStreamingSkill(id, name, description string) AgentSkill {
+	skill := newSkill(id, name, description)
+	skill.OutputModes = []string{"application/json", "text/event-stream"}
+	return skill
+}
+
 func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result any) {
 	writeJSON(w, http.StatusOK, RPCResponse{JSONRPC: "2.0", ID: normalizeRPCID(id), Result: result})
+}
+
+func writeSSEJSON(w io.Writer, eventName, id string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "event: %s\n", eventName); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "id: %s\n", id); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "data: %s\n\n", data); err != nil {
+		return err
+	}
+	return nil
 }
 
 func writeRPCError(w http.ResponseWriter, id json.RawMessage, code int, message string) {

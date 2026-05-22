@@ -20,7 +20,7 @@ It is not the OpenClaw runtime itself, and it is not only a Telegram sender. The
 - **A2A delivery bridge skill**: explicit outward delivery when the official announce / nested callback path is unreliable.
 - **MCP + skill v1 surface**: tools OpenClaw can install, register, and consume for handoffs, workflows, watches, repairs, agent coordination, and A2A delivery.
 - **Agent coordination policy**: registry-backed work projections with heartbeat defaults, stale/offline owner signals, and expired lease suggestions.
-- **A2A compatibility endpoint**: experimental Agent Card + JSON-RPC access for coordination queries, standard task status lookup, and controlled idempotent inbound task creation.
+- **A2A compatibility endpoint**: experimental Agent Card + JSON-RPC access for coordination queries, standard task status lookup, controlled idempotent inbound task creation, and read-only task event streaming.
 
 This version now productizes the minimal v1 into an installable, registerable, and verifiable MCP server + skill suite.
 
@@ -75,7 +75,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `cmd/config-builder/`: Go CLI that generates the derived sender config.
 - `cmd/orchestrator/`: low-level orchestrator debug / operation entrypoint.
 - `cmd/clawside-mcp/`: stdio MCP server entrypoint.
-- `cmd/clawside-a2a/`: experimental A2A compatibility HTTP endpoint for controlled queries and inbound task creation.
+- `cmd/clawside-a2a/`: experimental A2A compatibility HTTP endpoint for controlled queries, inbound task creation, and read-only task events.
 - `cmd/openclaw-mcp-smoke/`: local smoke verifier for OpenClaw consuming the clawside MCP v1 surface.
 - `cmd/openclaw-dispatch/`: local helper that adapts `handoff_dispatch adapter=openclaw` requests to an OpenClaw-compatible CLI command.
 - `cmd/openclaw-tool-results-extract/`: local read-only CLI for extracting clawside tool structured results from OpenClaw trajectory.
@@ -347,7 +347,7 @@ To register with OpenClaw, configure it as a stdio MCP server and point `command
 
 ## A2A compatibility endpoint
 
-`clawside-a2a` is an experimental compatibility endpoint for A2A-style discovery, coordination queries, standard task status lookup, and controlled inbound task creation. It exposes an Agent Card plus a small JSON-RPC allowlist backed by the same sqlite truth store as the MCP server.
+`clawside-a2a` is an experimental compatibility endpoint for A2A-style discovery, coordination queries, standard task status lookup, controlled inbound task creation, and read-only task event streaming. It exposes an Agent Card, a small JSON-RPC allowlist, and an SSE task stream backed by the same sqlite truth store as the MCP server.
 
 Start it with a separate A2A auth key:
 
@@ -386,6 +386,14 @@ curl -sS http://127.0.0.1:8789/a2a/rpc \
   -d '{"jsonrpc":"2.0","id":"1","method":"tasks/get","params":{"id":"hf_example","historyLength":0}}'
 ```
 
+Subscribe to read-only task projection events for a Clawside handoff:
+
+```bash
+curl -N http://127.0.0.1:8789/a2a/tasks/hf_example/events?historyLength=1 \
+  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+  -H "Accept: text/event-stream"
+```
+
 Create one controlled inbound task. This creates one root workflow / handoff and returns the same task view that `tasks/get` can later read:
 
 ```bash
@@ -408,9 +416,9 @@ curl -sS http://127.0.0.1:8789/a2a/rpc \
   }'
 ```
 
-Supported JSON-RPC methods include the standard-style read-only `tasks/get` handoff status mapping, the controlled idempotent `clawside.task.create` inbound creation method, and the intentionally namespaced `clawside.*` queries: `clawside.workflow.list`, `clawside.workflow.status`, `clawside.handoff.get`, `clawside.agent.list`, `clawside.work.next`, and `clawside.work.blocked`.
+Supported JSON-RPC methods include the standard-style read-only `tasks/get` handoff status mapping, the controlled idempotent `clawside.task.create` inbound creation method, and the intentionally namespaced `clawside.*` queries: `clawside.workflow.list`, `clawside.workflow.status`, `clawside.handoff.get`, `clawside.agent.list`, `clawside.work.next`, and `clawside.work.blocked`. The SSE endpoint is `GET /a2a/tasks/<handoff-id>/events`; it emits task projection snapshots only and does not expose raw event payloads.
 
-Boundaries: this endpoint only allows the controlled idempotent `clawside.task.create` mutation. It does not implement the full Google A2A message runtime, raw `handoff_create`, `message/send`, `tasks/cancel`, SSE, push notifications, sandboxing, managed OpenClaw / Claude sessions, command / args / local path / runtime session / private prompt / worker launch parameters, sender delivery, or dynamic mutating JSON-RPC mapping.
+Boundaries: this endpoint only allows the controlled idempotent `clawside.task.create` mutation plus read-only task event streaming. It does not implement the full Google A2A message runtime, raw `handoff_create`, `message/send`, `tasks/cancel`, push notifications, sandboxing, managed OpenClaw / Claude sessions, command / args / local path / runtime session / private prompt / worker launch parameters, sender delivery, or dynamic mutating JSON-RPC mapping.
 
 ## OpenClaw MCP smoke verifier
 
