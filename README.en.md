@@ -19,6 +19,7 @@ It is not the OpenClaw runtime itself, and it is not only a Telegram sender. The
 - **OpenClaw adapter foundations**: integration points for dispatching and bridge actions through OpenClaw-compatible entrypoints.
 - **A2A delivery bridge skill**: explicit outward delivery when the official announce / nested callback path is unreliable.
 - **MCP + skill v1 surface**: tools OpenClaw can install, register, and consume for handoffs, workflows, watches, repairs, and A2A delivery.
+- **A2A compatibility endpoint**: experimental read-only Agent Card + JSON-RPC access to coordination status queries.
 
 This version now productizes the minimal v1 into an installable, registerable, and verifiable MCP server + skill suite.
 
@@ -73,6 +74,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `cmd/config-builder/`: Go CLI that generates the derived sender config.
 - `cmd/orchestrator/`: low-level orchestrator debug / operation entrypoint.
 - `cmd/clawside-mcp/`: stdio MCP server entrypoint.
+- `cmd/clawside-a2a/`: experimental read-only A2A compatibility HTTP endpoint.
 - `cmd/openclaw-mcp-smoke/`: local smoke verifier for OpenClaw consuming the clawside MCP v1 surface.
 - `cmd/openclaw-dispatch/`: local helper that adapts `handoff_dispatch adapter=openclaw` requests to an OpenClaw-compatible CLI command.
 - `cmd/openclaw-tool-results-extract/`: local read-only CLI for extracting clawside tool structured results from OpenClaw trajectory.
@@ -88,6 +90,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `internal/configbuilder/`: extracts the minimal sender config from OpenClaw source config.
 - `internal/orchestrator/`: handoff, workflow, event, watch, repair, and adapter foundations.
 - `internal/toolserver/`: MCP tool handlers.
+- `internal/a2aserver/`: Agent Card and controlled JSON-RPC compatibility server.
 - `internal/a2adelivery/`: A2A delivery bridge, polling, and orchestration logic.
 - `main.go` + `http_handler.go` + `worker.go`: sender service entrypoint, HTTP API, and delivery worker.
 - `.claude/skills/openclaw-a2a-delivery/`: OpenClaw A2A delivery skill definition.
@@ -331,6 +334,42 @@ Boundaries:
 - `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` depend on `--db` pointing to the same sqlite truth store.
 
 To register with OpenClaw, configure it as a stdio MCP server and point `command` to this repository's `scripts/start_mcp.sh`.
+
+## A2A compatibility endpoint
+
+`clawside-a2a` is an experimental read-only compatibility endpoint for A2A-style discovery and coordination queries. It exposes an Agent Card plus a small JSON-RPC allowlist backed by the same sqlite truth store as the MCP server.
+
+Start it with a separate A2A auth key:
+
+```bash
+CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
+  go run ./cmd/clawside-a2a --db ./sender.db --addr 127.0.0.1:8789
+```
+
+Show command help:
+
+```bash
+go run ./cmd/clawside-a2a --help
+```
+
+Fetch the public Agent Card:
+
+```bash
+curl -sS http://127.0.0.1:8789/.well-known/agent-card.json
+```
+
+Run a read-only workflow query:
+
+```bash
+curl -sS http://127.0.0.1:8789/a2a/rpc \
+  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"clawside.workflow.list","params":{}}'
+```
+
+Supported JSON-RPC methods are intentionally namespaced under `clawside.*`: `clawside.workflow.list`, `clawside.workflow.status`, `clawside.handoff.get`, `clawside.agent.list`, `clawside.work.next`, and `clawside.work.blocked`.
+
+Boundaries: this endpoint does not implement the full Google A2A message runtime, SSE, push notifications, sandboxing, managed OpenClaw / Claude sessions, arbitrary command execution, sender delivery, or mutating JSON-RPC methods.
 
 ## OpenClaw MCP smoke verifier
 
