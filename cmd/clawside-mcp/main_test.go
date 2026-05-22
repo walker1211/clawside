@@ -21,6 +21,7 @@ var documentedV1ToolGroups = map[string][]string{
 	"workflow query":          {"workflow_status", "workflow_list"},
 	"agent coordination":      {"agent_register", "agent_list", "next_work", "blocked_work"},
 	"collaboration templates": {"collaboration_template_list", "collaboration_template_apply"},
+	"coordination evidence":   {"coordination_evidence_summary"},
 	"watch ownership":         {"watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update"},
 	"repair divergence":       {"repair_list", "repair_invalidate_event", "repair_backfill_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_record", "divergence_list"},
 	"sender observability":    {"sender_health", "sender_ready", "sender_stats", "sender_job_list", "sender_job_get"},
@@ -261,7 +262,7 @@ func TestServerCoordinationToolSchemasDoNotAcceptLocalExecutionFields(t *testing
 	if err != nil {
 		t.Fatalf("ListTools: %v", err)
 	}
-	wanted := map[string]bool{"agent_register": true, "agent_list": true, "next_work": true, "blocked_work": true, "collaboration_template_apply": true}
+	wanted := map[string]bool{"agent_register": true, "agent_list": true, "next_work": true, "blocked_work": true, "collaboration_template_apply": true, "coordination_evidence_summary": true}
 	for _, tool := range tools.Tools {
 		if !wanted[tool.Name] {
 			continue
@@ -309,6 +310,106 @@ func TestServerCollaborationTemplateApplySchemaListsOnlyTemplateFields(t *testin
 	for field := range properties {
 		if !slices.Contains(want, field) {
 			t.Fatalf("unexpected collaboration_template_apply field %q in %+v", field, properties)
+		}
+	}
+}
+
+func TestServerCoordinationEvidenceSummarySchemaListsOnlyEvidenceFields(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	tools, err := c.ListTools(ctx, mcp.ListToolsRequest{})
+	if err != nil {
+		t.Fatalf("ListTools: %v", err)
+	}
+	var properties map[string]any
+	for _, tool := range tools.Tools {
+		if tool.Name == "coordination_evidence_summary" {
+			properties = tool.InputSchema.Properties
+			break
+		}
+	}
+	if properties == nil {
+		t.Fatalf("expected coordination_evidence_summary properties")
+	}
+	want := []string{"workflow_id", "include_agents"}
+	for _, field := range want {
+		if _, ok := properties[field]; !ok {
+			t.Fatalf("expected coordination_evidence_summary field %q in %+v", field, properties)
+		}
+	}
+	for field := range properties {
+		if !slices.Contains(want, field) {
+			t.Fatalf("unexpected coordination_evidence_summary field %q in %+v", field, properties)
+		}
+	}
+}
+
+func TestServerCallCoordinationEvidenceSummarySucceeds(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	created, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_create", Arguments: map[string]any{
+		"workflow_kind":                    "generic",
+		"sender":                           map[string]any{"type": "agent", "id": "planner", "address": "local/planner/socket"},
+		"receiver":                         map[string]any{"type": "agent", "id": "writer", "address": "local/writer/socket"},
+		"task_kind":                        "generic_task",
+		"intent":                           "private prompt with token",
+		"required_for_workflow_completion": true,
+		"payload_ref":                      "project://secret",
+		"delivery_target_ref":              "agent:writer-private",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_create): %v", err)
+	}
+	if created.IsError {
+		t.Fatalf("expected handoff_create success")
+	}
+
+	summary, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "coordination_evidence_summary", Arguments: map[string]any{"workflow_id": extractWorkflowID(t, created), "include_agents": true}}})
+	if err != nil {
+		t.Fatalf("CallTool(coordination_evidence_summary): %v", err)
+	}
+	if summary.IsError {
+		t.Fatalf("expected coordination_evidence_summary success")
+	}
+	var payload struct {
+		Summary struct {
+			WorkflowCount int `json:"workflow_count"`
+			HandoffCount  int `json:"handoff_count"`
+			WatchCount    int `json:"watch_count"`
+			Workflows     []struct {
+				ID       string `json:"id"`
+				Handoffs []struct {
+					ID         string `json:"id"`
+					ReceiverID string `json:"receiver_id"`
+				} `json:"handoffs"`
+			} `json:"workflows"`
+		} `json:"summary"`
+	}
+	decodeStructuredContent(t, summary, &payload)
+	if payload.Summary.WorkflowCount != 1 || payload.Summary.HandoffCount != 1 || payload.Summary.WatchCount != 3 {
+		t.Fatalf("expected summary counts 1/1/3, got %+v", payload.Summary)
+	}
+	if len(payload.Summary.Workflows) != 1 || payload.Summary.Workflows[0].ID != extractWorkflowID(t, created) {
+		t.Fatalf("expected created workflow summary, got %+v", payload.Summary.Workflows)
+	}
+	encoded := structuredContentJSON(t, summary)
+	for _, forbidden := range []string{
+		`"intent"`, `"payload_ref"`, `"delivery_target_ref"`, `"address"`,
+		"private prompt", "project://secret", "agent:writer-private", "local/planner/socket", "local/writer/socket",
+		`"command"`, `"args"`, `"cwd"`, `"path"`, `"prompt"`, `"session_id"`, `"token"`, `"secret"`, `"stdout"`, `"stderr"`,
+	} {
+		if strings.Contains(encoded, forbidden) {
+			t.Fatalf("expected coordination evidence output to omit %q, got %s", forbidden, encoded)
 		}
 	}
 }
@@ -1821,6 +1922,15 @@ func decodeStructuredContent(t *testing.T, result *mcp.CallToolResult, out any) 
 	if err := json.Unmarshal(raw, out); err != nil {
 		t.Fatalf("unmarshal structured content: %v", err)
 	}
+}
+
+func structuredContentJSON(t *testing.T, result *mcp.CallToolResult) string {
+	t.Helper()
+	raw, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatalf("marshal structured content: %v", err)
+	}
+	return string(raw)
 }
 
 func writeMCPDispatchScript(t *testing.T, content string) string {

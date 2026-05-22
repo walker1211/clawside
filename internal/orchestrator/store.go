@@ -29,6 +29,14 @@ func NewStore(ctx context.Context, db *sql.DB) (*Store, error) {
 	return store, nil
 }
 
+// NewReadOnlyStore skips schema initialization; callers must open db with a read-only DSN to enforce read-only access.
+func NewReadOnlyStore(ctx context.Context, db *sql.DB) (*Store, error) {
+	if err := configureSQLiteDB(ctx, db); err != nil {
+		return nil, err
+	}
+	return &Store{db: db}, nil
+}
+
 func configureSQLiteDB(ctx context.Context, db *sql.DB) error {
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)

@@ -180,6 +180,15 @@ type CollaborationTemplateApplyOutput struct {
 	Handoffs     []orchestrator.Handoff `json:"handoffs"`
 }
 
+type CoordinationEvidenceSummaryInput struct {
+	WorkflowID    string `json:"workflow_id,omitempty"`
+	IncludeAgents bool   `json:"include_agents,omitempty"`
+}
+
+type CoordinationEvidenceSummaryOutput struct {
+	Summary orchestrator.CoordinationEvidenceSummary `json:"summary"`
+}
+
 type WatchListInput struct {
 	HandoffID string `json:"handoff_id"`
 }
@@ -536,6 +545,17 @@ func toCollaborationTemplateRole(input CollaborationTemplateRoleInput) orchestra
 		ReceiverID: input.ReceiverID,
 		ProjectRef: input.ProjectRef,
 	}
+}
+
+func (h *Handlers) HandleCoordinationEvidenceSummary(ctx context.Context, input CoordinationEvidenceSummaryInput) (CoordinationEvidenceSummaryOutput, error) {
+	summary, err := h.svc.CoordinationEvidenceSummary(ctx, orchestrator.CoordinationEvidenceQuery{
+		WorkflowID:    input.WorkflowID,
+		IncludeAgents: input.IncludeAgents,
+	})
+	if err != nil {
+		return CoordinationEvidenceSummaryOutput{}, err
+	}
+	return CoordinationEvidenceSummaryOutput{Summary: summary}, nil
 }
 
 func normalizeProtocolAction(raw string) orchestrator.ProtocolAction {

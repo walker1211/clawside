@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -172,6 +173,8 @@ func runWorkflow(args []string, stdout, stderr io.Writer) error {
 		return runWorkflowStatus(args[1:], stdout, stderr)
 	case "list":
 		return runWorkflowList(args[1:], stdout, stderr)
+	case "evidence":
+		return runWorkflowEvidence(args[1:], stdout, stderr)
 	default:
 		return fmt.Errorf("unknown workflow subcommand %q", args[0])
 	}
@@ -782,6 +785,51 @@ func runWorkflowList(args []string, stdout, stderr io.Writer) error {
 		views = append(views, view)
 	}
 	return printJSON(stdout, views)
+}
+
+func runWorkflowEvidence(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("workflow evidence", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var workflowID string
+	var includeAgents bool
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&workflowID, "workflow-id", "", "workflow id filter")
+	fs.BoolVar(&includeAgents, "include-agents", false, "include sanitized agent registry summary")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if dbPath == "" {
+		return fmt.Errorf("missing db")
+	}
+
+	db, err := sql.Open("sqlite", sqliteReadOnlyDSN(dbPath))
+	if err != nil {
+		return fmt.Errorf("open read-only db: %w", err)
+	}
+	defer db.Close()
+	store, err := orchestrator.NewReadOnlyStore(context.Background(), db)
+	if err != nil {
+		return fmt.Errorf("open read-only db: %w", err)
+	}
+	svc := orchestrator.NewService(store, nil)
+	summary, err := svc.CoordinationEvidenceSummary(context.Background(), orchestrator.CoordinationEvidenceQuery{
+		WorkflowID:    strings.TrimSpace(workflowID),
+		IncludeAgents: includeAgents,
+	})
+	if err != nil {
+		return err
+	}
+	return printJSON(stdout, summary)
+}
+
+func sqliteReadOnlyDSN(dbPath string) string {
+	dsn := url.URL{Scheme: "file", Path: dbPath}
+	query := dsn.Query()
+	query.Set("mode", "ro")
+	dsn.RawQuery = query.Encode()
+	return dsn.String()
 }
 
 func runWatchList(args []string, stdout, stderr io.Writer) error {
