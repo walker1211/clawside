@@ -156,6 +156,30 @@ type BlockedWorkOutput struct {
 	Items []orchestrator.BlockedWorkItem `json:"items"`
 }
 
+type CollaborationTemplateListOutput struct {
+	Templates []orchestrator.CollaborationTemplate `json:"templates"`
+}
+
+type CollaborationTemplateApplyInput struct {
+	TemplateName string                         `json:"template_name"`
+	WorkflowKind string                         `json:"workflow_kind,omitempty"`
+	Intent       string                         `json:"intent"`
+	Upstream     CollaborationTemplateRoleInput `json:"upstream"`
+	Downstream   CollaborationTemplateRoleInput `json:"downstream"`
+	Reviewer     CollaborationTemplateRoleInput `json:"reviewer"`
+}
+
+type CollaborationTemplateRoleInput struct {
+	ReceiverID string `json:"receiver_id"`
+	ProjectRef string `json:"project_ref"`
+}
+
+type CollaborationTemplateApplyOutput struct {
+	TemplateName string                 `json:"template_name"`
+	Workflow     orchestrator.Workflow  `json:"workflow"`
+	Handoffs     []orchestrator.Handoff `json:"handoffs"`
+}
+
 type WatchListInput struct {
 	HandoffID string `json:"handoff_id"`
 }
@@ -482,6 +506,36 @@ func (h *Handlers) HandleBlockedWork(ctx context.Context, input WorkQueryInput) 
 		return BlockedWorkOutput{}, err
 	}
 	return BlockedWorkOutput{Items: items}, nil
+}
+
+func (h *Handlers) HandleCollaborationTemplateList(_ context.Context) (CollaborationTemplateListOutput, error) {
+	return CollaborationTemplateListOutput{Templates: h.svc.ListCollaborationTemplates()}, nil
+}
+
+func (h *Handlers) HandleCollaborationTemplateApply(ctx context.Context, input CollaborationTemplateApplyInput) (CollaborationTemplateApplyOutput, error) {
+	result, err := h.svc.ApplyCollaborationTemplate(ctx, orchestrator.CollaborationTemplateApplyInput{
+		TemplateName: input.TemplateName,
+		WorkflowKind: input.WorkflowKind,
+		Intent:       input.Intent,
+		Upstream:     toCollaborationTemplateRole(input.Upstream),
+		Downstream:   toCollaborationTemplateRole(input.Downstream),
+		Reviewer:     toCollaborationTemplateRole(input.Reviewer),
+	})
+	if err != nil {
+		return CollaborationTemplateApplyOutput{}, err
+	}
+	return CollaborationTemplateApplyOutput{
+		TemplateName: result.TemplateName,
+		Workflow:     result.Workflow,
+		Handoffs:     result.Handoffs,
+	}, nil
+}
+
+func toCollaborationTemplateRole(input CollaborationTemplateRoleInput) orchestrator.CollaborationTemplateRole {
+	return orchestrator.CollaborationTemplateRole{
+		ReceiverID: input.ReceiverID,
+		ProjectRef: input.ProjectRef,
+	}
 }
 
 func normalizeProtocolAction(raw string) orchestrator.ProtocolAction {
