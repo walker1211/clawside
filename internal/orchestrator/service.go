@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+const (
+	defaultAgentHeartbeatTTL = 5 * time.Minute
+	defaultHandoffLeaseTTL   = 30 * time.Minute
+)
+
 type Service struct {
 	store           *Store
 	now             func() time.Time
@@ -138,6 +143,10 @@ func (s *Service) RegisterAgent(ctx context.Context, input AgentRegistration) (A
 		agent.CreatedAt = now
 	}
 	agent.UpdatedAt = now
+	if agent.LastHeartbeatAt == nil {
+		heartbeat := now
+		agent.LastHeartbeatAt = &heartbeat
+	}
 	if err := s.store.SaveAgentRegistration(ctx, agent); err != nil {
 		return AgentRegistration{}, err
 	}
@@ -179,7 +188,7 @@ func (s *Service) NextWork(ctx context.Context, query WorkQuery) ([]WorkItem, er
 		if err != nil {
 			return nil, err
 		}
-		items = append(items, WorkItem{Workflow: workflows[handoff.WorkflowID], Handoff: handoff, ActiveWatch: activeWatch, Suggestions: suggestions})
+		items = append(items, WorkItem{Workflow: workflows[handoff.WorkflowID], Handoff: handoff, ActiveWatch: activeWatch, Warnings: nonBlockingWorkReasons(reasons), Suggestions: suggestions})
 	}
 	sortWorkItems(items)
 	return limitWorkItems(items, query.Limit), nil
@@ -247,6 +256,7 @@ func (s *Service) workProjectionInputs(ctx context.Context, workflowID string) (
 }
 
 func (s *Service) workBlockReasons(ctx context.Context, handoff Handoff, handoffByID map[string]Handoff, agents []AgentRegistration) ([]WorkBlockReason, []ActionSuggestion, error) {
+	now := s.now().UTC()
 	var reasons []WorkBlockReason
 	var suggestions []ActionSuggestion
 	for _, dependencyID := range handoff.DependsOnHandoffIDs {
@@ -274,7 +284,18 @@ func (s *Service) workBlockReasons(ctx context.Context, handoff Handoff, handoff
 
 	if isEmptyActor(handoff.CurrentOwner) {
 		reasons = append(reasons, WorkBlockReason{Code: "owner_missing", Detail: "handoff has no current owner"})
-		if suggestion, ok := assignOwnerSuggestion(handoff, agents); ok {
+		if suggestion, ok := assignOwnerSuggestion(handoff, agents, now); ok {
+			suggestions = append(suggestions, suggestion)
+		}
+	} else if handoff.CurrentOwner.Type == ActorAgent && !agentLiveAndAvailable(handoff.CurrentOwner, agents, now) {
+		reasons = append(reasons, WorkBlockReason{Code: "owner_unavailable", Detail: "handoff current owner is not registered as a live available agent"})
+		if suggestion, ok := reassignOwnerSuggestion(handoff, agents, now); ok {
+			suggestions = append(suggestions, suggestion)
+		}
+	}
+	if !isEmptyActor(handoff.LeaseHolder) && handoff.LeaseExpiresAt != nil && handoff.LeaseExpiresAt.Before(now) {
+		reasons = append(reasons, WorkBlockReason{Code: "lease_expired", Detail: "handoff owner lease has expired"})
+		if suggestion, ok := reclaimExpiredLeaseSuggestion(handoff, agents, now); ok {
 			suggestions = append(suggestions, suggestion)
 		}
 	}
@@ -303,17 +324,73 @@ func watchActionSuggestion(handoff Handoff, watch Watch) ActionSuggestion {
 	return suggestion
 }
 
-func assignOwnerSuggestion(handoff Handoff, agents []AgentRegistration) (ActionSuggestion, bool) {
+func assignOwnerSuggestion(handoff Handoff, agents []AgentRegistration, now time.Time) (ActionSuggestion, bool) {
 	for _, agent := range agents {
-		if agent.Status != "" && agent.Status != "available" {
-			continue
-		}
-		if !agentCanHandleHandoff(agent, handoff) {
+		if !isAssignableAgent(agent, handoff, now) {
 			continue
 		}
 		return ActionSuggestion{Code: "assign_owner", Summary: "assign a matching available agent as current owner", SuggestedActor: agent.Actor, Source: "agent_registry"}, true
 	}
 	return ActionSuggestion{}, false
+}
+
+func reassignOwnerSuggestion(handoff Handoff, agents []AgentRegistration, now time.Time) (ActionSuggestion, bool) {
+	suggestion, ok := assignOwnerSuggestion(handoff, agents, now)
+	if !ok {
+		return ActionSuggestion{}, false
+	}
+	suggestion.Code = "reassign_owner"
+	suggestion.Summary = "reassign a matching live available agent as current owner"
+	return suggestion, true
+}
+
+func reclaimExpiredLeaseSuggestion(handoff Handoff, agents []AgentRegistration, now time.Time) (ActionSuggestion, bool) {
+	if handoff.LeaseHolder.Type == ActorAgent && agentLiveAndAvailable(handoff.LeaseHolder, agents, now) {
+		return ActionSuggestion{Code: "reclaim_expired_lease", Summary: "reclaim or refresh the expired owner lease", SuggestedActor: handoff.LeaseHolder, Source: "lease_policy"}, true
+	}
+	suggestion, ok := assignOwnerSuggestion(handoff, agents, now)
+	if !ok {
+		return ActionSuggestion{}, false
+	}
+	suggestion.Code = "reclaim_expired_lease"
+	suggestion.Summary = "reclaim or refresh the expired owner lease"
+	suggestion.Source = "lease_policy"
+	return suggestion, true
+}
+
+func isAssignableAgent(agent AgentRegistration, handoff Handoff, now time.Time) bool {
+	if agentStatus(agent) != "available" {
+		return false
+	}
+	if !isHeartbeatLive(agent, now) {
+		return false
+	}
+	return agentCanHandleHandoff(agent, handoff)
+}
+
+func agentLiveAndAvailable(actor ActorRef, agents []AgentRegistration, now time.Time) bool {
+	for _, agent := range agents {
+		if agent.Actor.Type != actor.Type || agent.Actor.ID != actor.ID {
+			continue
+		}
+		return agentStatus(agent) == "available" && isHeartbeatLive(agent, now)
+	}
+	return false
+}
+
+func agentStatus(agent AgentRegistration) string {
+	status := strings.TrimSpace(agent.Status)
+	if status == "" {
+		return "available"
+	}
+	return status
+}
+
+func isHeartbeatLive(agent AgentRegistration, now time.Time) bool {
+	if agent.LastHeartbeatAt == nil {
+		return false
+	}
+	return !agent.LastHeartbeatAt.UTC().Before(now.Add(-defaultAgentHeartbeatTTL))
 }
 
 func (s *Service) earliestActiveWatch(ctx context.Context, handoffID string) (*Watch, error) {
@@ -392,12 +469,31 @@ func handoffMatchesAgentID(handoff Handoff, agentID string) bool {
 
 func hasNextWorkBlockingReason(reasons []WorkBlockReason) bool {
 	for _, reason := range reasons {
-		switch reason.Code {
-		case "dependency_incomplete", "watch_reminder_sent", "reviewer_missing":
+		if isNextWorkBlockingReason(reason) {
 			return true
 		}
 	}
 	return false
+}
+
+func nonBlockingWorkReasons(reasons []WorkBlockReason) []WorkBlockReason {
+	warnings := make([]WorkBlockReason, 0, len(reasons))
+	for _, reason := range reasons {
+		if isNextWorkBlockingReason(reason) {
+			continue
+		}
+		warnings = append(warnings, reason)
+	}
+	return warnings
+}
+
+func isNextWorkBlockingReason(reason WorkBlockReason) bool {
+	switch reason.Code {
+	case "dependency_incomplete", "watch_reminder_sent", "reviewer_missing":
+		return true
+	default:
+		return false
+	}
 }
 
 func sortWorkItems(items []WorkItem) {

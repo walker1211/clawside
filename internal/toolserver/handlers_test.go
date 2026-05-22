@@ -64,9 +64,30 @@ func TestHandleAgentRegisterListAndNextWork(t *testing.T) {
 	}
 }
 
+func TestHandleAgentRegisterDefaultsHeartbeat(t *testing.T) {
+	h := newTestHandlers(t, nil)
+
+	registered, err := h.HandleAgentRegister(context.Background(), AgentRegisterInput{
+		Actor: ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "worker"},
+	})
+	if err != nil {
+		t.Fatalf("HandleAgentRegister: %v", err)
+	}
+	if registered.Agent.LastHeartbeatAt == nil || registered.Agent.LastHeartbeatAt.IsZero() {
+		t.Fatalf("expected default heartbeat, got %+v", registered.Agent.LastHeartbeatAt)
+	}
+}
+
 func TestHandleBlockedWorkReportsDependencyReason(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	ctx := context.Background()
+	if _, err := h.HandleAgentRegister(ctx, AgentRegisterInput{
+		Actor:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "downstream"},
+		ProjectRefs: []string{"project://downstream"},
+		TaskKinds:   []string{string(orchestrator.TaskGeneric)},
+	}); err != nil {
+		t.Fatalf("HandleAgentRegister(downstream): %v", err)
+	}
 
 	root, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
 		WorkflowKind:                  "multi_project",

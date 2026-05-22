@@ -235,7 +235,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	}))
 
 	agentRegisterTool := mcp.NewTool("agent_register",
-		mcp.WithDescription("Register or update an agent's coordination capabilities"),
+		mcp.WithDescription("Register or update an agent's coordination capabilities and heartbeat"),
 		mcp.WithInputSchema[toolserver.AgentRegisterInput](),
 		mcp.WithOutputSchema[toolserver.AgentRegisterOutput](),
 	)
@@ -253,7 +253,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	}))
 
 	nextWorkTool := mcp.NewTool("next_work",
-		mcp.WithDescription("List executable handoffs for an agent or work filter"),
+		mcp.WithDescription("List executable handoffs with non-blocking liveness and lease warnings"),
 		mcp.WithInputSchema[toolserver.WorkQueryInput](),
 		mcp.WithOutputSchema[toolserver.NextWorkOutput](),
 	)
@@ -262,7 +262,7 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	}))
 
 	blockedWorkTool := mcp.NewTool("blocked_work",
-		mcp.WithDescription("List blocked handoffs with deterministic reasons and suggestions"),
+		mcp.WithDescription("List handoffs with deterministic block, liveness, lease reasons, and suggestions"),
 		mcp.WithInputSchema[toolserver.WorkQueryInput](),
 		mcp.WithOutputSchema[toolserver.BlockedWorkOutput](),
 	)

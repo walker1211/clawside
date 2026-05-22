@@ -18,7 +18,8 @@ It is not the OpenClaw runtime itself, and it is not only a Telegram sender. The
 - **orchestrator CLI / store / state machine / watch / repair foundations**: foundations for handoffs, events, workflows, watches, and repairs.
 - **OpenClaw adapter foundations**: integration points for dispatching and bridge actions through OpenClaw-compatible entrypoints.
 - **A2A delivery bridge skill**: explicit outward delivery when the official announce / nested callback path is unreliable.
-- **MCP + skill v1 surface**: tools OpenClaw can install, register, and consume for handoffs, workflows, watches, repairs, and A2A delivery.
+- **MCP + skill v1 surface**: tools OpenClaw can install, register, and consume for handoffs, workflows, watches, repairs, agent coordination, and A2A delivery.
+- **Agent coordination policy**: registry-backed work projections with heartbeat defaults, stale/offline owner signals, and expired lease suggestions.
 - **A2A compatibility endpoint**: experimental read-only Agent Card + JSON-RPC access to coordination status queries.
 
 This version now productizes the minimal v1 into an installable, registerable, and verifiable MCP server + skill suite.
@@ -279,6 +280,10 @@ Current v1 tools:
 - `handoff_progress`
 - `workflow_status`
 - `workflow_list`
+- `agent_register`
+- `agent_list`
+- `next_work`
+- `blocked_work`
 - `watch_list`
 - `watch_run`
 - `watch_update`
@@ -306,6 +311,10 @@ Recommended reading:
 - `handoff_progress`: applies protocol actions such as `receive`, `claim`, `start`, `submit`, `approve`, and `complete`.
 - `workflow_status`: returns one workflow aggregate view.
 - `workflow_list`: lists all workflows with projected handoffs.
+- `agent_register`: registers or updates an agent's capabilities and heartbeat; omitted heartbeat defaults to server time.
+- `agent_list`: lists registered agents by capability, project ref, task kind, or status.
+- `next_work`: lists executable handoffs and includes non-blocking liveness / lease warnings plus suggestions.
+- `blocked_work`: lists handoffs with deterministic dependency, watch, reviewer, liveness, and lease reasons plus suggestions.
 - `watch_list`: lists watches attached to a handoff.
 - `watch_run`: runs due watch checks at a provided RFC3339 timestamp.
 - `watch_update`: updates a watch deadline, status, or escalation policy.
@@ -331,7 +340,8 @@ Boundaries:
 - Deeper truth-plane operations beyond invalidate/backfill/reopen repair still live outside the v1 MCP surface.
 - `a2a_deliver` and `sender_*` observability tools depend on the local sender sidecar.
 - `sender_*` observability tools are read-only and do not expose raw message text, raw idempotency keys, or Telegram bot tokens.
-- `handoff_*` / `workflow_*` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` depend on `--db` pointing to the same sqlite truth store.
+- `handoff_*` / `workflow_*` / `agent_*` / `*_work` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` depend on `--db` pointing to the same sqlite truth store.
+- Agent liveness and lease policy are projection signals only: they do not launch workers, execute commands, clear owners, steal leases, or mutate handoff lifecycle state automatically.
 
 To register with OpenClaw, configure it as a stdio MCP server and point `command` to this repository's `scripts/start_mcp.sh`.
 
