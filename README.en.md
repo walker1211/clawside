@@ -367,9 +367,18 @@ curl -sS http://127.0.0.1:8789/a2a/rpc \
   -d '{"jsonrpc":"2.0","id":"1","method":"clawside.workflow.list","params":{}}'
 ```
 
-Supported JSON-RPC methods are intentionally namespaced under `clawside.*`: `clawside.workflow.list`, `clawside.workflow.status`, `clawside.handoff.get`, `clawside.agent.list`, `clawside.work.next`, and `clawside.work.blocked`.
+Run a standard-style read-only task status query for a Clawside handoff:
 
-Boundaries: this endpoint does not implement the full Google A2A message runtime, SSE, push notifications, sandboxing, managed OpenClaw / Claude sessions, arbitrary command execution, sender delivery, or mutating JSON-RPC methods.
+```bash
+curl -sS http://127.0.0.1:8789/a2a/rpc \
+  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"tasks/get","params":{"id":"hf_example","historyLength":0}}'
+```
+
+Supported JSON-RPC methods include the standard-style read-only `tasks/get` handoff status mapping plus the intentionally namespaced `clawside.*` queries: `clawside.workflow.list`, `clawside.workflow.status`, `clawside.handoff.get`, `clawside.agent.list`, `clawside.work.next`, and `clawside.work.blocked`.
+
+Boundaries: this endpoint does not implement the full Google A2A message runtime, inbound task creation, SSE, push notifications, sandboxing, managed OpenClaw / Claude sessions, arbitrary command execution, sender delivery, or mutating JSON-RPC methods.
 
 ## OpenClaw MCP smoke verifier
 

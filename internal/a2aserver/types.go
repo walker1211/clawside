@@ -9,6 +9,7 @@ const (
 	MethodAgentList      = "clawside.agent.list"
 	MethodNextWork       = "clawside.work.next"
 	MethodBlockedWork    = "clawside.work.blocked"
+	MethodTasksGet       = "tasks/get"
 )
 
 const (
@@ -77,4 +78,30 @@ type RPCResponse struct {
 type RPCError struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
+}
+
+type TasksGetInput struct {
+	ID            string `json:"id"`
+	HistoryLength *int   `json:"historyLength,omitempty"`
+}
+
+type A2ATask struct {
+	ID        string         `json:"id"`
+	ContextID string         `json:"contextId,omitempty"`
+	Status    A2ATaskStatus  `json:"status"`
+	History   []A2ATaskEvent `json:"history,omitempty"`
+	Metadata  map[string]any `json:"metadata,omitempty"`
+}
+
+type A2ATaskStatus struct {
+	State     string `json:"state"`
+	Timestamp string `json:"timestamp,omitempty"`
+}
+
+type A2ATaskEvent struct {
+	Kind      string `json:"kind"`
+	EventID   string `json:"eventId,omitempty"`
+	Type      string `json:"type"`
+	Timestamp string `json:"timestamp,omitempty"`
+	Accepted  bool   `json:"accepted"`
 }

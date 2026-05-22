@@ -40,7 +40,7 @@ func TestAgentCardAndHealthz(t *testing.T) {
 	if card.Capabilities.Streaming || card.Capabilities.PushNotifications {
 		t.Fatalf("expected non-streaming non-push card capabilities, got %+v", card.Capabilities)
 	}
-	for _, method := range []string{MethodWorkflowList, MethodWorkflowStatus, MethodHandoffGet, MethodAgentList, MethodNextWork, MethodBlockedWork} {
+	for _, method := range []string{MethodWorkflowList, MethodWorkflowStatus, MethodHandoffGet, MethodAgentList, MethodNextWork, MethodBlockedWork, MethodTasksGet} {
 		if !cardHasSkill(card, method) {
 			t.Fatalf("expected agent card to include skill %s, got %+v", method, card.Skills)
 		}
@@ -173,6 +173,136 @@ func TestRPCReadOnlyMethodsDispatch(t *testing.T) {
 	blockedWork := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodBlockedWork, map[string]any{"agent_id": "engineer"}))
 	if !strings.Contains(string(blockedWork), downstream.Handoff.ID) || !strings.Contains(string(blockedWork), "dependency_incomplete") {
 		t.Fatalf("expected blocked work to include dependency-blocked downstream, got %s", string(blockedWork))
+	}
+}
+
+func TestTasksGetReturnsA2ATaskStatus(t *testing.T) {
+	handler, handlers := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+	ctx := context.Background()
+
+	created, err := handlers.HandleHandoffCreate(ctx, toolserver.HandoffCreateInput{
+		WorkflowKind:                  "multi_project",
+		Sender:                        toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:                      toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "write draft",
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    "project://draft",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	result := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{"id": created.Handoff.ID}))
+	var task A2ATask
+	if err := json.Unmarshal(result, &task); err != nil {
+		t.Fatalf("decode A2A task: %v; body=%s", err, string(result))
+	}
+	if task.ID != created.Handoff.ID {
+		t.Fatalf("expected task id %s, got %s", created.Handoff.ID, task.ID)
+	}
+	if task.ContextID != created.Workflow.ID {
+		t.Fatalf("expected context id %s, got %s", created.Workflow.ID, task.ContextID)
+	}
+	if task.Status.State != "submitted" {
+		t.Fatalf("expected created handoff to map to submitted, got %+v", task.Status)
+	}
+	if task.Metadata["workflowId"] != created.Workflow.ID {
+		t.Fatalf("expected workflowId metadata %s, got %+v", created.Workflow.ID, task.Metadata)
+	}
+	if task.Metadata["internalState"] != string(orchestrator.StateCreated) {
+		t.Fatalf("expected internalState created, got %+v", task.Metadata)
+	}
+}
+
+func TestTasksGetRejectsUnsafeParams(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+
+	for name, params := range map[string]map[string]any{
+		"blank id":         {"id": "   "},
+		"negative history": {"id": "hf_test", "historyLength": -1},
+		"command":          {"id": "hf_test", "command": "rm -rf /"},
+		"args":             {"id": "hf_test", "args": []string{"--danger"}},
+		"session id":       {"id": "hf_test", "session_id": "session-secret"},
+		"prompt":           {"id": "hf_test", "prompt": "private prompt"},
+		"workflow id":      {"workflow_id": "wf_test"},
+		"handoff id":       {"handoff_id": "hf_test"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, params)
+			assertRPCError(t, recorder, -32602)
+		})
+	}
+}
+
+func TestTasksGetHistoryLength(t *testing.T) {
+	handler, handlers := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+	ctx := context.Background()
+
+	created, err := handlers.HandleHandoffCreate(ctx, toolserver.HandoffCreateInput{
+		WorkflowKind: "multi_project",
+		Sender:       toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		Receiver:     toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "write draft",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	if _, err := handlers.HandleHandoffDispatch(ctx, toolserver.HandoffDispatchInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+	}); err != nil {
+		t.Fatalf("dispatch handoff: %v", err)
+	}
+	if _, err := handlers.HandleHandoffProgress(ctx, toolserver.HandoffProgressInput{
+		Action:    "receive",
+		HandoffID: created.Handoff.ID,
+		Actor:     toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+	}); err != nil {
+		t.Fatalf("receive handoff: %v", err)
+	}
+	if _, err := handlers.HandleHandoffProgress(ctx, toolserver.HandoffProgressInput{
+		Action:    "claim",
+		HandoffID: created.Handoff.ID,
+		Actor:     toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+	}); err != nil {
+		t.Fatalf("claim handoff: %v", err)
+	}
+	if _, err := handlers.HandleHandoffProgress(ctx, toolserver.HandoffProgressInput{
+		Action:    "start",
+		HandoffID: created.Handoff.ID,
+		Actor:     toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+	}); err != nil {
+		t.Fatalf("start handoff: %v", err)
+	}
+
+	limitedResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{
+		"id":            created.Handoff.ID,
+		"historyLength": 1,
+	}))
+	var limitedTask A2ATask
+	if err := json.Unmarshal(limitedResult, &limitedTask); err != nil {
+		t.Fatalf("decode limited task: %v; body=%s", err, string(limitedResult))
+	}
+	if len(limitedTask.History) != 1 {
+		t.Fatalf("expected one history item, got %+v", limitedTask.History)
+	}
+	if limitedTask.History[0].Type != string(orchestrator.EventStarted) {
+		t.Fatalf("expected latest started event, got %+v", limitedTask.History)
+	}
+
+	noHistoryResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{
+		"id":            created.Handoff.ID,
+		"historyLength": 0,
+	}))
+	var noHistoryTask A2ATask
+	if err := json.Unmarshal(noHistoryResult, &noHistoryTask); err != nil {
+		t.Fatalf("decode no-history task: %v; body=%s", err, string(noHistoryResult))
+	}
+	if len(noHistoryTask.History) != 0 {
+		t.Fatalf("expected no history, got %+v", noHistoryTask.History)
 	}
 }
 

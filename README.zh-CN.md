@@ -367,9 +367,18 @@ curl -sS http://127.0.0.1:8789/a2a/rpc \
   -d '{"jsonrpc":"2.0","id":"1","method":"clawside.workflow.list","params":{}}'
 ```
 
-支持的 JSON-RPC methods 会刻意放在 `clawside.*` 命名空间下：`clawside.workflow.list`、`clawside.workflow.status`、`clawside.handoff.get`、`clawside.agent.list`、`clawside.work.next` 和 `clawside.work.blocked`。
+执行标准风格的只读 task status 查询，读取某个 Clawside handoff 的状态：
 
-边界：这个 endpoint 不实现完整 Google A2A message runtime、SSE、push notification、sandbox、OpenClaw / Claude managed session、任意 command execution、sender delivery 或 mutating JSON-RPC methods。
+```bash
+curl -sS http://127.0.0.1:8789/a2a/rpc \
+  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"tasks/get","params":{"id":"hf_example","historyLength":0}}'
+```
+
+支持的 JSON-RPC methods 包括标准风格的只读 `tasks/get` handoff status mapping，以及刻意放在 `clawside.*` 命名空间下的查询：`clawside.workflow.list`、`clawside.workflow.status`、`clawside.handoff.get`、`clawside.agent.list`、`clawside.work.next` 和 `clawside.work.blocked`。
+
+边界：这个 endpoint 不实现完整 Google A2A message runtime、inbound task creation、SSE、push notification、sandbox、OpenClaw / Claude managed session、任意 command execution、sender delivery 或 mutating JSON-RPC methods。
 
 ## OpenClaw MCP smoke verifier
 

@@ -8,7 +8,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
+	"github.com/walker1211/clawside/internal/orchestrator"
 	"github.com/walker1211/clawside/internal/toolserver"
 )
 
@@ -203,8 +205,100 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
 		}
 		return result, nil
+	case MethodTasksGet:
+		var input TasksGetInput
+		if err := decodeRPCParams(params, &input); err != nil {
+			return nil, &RPCError{Code: rpcInvalidParams, Message: "invalid params"}
+		}
+		if !validTasksGetInput(input) {
+			return nil, &RPCError{Code: rpcInvalidParams, Message: "invalid params"}
+		}
+		result, err := h.handleTasksGet(r, input)
+		if err != nil {
+			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
+		}
+		return result, nil
 	default:
 		return nil, &RPCError{Code: rpcMethodNotFound, Message: "method not found"}
+	}
+}
+
+func (h *Handler) handleTasksGet(r *http.Request, input TasksGetInput) (A2ATask, error) {
+	result, err := h.handlers.HandleHandoffGet(r.Context(), toolserver.HandoffGetInput{HandoffID: strings.TrimSpace(input.ID)})
+	if err != nil {
+		return A2ATask{}, err
+	}
+	return toA2ATask(result, input.HistoryLength), nil
+}
+
+func validTasksGetInput(input TasksGetInput) bool {
+	if strings.TrimSpace(input.ID) == "" {
+		return false
+	}
+	return input.HistoryLength == nil || *input.HistoryLength >= 0
+}
+
+func toA2ATask(result toolserver.HandoffGetOutput, historyLength *int) A2ATask {
+	handoff := result.Handoff
+	return A2ATask{
+		ID:        handoff.ID,
+		ContextID: handoff.WorkflowID,
+		Status: A2ATaskStatus{
+			State:     toA2ATaskState(handoff.State),
+			Timestamp: handoff.UpdatedAt.UTC().Format(time.RFC3339Nano),
+		},
+		History: toA2ATaskHistory(result.Timeline, historyLength),
+		Metadata: map[string]any{
+			"workflowId":    handoff.WorkflowID,
+			"workflowKind":  handoff.WorkflowKind,
+			"internalState": string(handoff.State),
+			"taskKind":      string(handoff.TaskKind),
+			"intent":        handoff.Intent,
+			"receiver":      handoff.ReceiverActor,
+			"currentOwner":  handoff.CurrentOwner,
+			"needsReview":   handoff.NeedsReview,
+			"artifactCount": handoff.ArtifactCount,
+		},
+	}
+}
+
+func toA2ATaskHistory(events []orchestrator.EventRecord, historyLength *int) []A2ATaskEvent {
+	if historyLength != nil && *historyLength == 0 {
+		return nil
+	}
+	start := 0
+	if historyLength != nil && *historyLength > 0 && len(events) > *historyLength {
+		start = len(events) - *historyLength
+	}
+	history := make([]A2ATaskEvent, 0, len(events)-start)
+	for _, event := range events[start:] {
+		timestamp := event.IngestedAt
+		if timestamp.IsZero() {
+			timestamp = event.ProducerEventTime
+		}
+		history = append(history, A2ATaskEvent{
+			Kind:      "event",
+			EventID:   event.ID,
+			Type:      string(event.Type),
+			Timestamp: timestamp.UTC().Format(time.RFC3339Nano),
+			Accepted:  event.Accepted,
+		})
+	}
+	return history
+}
+
+func toA2ATaskState(state orchestrator.HandoffState) string {
+	switch state {
+	case orchestrator.StateCreated, orchestrator.StateDispatched, orchestrator.StateSubmitted:
+		return "submitted"
+	case orchestrator.StateReceived, orchestrator.StateClaimed, orchestrator.StateStarted, orchestrator.StateCheckpointed, orchestrator.StateReviewed:
+		return "working"
+	case orchestrator.StateCompleted:
+		return "completed"
+	case orchestrator.StateFailed, orchestrator.StateExpired:
+		return "failed"
+	default:
+		return "unknown"
 	}
 }
 
@@ -315,6 +409,7 @@ func buildAgentCard(rpcURL string) AgentCard {
 			newSkill(MethodAgentList, "List agents", "List registered agents by coordination filters."),
 			newSkill(MethodNextWork, "Next work", "List executable handoffs for an agent or work filter."),
 			newSkill(MethodBlockedWork, "Blocked work", "List blocked handoffs with reasons and suggestions."),
+			newSkill(MethodTasksGet, "Get task", "Get A2A-compatible read-only task status for a Clawside handoff."),
 		},
 		SecuritySchemes: map[string]AgentCardSecurity{
 			"bearer": {Type: "http", Scheme: "bearer"},
