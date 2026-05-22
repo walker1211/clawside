@@ -55,12 +55,19 @@ env: SENDER_AUTH_KEY=<local-sender-key>
 SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh
 ```
 
-5. 从 OpenClaw trajectory 生成并复验 release evidence bundle：
+5. 先生成 coordination evidence summary，再从 OpenClaw trajectory 生成并复验 release evidence bundle：
 
 ```bash
+go run ./cmd/orchestrator workflow evidence \
+  --db <sqlite-db> \
+  --workflow-id <workflow-id> \
+  --include-agents \
+  > <coordination-evidence-summary.json>
+
 go run ./cmd/openclaw-release-evidence-bundle \
   --output-dir <bundle-dir> \
   --events .openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --coordination-evidence-summary <coordination-evidence-summary.json> \
   --verify
 ```
 
@@ -846,16 +853,18 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --openclaw-truth-plane-reopen-results /tmp/openclaw-truth-plane-reopen-results.json \
   --openclaw-truth-plane-divergence-results /tmp/openclaw-truth-plane-divergence-results.json \
   --openclaw-truth-plane-continuity-results /tmp/openclaw-truth-plane-continuity-results.json \
-  --openclaw-truth-plane-delivery-results /tmp/openclaw-truth-plane-delivery-results.json
+  --openclaw-truth-plane-delivery-results /tmp/openclaw-truth-plane-delivery-results.json \
+  --coordination-evidence-summary <coordination-evidence-summary.json>
 ```
 
-`truth-plane-full` 要求 Stage 0-5、Stage 12 divergence 和 Stage 13 delivery evidence 的 OpenClaw trajectory extractor JSON 都显式传入；缺少任一项都会失败，不再把缺失 evidence 当成 skipped。
+`truth-plane-full` 要求 Stage 0-5、Stage 12 divergence 和 Stage 13 delivery evidence 的 OpenClaw trajectory extractor JSON，加上 `coordination-evidence-summary.json`，都显式传入；缺少任一项都会失败，不再把缺失 evidence 当成 skipped。
 
-发布级只读 evidence gate：优先使用 Stage 11 的 bundle-first 流程生成 9 个 JSON 和 `verify-release-evidence.sh`；下面的长命令保留为高级手工 fallback。
+发布级只读 evidence gate：优先使用 Stage 11 的 bundle-first 流程生成 9 个 trajectory result JSON、复制 `coordination-evidence-summary.json` 并写出 `verify-release-evidence.sh`；下面的长命令保留为高级手工 fallback。
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh \
   --profile release-evidence \
+  --coordination-evidence-summary <coordination-evidence-summary.json> \
   --openclaw-tool-results /tmp/openclaw-tool-results.json \
   --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json \
   --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json \
@@ -907,9 +916,9 @@ testdata/openclaw-smoke/stage0-5/
 
 发布或完整验收仍然使用：
 
-- `truth-plane-full`：显式传入真实 OpenClaw trajectory extractor 输出的 9 个 JSON；
-- `release-evidence`：通过真实 trajectory evidence bundle 或显式 9 个 JSON 执行只读发布级验收；
-- `release`：在真实 evidence 基础上再显式开启 `--deliver-main` 和 `--chat-id`。
+- `truth-plane-full`：显式传入真实 OpenClaw trajectory extractor 输出的 9 个 trajectory result JSON，加上 `coordination-evidence-summary.json`；
+- `release-evidence`：通过真实 trajectory evidence bundle，或显式 trajectory JSON + coordination evidence summary，执行只读发布级验收；
+- `release`：在真实 evidence（包含 coordination evidence summary）基础上再显式开启 `--deliver-main` 和 `--chat-id`。
 
 真实投递仍然只通过 sender 后端完成，不直接调用 Telegram API。
 
@@ -997,11 +1006,22 @@ Stage 10 复用既有 Stage 3 repair evidence 路径，不新增独立的 `truth
 
 Stage 11 将 release acceptance 拆成只读的发布级 evidence gate，以及需要显式授权的真实投递 gate。`fixtures` 只用于回归，`truth-plane-full` 用于只验证真实 trajectory evidence，`release-evidence` 用于打 tag 前把真实 OpenClaw trajectory extracts 当成发布级 evidence 验收。
 
-推荐的 bundle-first 路径先从真实 trajectory exports 生成本地 evidence bundle，并用 `--verify` 立即运行只读发布级 verifier：
+生成 release evidence bundle 前，先从本地 orchestrator truth store 生成 coordination evidence summary。这个文件是预先生成的 sanitized artifact，不是 trajectory extractor 输出：
+
+```bash
+go run ./cmd/orchestrator workflow evidence \
+  --db <sqlite-db> \
+  --workflow-id <workflow-id> \
+  --include-agents \
+  > <coordination-evidence-summary.json>
+```
+
+推荐的 bundle-first 路径先从真实 trajectory exports 和预生成的 coordination summary 生成本地 evidence bundle，并用 `--verify` 立即运行只读发布级 verifier：
 
 ```bash
 ./scripts/build_openclaw_release_evidence_bundle.sh \
   --output-dir ./release-evidence/openclaw-vX.Y.Z \
+  --coordination-evidence-summary <coordination-evidence-summary.json> \
   --tool-events <stage0-export>/events.jsonl \
   --truth-plane-events <stage1-export>/events.jsonl \
   --progression-events <stage2-export>/events.jsonl \
@@ -1014,7 +1034,7 @@ Stage 11 将 release acceptance 拆成只读的发布级 evidence gate，以及�
   --verify
 ```
 
-bundle 命令只调用已有 extractor，写出 `manifest.json`、9 个 results JSON 和 `verify-release-evidence.sh`。`--verify` 运行只读发布级复验，保持只读，不包含 `--deliver-main`、`--chat-id`，也不直接调用 Telegram API。`verify-release-evidence.sh` 会用脚本自身目录定位 9 个 JSON，先通过 `openclaw-release-evidence-bundle verify-manifest` 校验 manifest 中 9 个 evidence 文件的存在性、元数据和 SHA256，再用当前仓库的 `scripts/verify_openclaw_mcp.sh --profile release-evidence` 复验；因此 bundle 可以在同一仓库内移动后继续复验。`release-evidence/openclaw-vX.Y.Z` 是本地生成目录，默认被 git 忽略。
+bundle 命令会为 9 个 trajectory-derived result 文件调用已有 extractor，并复制预生成的 `coordination-evidence-summary.json`；bundle 阶段不会打开 orchestrator DB。它会写出 `manifest.json`、10 个 evidence artifacts 和 `verify-release-evidence.sh`。`--verify` 运行只读发布级复验，保持只读，不包含 `--deliver-main`、`--chat-id`，也不直接调用 Telegram API。`verify-release-evidence.sh` 会用脚本自身目录定位 evidence artifacts，先通过 `openclaw-release-evidence-bundle verify-manifest` 校验 manifest 中各 evidence 文件的存在性、元数据和 SHA256，再用当前仓库的 `scripts/verify_openclaw_mcp.sh --profile release-evidence` 携带全部 evidence path 复验，其中包括 `--coordination-evidence-summary`；因此 bundle 可以在同一仓库内移动后继续复验。`release-evidence/openclaw-vX.Y.Z` 是本地生成目录，默认被 git 忽略。
 
 如需拆成两步，也可以手工运行生成的验证脚本：
 
@@ -1034,12 +1054,13 @@ scripts/tag-release.sh --verify-only --evidence-bundle ./release-evidence/opencl
 CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=./release-evidence/openclaw-vX.Y.Z scripts/tag-release.sh --verify-only vX.Y.Z
 ```
 
-高级手工 fallback 仍可显式传入 9 个 JSON：
+高级手工 fallback 仍可显式传入 9 个 trajectory result JSON 和 coordination summary：
 
 ```bash
 scripts/ci-local.sh clean
 SENDER_AUTH_KEY=... scripts/verify_openclaw_mcp.sh \
   --profile release-evidence \
+  --coordination-evidence-summary <coordination-evidence-summary.json> \
   --openclaw-tool-results /tmp/openclaw-tool-results.json \
   --openclaw-truth-plane-results /tmp/openclaw-truth-plane-results.json \
   --openclaw-truth-plane-progression-results /tmp/openclaw-truth-plane-progression-results.json \
