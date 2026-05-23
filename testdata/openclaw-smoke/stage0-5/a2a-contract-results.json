@@ -1,0 +1,286 @@
+{
+  "version": "p12.3-a2a-contract-v1",
+  "agent_card": {
+    "name": "clawside-coordination",
+    "url": "http://127.0.0.1:8789/a2a/rpc",
+    "capabilities": {
+      "streaming": true,
+      "pushNotifications": false
+    },
+    "endpoints": {
+      "jsonrpc": "/a2a/rpc",
+      "taskEvents": "/a2a/tasks/{handoffID}/events"
+    },
+    "sse": {
+      "retryMilliseconds": 3000,
+      "reconnect": "call tasks/get, then resubscribe to the task events stream"
+    },
+    "safety": [
+      "bearer_auth_required",
+      "no_command_execution",
+      "no_worker_launch",
+      "no_sender_delivery",
+      "no_local_path_access",
+      "no_private_prompt_or_secret_echo"
+    ],
+    "skills": [
+      "clawside.workflow.list",
+      "clawside.workflow.status",
+      "clawside.handoff.get",
+      "clawside.agent.list",
+      "clawside.work.next",
+      "clawside.work.blocked",
+      "clawside.task.create",
+      "tasks/get",
+      "tasks/cancel",
+      "tasks/events"
+    ]
+  },
+  "method_matrix": [
+    {
+      "id": "clawside.workflow.list",
+      "transport": "json-rpc",
+      "mode": "read",
+      "endpoint": "/a2a/rpc"
+    },
+    {
+      "id": "clawside.workflow.status",
+      "transport": "json-rpc",
+      "mode": "read",
+      "endpoint": "/a2a/rpc"
+    },
+    {
+      "id": "clawside.handoff.get",
+      "transport": "json-rpc",
+      "mode": "read",
+      "endpoint": "/a2a/rpc"
+    },
+    {
+      "id": "clawside.agent.list",
+      "transport": "json-rpc",
+      "mode": "read",
+      "endpoint": "/a2a/rpc"
+    },
+    {
+      "id": "clawside.work.next",
+      "transport": "json-rpc",
+      "mode": "read",
+      "endpoint": "/a2a/rpc"
+    },
+    {
+      "id": "clawside.work.blocked",
+      "transport": "json-rpc",
+      "mode": "read",
+      "endpoint": "/a2a/rpc"
+    },
+    {
+      "id": "clawside.task.create",
+      "transport": "json-rpc",
+      "mode": "controlled-write",
+      "endpoint": "/a2a/rpc"
+    },
+    {
+      "id": "tasks/get",
+      "transport": "json-rpc",
+      "mode": "read",
+      "endpoint": "/a2a/rpc"
+    },
+    {
+      "id": "tasks/cancel",
+      "transport": "json-rpc",
+      "mode": "controlled-write",
+      "endpoint": "/a2a/rpc"
+    },
+    {
+      "id": "tasks/events",
+      "transport": "sse",
+      "mode": "stream",
+      "endpoint": "/a2a/tasks/{handoffID}/events"
+    }
+  ],
+  "json_rpc": {
+    "errors": [
+      {
+        "name": "parse_error",
+        "code": -32700,
+        "message": "parse error",
+        "data_code": "parse_error"
+      },
+      {
+        "name": "invalid_request",
+        "code": -32600,
+        "message": "batch requests are not supported",
+        "data_code": "invalid_request"
+      },
+      {
+        "name": "method_not_found",
+        "code": -32601,
+        "message": "method not found",
+        "data_code": "method_not_found"
+      },
+      {
+        "name": "invalid_params",
+        "code": -32602,
+        "message": "invalid params",
+        "data_code": "invalid_params"
+      },
+      {
+        "name": "not_found",
+        "code": -32602,
+        "message": "invalid params",
+        "data_code": "not_found"
+      }
+    ],
+    "unsupported_methods": [
+      {
+        "method": "message/send",
+        "advertised": false,
+        "error": {
+          "name": "message/send",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      },
+      {
+        "method": "message/stream",
+        "advertised": false,
+        "error": {
+          "name": "message/stream",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      },
+      {
+        "method": "tasks.cancel",
+        "advertised": false,
+        "error": {
+          "name": "tasks.cancel",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      },
+      {
+        "method": "tasks/pushNotification/set",
+        "advertised": false,
+        "error": {
+          "name": "tasks/pushNotification/set",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      },
+      {
+        "method": "tasks/pushNotification/get",
+        "advertised": false,
+        "error": {
+          "name": "tasks/pushNotification/get",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      },
+      {
+        "method": "handoff_create",
+        "advertised": false,
+        "error": {
+          "name": "handoff_create",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      }
+    ]
+  },
+  "tasks": {
+    "create": {
+      "id": "handoff-1",
+      "context_id": "workflow-1",
+      "state": "submitted",
+      "status_timestamp": "2026-05-22T12:00:00Z",
+      "internal_state": "created",
+      "workflow_kind": "a2a_inbound",
+      "task_kind": "generic_task",
+      "intent": "Review downstream API compatibility"
+    },
+    "get": {
+      "id": "handoff-1",
+      "context_id": "workflow-1",
+      "state": "submitted",
+      "status_timestamp": "2026-05-22T12:00:00Z",
+      "internal_state": "created",
+      "workflow_kind": "a2a_inbound",
+      "task_kind": "generic_task",
+      "intent": "Review downstream API compatibility"
+    },
+    "cancel": {
+      "id": "handoff-1",
+      "context_id": "workflow-1",
+      "state": "failed",
+      "status_timestamp": "2026-05-22T12:00:00Z",
+      "internal_state": "failed",
+      "workflow_kind": "a2a_inbound",
+      "task_kind": "generic_task",
+      "intent": "Review downstream API compatibility"
+    }
+  },
+  "sse": {
+    "content_type": "text/event-stream",
+    "initial": {
+      "name": "task",
+      "id": "event-initial",
+      "retry": "3000",
+      "event_id": "event-initial",
+      "workflow_id": "workflow-1",
+      "handoff_id": "handoff-1",
+      "task": {
+        "id": "handoff-1",
+        "context_id": "workflow-1",
+        "state": "submitted",
+        "status_timestamp": "2026-05-22T12:00:00Z",
+        "internal_state": "dispatched",
+        "workflow_kind": "a2a_inbound",
+        "task_kind": "generic_task",
+        "intent": "Review downstream API compatibility"
+      },
+      "history": [
+        {
+          "kind": "event",
+          "type": "transport_requested",
+          "accepted": true
+        }
+      ]
+    },
+    "changed": {
+      "name": "task",
+      "id": "event-changed",
+      "event_id": "event-changed",
+      "workflow_id": "workflow-1",
+      "handoff_id": "handoff-1",
+      "task": {
+        "id": "handoff-1",
+        "context_id": "workflow-1",
+        "state": "working",
+        "status_timestamp": "2026-05-22T12:00:00Z",
+        "internal_state": "received",
+        "workflow_kind": "a2a_inbound",
+        "task_kind": "generic_task",
+        "intent": "Review downstream API compatibility"
+      },
+      "history": [
+        {
+          "kind": "event",
+          "type": "received",
+          "accepted": true
+        }
+      ]
+    }
+  },
+  "safety": {
+    "forbidden_fields_absent": true,
+    "runtime_execution_absent": true,
+    "delivery_absent": true
+  }
+}

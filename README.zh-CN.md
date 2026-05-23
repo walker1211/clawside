@@ -942,6 +942,8 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --profile fixtures
 testdata/openclaw-smoke/stage0-5/
 ```
 
+`fixtures` 也会校验仓库内置的 A2A contract fixture：`testdata/openclaw-smoke/stage0-5/a2a-contract-results.json`。该检查保持只读，只校验 Agent Card、公开 method matrix、JSON-RPC error data code、`clawside.task.create` / `tasks/get` / `tasks/cancel` task projection、SSE task event shape 和安全边界。如需校验另一份 sanitized contract result，可传入 `--openclaw-a2a-contract-results <a2a-contract-results.json>`。
+
 这些 fixtures 用于本地 / CI regression，证明 verifier 对固定 golden evidence 的判断没有回退；它们不是发布验收 evidence，也不证明新的真实 OpenClaw trajectory 仍然能产出同样结果。
 
 发布或完整验收仍然使用：

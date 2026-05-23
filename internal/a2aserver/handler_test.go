@@ -8,6 +8,9 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -170,6 +173,32 @@ func TestA2AExternalMethodMatrixStability(t *testing.T) {
 		if method.Transport == "sse" {
 			assertRPCError(t, postRPCJSON(t, handler, "rpc-secret", method.ID, map[string]any{}), rpcMethodNotFound)
 		}
+	}
+}
+
+func TestA2AContractGoldenFixtureStability(t *testing.T) {
+	actual := buildA2AContractGoldenForTest(t)
+	actualRaw, err := json.MarshalIndent(actual, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal actual A2A contract: %v", err)
+	}
+
+	goldenPath := filepath.Join("..", "..", "testdata", "openclaw-smoke", "stage0-5", "a2a-contract-results.json")
+	expectedRaw, err := os.ReadFile(goldenPath)
+	if err != nil {
+		t.Fatalf("read A2A contract golden fixture: %v\nactual:\n%s", err, string(actualRaw))
+	}
+
+	var expected any
+	if err := json.Unmarshal(expectedRaw, &expected); err != nil {
+		t.Fatalf("decode A2A contract golden fixture: %v", err)
+	}
+	var normalizedActual any
+	if err := json.Unmarshal(actualRaw, &normalizedActual); err != nil {
+		t.Fatalf("decode actual A2A contract: %v", err)
+	}
+	if !reflect.DeepEqual(normalizedActual, expected) {
+		t.Fatalf("A2A contract golden mismatch\nactual:\n%s", string(actualRaw))
 	}
 }
 
@@ -1243,6 +1272,322 @@ func createControlledA2ATask(t *testing.T, handler http.Handler, authKey, idempo
 		t.Fatalf("decode task create output: %v; body=%s", err, string(createResult))
 	}
 	return output
+}
+
+type a2aContractGolden struct {
+	Version      string                    `json:"version"`
+	AgentCard    a2aContractAgentCard      `json:"agent_card"`
+	MethodMatrix []AgentCardMethodMetadata `json:"method_matrix"`
+	JSONRPC      a2aContractJSONRPC        `json:"json_rpc"`
+	Tasks        a2aContractTasks          `json:"tasks"`
+	SSE          a2aContractSSE            `json:"sse"`
+	Safety       a2aContractSafety         `json:"safety"`
+}
+
+type a2aContractAgentCard struct {
+	Name         string                    `json:"name"`
+	URL          string                    `json:"url"`
+	Capabilities AgentCapabilities         `json:"capabilities"`
+	Endpoints    AgentCardEndpointMetadata `json:"endpoints"`
+	SSE          AgentCardSSEMetadata      `json:"sse"`
+	Safety       []string                  `json:"safety"`
+	Skills       []string                  `json:"skills"`
+}
+
+type a2aContractJSONRPC struct {
+	Errors             []a2aContractRPCError          `json:"errors"`
+	UnsupportedMethods []a2aContractUnsupportedMethod `json:"unsupported_methods"`
+}
+
+type a2aContractRPCError struct {
+	Name     string `json:"name"`
+	Code     int    `json:"code"`
+	Message  string `json:"message"`
+	DataCode string `json:"data_code"`
+}
+
+type a2aContractUnsupportedMethod struct {
+	Method     string              `json:"method"`
+	Advertised bool                `json:"advertised"`
+	Error      a2aContractRPCError `json:"error"`
+}
+
+type a2aContractTasks struct {
+	Create a2aContractTaskProjection `json:"create"`
+	Get    a2aContractTaskProjection `json:"get"`
+	Cancel a2aContractTaskProjection `json:"cancel"`
+}
+
+type a2aContractTaskProjection struct {
+	ID              string `json:"id"`
+	ContextID       string `json:"context_id"`
+	State           string `json:"state"`
+	StatusTimestamp string `json:"status_timestamp"`
+	InternalState   string `json:"internal_state"`
+	WorkflowKind    string `json:"workflow_kind"`
+	TaskKind        string `json:"task_kind"`
+	Intent          string `json:"intent"`
+}
+
+type a2aContractSSE struct {
+	ContentType string              `json:"content_type"`
+	Initial     a2aContractSSEEvent `json:"initial"`
+	Changed     a2aContractSSEEvent `json:"changed"`
+}
+
+type a2aContractSSEEvent struct {
+	Name       string                       `json:"name"`
+	ID         string                       `json:"id"`
+	Retry      string                       `json:"retry,omitempty"`
+	EventID    string                       `json:"event_id"`
+	WorkflowID string                       `json:"workflow_id"`
+	HandoffID  string                       `json:"handoff_id"`
+	Task       a2aContractTaskProjection    `json:"task"`
+	History    []a2aContractTaskHistoryItem `json:"history,omitempty"`
+}
+
+type a2aContractTaskHistoryItem struct {
+	Kind     string `json:"kind"`
+	Type     string `json:"type"`
+	Accepted bool   `json:"accepted"`
+}
+
+type a2aContractSafety struct {
+	ForbiddenFieldsAbsent  bool `json:"forbidden_fields_absent"`
+	RuntimeExecutionAbsent bool `json:"runtime_execution_absent"`
+	DeliveryAbsent         bool `json:"delivery_absent"`
+}
+
+func buildA2AContractGoldenForTest(t *testing.T) a2aContractGolden {
+	t.Helper()
+	handler, handlers := newTestA2AHandler(t, Config{PublicURL: "http://127.0.0.1:8789", AuthKey: "rpc-secret"})
+	ctx := context.Background()
+	card := agentCardForContractTest(t, handler)
+
+	createResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTaskCreate, validTaskCreateParams("a2a-contract-task-1")))
+	assertNoForbiddenA2AFields(t, createResult)
+	var created TaskCreateOutput
+	if err := json.Unmarshal(createResult, &created); err != nil {
+		t.Fatalf("decode contract task create result: %v; body=%s", err, string(createResult))
+	}
+
+	getResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{"id": created.HandoffID}))
+	assertNoForbiddenA2AFields(t, getResult)
+	var gotTask A2ATask
+	if err := json.Unmarshal(getResult, &gotTask); err != nil {
+		t.Fatalf("decode contract tasks/get result: %v; body=%s", err, string(getResult))
+	}
+
+	if _, err := handlers.HandleHandoffDispatch(ctx, toolserver.HandoffDispatchInput{HandoffID: created.HandoffID, Adapter: "manual", Target: "agent:writer"}); err != nil {
+		t.Fatalf("dispatch contract handoff: %v", err)
+	}
+
+	server := httptest.NewServer(handler)
+	defer server.Close()
+	requestCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, server.URL+"/a2a/tasks/"+created.HandoffID+"/events?historyLength=1&pollIntervalMs=250", nil)
+	if err != nil {
+		t.Fatalf("new contract task events request: %v", err)
+	}
+	request.Header.Set("Authorization", "Bearer rpc-secret")
+	request.Header.Set("Accept", "text/event-stream")
+	response, err := server.Client().Do(request)
+	if err != nil {
+		t.Fatalf("contract task events request: %v", err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("expected contract task events status 200, got %d", response.StatusCode)
+	}
+	contentType := response.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "text/event-stream") {
+		t.Fatalf("expected text/event-stream content type, got %q", contentType)
+	}
+
+	reader := bufio.NewReader(response.Body)
+	initialEvent := readSSEEvent(t, reader)
+	assertNoForbiddenA2AFields(t, initialEvent.data)
+	var initialPayload TaskStreamEvent
+	if err := json.Unmarshal(initialEvent.data, &initialPayload); err != nil {
+		t.Fatalf("decode contract initial SSE payload: %v; data=%s", err, string(initialEvent.data))
+	}
+
+	if _, err := handlers.HandleHandoffProgress(ctx, toolserver.HandoffProgressInput{
+		Action:    "receive",
+		HandoffID: created.HandoffID,
+		Actor:     toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+	}); err != nil {
+		t.Fatalf("receive contract handoff: %v", err)
+	}
+	changedEvent := readSSEEvent(t, reader)
+	assertNoForbiddenA2AFields(t, changedEvent.data)
+	var changedPayload TaskStreamEvent
+	if err := json.Unmarshal(changedEvent.data, &changedPayload); err != nil {
+		t.Fatalf("decode contract changed SSE payload: %v; data=%s", err, string(changedEvent.data))
+	}
+
+	cancelResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksCancel, map[string]any{"id": created.HandoffID}))
+	assertNoForbiddenA2AFields(t, cancelResult)
+	var canceledTask A2ATask
+	if err := json.Unmarshal(cancelResult, &canceledTask); err != nil {
+		t.Fatalf("decode contract tasks/cancel result: %v; body=%s", err, string(cancelResult))
+	}
+
+	return a2aContractGolden{
+		Version:      "p12.3-a2a-contract-v1",
+		AgentCard:    contractAgentCardForTest(card),
+		MethodMatrix: card.Metadata.Methods,
+		JSONRPC: a2aContractJSONRPC{
+			Errors: []a2aContractRPCError{
+				rpcErrorContractForTest(t, "parse_error", postRPC(t, handler, "rpc-secret", `{"jsonrpc":`), rpcParseError, rpcErrorDataParseError),
+				rpcErrorContractForTest(t, "invalid_request", postRPC(t, handler, "rpc-secret", `[{"jsonrpc":"2.0","id":"1","method":"`+MethodWorkflowList+`"}]`), rpcInvalidRequest, rpcErrorDataInvalidRequest),
+				rpcErrorContractForTest(t, "method_not_found", postRPCJSON(t, handler, "rpc-secret", "message/send", map[string]any{}), rpcMethodNotFound, rpcErrorDataMethodNotFound),
+				rpcErrorContractForTest(t, "invalid_params", postRPCJSON(t, handler, "rpc-secret", MethodTaskCreate, map[string]any{"command": "rm -rf /"}), rpcInvalidParams, rpcErrorDataInvalidParams),
+				rpcErrorContractForTest(t, "not_found", postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{"id": "hf_missing"}), rpcInvalidParams, rpcErrorDataNotFound),
+			},
+			UnsupportedMethods: unsupportedMethodContractsForTest(t, handler, card),
+		},
+		Tasks: a2aContractTasks{
+			Create: contractTaskProjectionForTest(t, created.Task, created.WorkflowID, created.HandoffID),
+			Get:    contractTaskProjectionForTest(t, gotTask, created.WorkflowID, created.HandoffID),
+			Cancel: contractTaskProjectionForTest(t, canceledTask, created.WorkflowID, created.HandoffID),
+		},
+		SSE: a2aContractSSE{
+			ContentType: "text/event-stream",
+			Initial:     contractSSEEventForTest(t, initialEvent, initialPayload, "event-initial", created.WorkflowID, created.HandoffID),
+			Changed:     contractSSEEventForTest(t, changedEvent, changedPayload, "event-changed", created.WorkflowID, created.HandoffID),
+		},
+		Safety: a2aContractSafety{
+			ForbiddenFieldsAbsent:  true,
+			RuntimeExecutionAbsent: true,
+			DeliveryAbsent:         true,
+		},
+	}
+}
+
+func agentCardForContractTest(t *testing.T, handler http.Handler) AgentCard {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/.well-known/agent-card.json", nil)
+	handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected contract agent card status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "rpc-secret") {
+		t.Fatalf("contract agent card leaked auth key: %s", recorder.Body.String())
+	}
+	var card AgentCard
+	if err := json.Unmarshal(recorder.Body.Bytes(), &card); err != nil {
+		t.Fatalf("decode contract agent card: %v", err)
+	}
+	return card
+}
+
+func contractAgentCardForTest(card AgentCard) a2aContractAgentCard {
+	return a2aContractAgentCard{
+		Name:         card.Name,
+		URL:          card.URL,
+		Capabilities: card.Capabilities,
+		Endpoints:    card.Metadata.Endpoints,
+		SSE:          card.Metadata.SSE,
+		Safety:       card.Metadata.Safety,
+		Skills:       agentCardSkillIDsForTest(card),
+	}
+}
+
+func agentCardSkillIDsForTest(card AgentCard) []string {
+	ids := make([]string, 0, len(card.Skills))
+	for _, skill := range card.Skills {
+		ids = append(ids, skill.ID)
+	}
+	return ids
+}
+
+func rpcErrorContractForTest(t *testing.T, name string, recorder *httptest.ResponseRecorder, code int, dataCode string) a2aContractRPCError {
+	t.Helper()
+	response := assertRPCErrorData(t, recorder, code, dataCode)
+	return a2aContractRPCError{Name: name, Code: code, Message: response.Error.Message, DataCode: dataCode}
+}
+
+func unsupportedMethodContractsForTest(t *testing.T, handler http.Handler, card AgentCard) []a2aContractUnsupportedMethod {
+	t.Helper()
+	methods := []string{"message/send", "message/stream", "tasks.cancel", "tasks/pushNotification/set", "tasks/pushNotification/get", "handoff_create"}
+	contracts := make([]a2aContractUnsupportedMethod, 0, len(methods))
+	for _, method := range methods {
+		contracts = append(contracts, a2aContractUnsupportedMethod{
+			Method:     method,
+			Advertised: cardHasSkill(card, method),
+			Error:      rpcErrorContractForTest(t, method, postRPCJSON(t, handler, "rpc-secret", method, map[string]any{}), rpcMethodNotFound, rpcErrorDataMethodNotFound),
+		})
+	}
+	return contracts
+}
+
+func contractTaskProjectionForTest(t *testing.T, task A2ATask, workflowID, handoffID string) a2aContractTaskProjection {
+	t.Helper()
+	return a2aContractTaskProjection{
+		ID:              normalizeContractIDForTest(task.ID, workflowID, handoffID),
+		ContextID:       normalizeContractIDForTest(task.ContextID, workflowID, handoffID),
+		State:           task.Status.State,
+		StatusTimestamp: task.Status.Timestamp,
+		InternalState:   taskMetadataStringForTest(t, task, "internalState"),
+		WorkflowKind:    taskMetadataStringForTest(t, task, "workflowKind"),
+		TaskKind:        taskMetadataStringForTest(t, task, "taskKind"),
+		Intent:          taskMetadataStringForTest(t, task, "intent"),
+	}
+}
+
+func normalizeContractIDForTest(value, workflowID, handoffID string) string {
+	switch value {
+	case workflowID:
+		return "workflow-1"
+	case handoffID:
+		return "handoff-1"
+	default:
+		return value
+	}
+}
+
+func taskMetadataStringForTest(t *testing.T, task A2ATask, key string) string {
+	t.Helper()
+	value, ok := task.Metadata[key]
+	if !ok {
+		t.Fatalf("expected task metadata %q in %+v", key, task.Metadata)
+	}
+	text, ok := value.(string)
+	if !ok {
+		t.Fatalf("expected task metadata %q to be string, got %T", key, value)
+	}
+	return text
+}
+
+func contractSSEEventForTest(t *testing.T, event testSSEEvent, payload TaskStreamEvent, normalizedEventID, workflowID, handoffID string) a2aContractSSEEvent {
+	t.Helper()
+	if event.name != "task" {
+		t.Fatalf("expected SSE event name task, got %+v", event)
+	}
+	if payload.EventID != event.id || payload.WorkflowID != workflowID || payload.HandoffID != handoffID {
+		t.Fatalf("unexpected SSE payload ids: event=%+v payload=%+v", event, payload)
+	}
+	return a2aContractSSEEvent{
+		Name:       event.name,
+		ID:         normalizedEventID,
+		Retry:      event.retry,
+		EventID:    normalizedEventID,
+		WorkflowID: "workflow-1",
+		HandoffID:  "handoff-1",
+		Task:       contractTaskProjectionForTest(t, payload.Task, workflowID, handoffID),
+		History:    contractTaskHistoryForTest(payload.Task.History),
+	}
+}
+
+func contractTaskHistoryForTest(history []A2ATaskEvent) []a2aContractTaskHistoryItem {
+	items := make([]a2aContractTaskHistoryItem, 0, len(history))
+	for _, event := range history {
+		items = append(items, a2aContractTaskHistoryItem{Kind: event.Kind, Type: event.Type, Accepted: event.Accepted})
+	}
+	return items
 }
 
 func newTestA2AHandler(t *testing.T, cfg Config) (http.Handler, *toolserver.Handlers) {

@@ -942,6 +942,8 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --profile fixtures
 testdata/openclaw-smoke/stage0-5/
 ```
 
+`fixtures` also validates the bundled A2A contract fixture at `testdata/openclaw-smoke/stage0-5/a2a-contract-results.json`. This check is read-only: it validates the Agent Card, public method matrix, JSON-RPC error data codes, `clawside.task.create` / `tasks/get` / `tasks/cancel` task projection, SSE task event shape, and safety boundaries. To validate another sanitized contract result, pass `--openclaw-a2a-contract-results <a2a-contract-results.json>`.
+
 These fixtures are for local / CI regression. They prove the verifier still accepts stable golden evidence; they are not release acceptance evidence and do not prove that a fresh real OpenClaw trajectory still produces the same results.
 
 Release or full acceptance still uses:

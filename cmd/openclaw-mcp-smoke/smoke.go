@@ -65,6 +65,7 @@ type Options struct {
 	OpenClawTruthPlaneContinuityResultsPath  string
 	OpenClawTruthPlaneDivergenceResultsPath  string
 	OpenClawTruthPlaneDeliveryResultsPath    string
+	OpenClawA2AContractResultsPath           string
 	CoordinationEvidenceSummaryPath          string
 	ChatID                                   int64
 	Text                                     string
@@ -223,6 +224,7 @@ func applyFixturesProfileDefaults(opts Options) Options {
 	opts.OpenClawTruthPlaneContinuityResultsPath = filepath.Join(fixtureDir, "continuity-results.json")
 	opts.OpenClawTruthPlaneDivergenceResultsPath = filepath.Join(fixtureDir, "divergence-results.json")
 	opts.OpenClawTruthPlaneDeliveryResultsPath = filepath.Join(fixtureDir, "delivery-results.json")
+	opts.OpenClawA2AContractResultsPath = filepath.Join(fixtureDir, "a2a-contract-results.json")
 	opts.CoordinationEvidenceSummaryPath = filepath.Join(fixtureDir, "coordination-evidence-summary.json")
 	return opts
 }
@@ -371,6 +373,7 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	report.addCheck(checkOpenClawTruthPlaneDivergenceResults(opts))
 	report.addCheck(checkOpenClawTruthPlaneDeliveryResults(opts))
 	report.addCheck(checkCoordinationEvidenceSummary(opts))
+	report.addCheck(checkOpenClawA2AContractResults(opts))
 	if opts.OpenClawDispatchSmoke {
 		report.addCheck(checkOpenClawDispatch(ctx, mcpClient, &report, opts))
 	}
