@@ -42,7 +42,7 @@ func TestAgentCardAndHealthz(t *testing.T) {
 	if !card.Capabilities.Streaming || card.Capabilities.PushNotifications {
 		t.Fatalf("expected streaming non-push card capabilities, got %+v", card.Capabilities)
 	}
-	expectedMethods := []string{MethodWorkflowList, MethodWorkflowStatus, MethodHandoffGet, MethodAgentList, MethodNextWork, MethodBlockedWork, MethodTaskCreate, MethodTasksGet, MethodTasksEvents}
+	expectedMethods := []string{MethodWorkflowList, MethodWorkflowStatus, MethodHandoffGet, MethodAgentList, MethodNextWork, MethodBlockedWork, MethodTaskCreate, MethodTasksGet, MethodTasksCancel, MethodTasksEvents}
 	for _, method := range expectedMethods {
 		if !cardHasSkill(card, method) {
 			t.Fatalf("expected agent card to include skill %s, got %+v", method, card.Skills)
@@ -157,6 +157,7 @@ func TestA2AExternalMethodMatrixStability(t *testing.T) {
 		{ID: MethodBlockedWork, Transport: "json-rpc", Mode: "read", Endpoint: "/a2a/rpc"},
 		{ID: MethodTaskCreate, Transport: "json-rpc", Mode: "controlled-write", Endpoint: "/a2a/rpc"},
 		{ID: MethodTasksGet, Transport: "json-rpc", Mode: "read", Endpoint: "/a2a/rpc"},
+		{ID: MethodTasksCancel, Transport: "json-rpc", Mode: "controlled-write", Endpoint: "/a2a/rpc"},
 		{ID: MethodTasksEvents, Transport: "sse", Mode: "stream", Endpoint: "/a2a/tasks/{handoffID}/events"},
 	}
 	if !slices.Equal(card.Metadata.Methods, expectedMethods) {
@@ -617,7 +618,7 @@ func TestA2AMinimumClosedLoopValidation(t *testing.T) {
 	if !card.Capabilities.Streaming || card.Capabilities.PushNotifications {
 		t.Fatalf("expected streaming non-push card capabilities, got %+v", card.Capabilities)
 	}
-	for _, method := range []string{MethodTaskCreate, MethodTasksGet, MethodTasksEvents} {
+	for _, method := range []string{MethodTaskCreate, MethodTasksGet, MethodTasksCancel, MethodTasksEvents} {
 		if !cardHasSkill(card, method) {
 			t.Fatalf("expected agent card to include skill %s, got %+v", method, card.Skills)
 		}
@@ -625,7 +626,6 @@ func TestA2AMinimumClosedLoopValidation(t *testing.T) {
 	unsupportedMethods := []string{
 		"message/send",
 		"message/stream",
-		"tasks/cancel",
 		"tasks.cancel",
 		"tasks/pushNotification/set",
 		"tasks/pushNotification/get",
@@ -910,6 +910,146 @@ func TestTaskCreateIdempotency(t *testing.T) {
 	}
 }
 
+func TestTasksCancelMarksCreatedTaskFailedWithoutRuntimeSideEffects(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+	created := createControlledA2ATask(t, handler, "rpc-secret", "cancel-task-1")
+
+	cancelResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksCancel, map[string]any{"id": created.HandoffID}))
+	assertNoForbiddenA2AFields(t, cancelResult)
+	var canceled A2ATask
+	if err := json.Unmarshal(cancelResult, &canceled); err != nil {
+		t.Fatalf("decode cancel result: %v; body=%s", err, string(cancelResult))
+	}
+	if canceled.ID != created.HandoffID || canceled.ContextID != created.WorkflowID {
+		t.Fatalf("expected cancel result to return created task ids, got %+v", canceled)
+	}
+	if canceled.Status.State != "failed" || canceled.Metadata["internalState"] != string(orchestrator.StateFailed) {
+		t.Fatalf("expected cancel result failed state, got %+v metadata=%+v", canceled.Status, canceled.Metadata)
+	}
+
+	taskGet := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{"id": created.HandoffID}))
+	var task A2ATask
+	if err := json.Unmarshal(taskGet, &task); err != nil {
+		t.Fatalf("decode tasks/get result: %v; body=%s", err, string(taskGet))
+	}
+	if task.Status.State != "failed" || task.Metadata["internalState"] != string(orchestrator.StateFailed) {
+		t.Fatalf("expected tasks/get to return failed state, got %+v metadata=%+v", task.Status, task.Metadata)
+	}
+
+	handoffGet := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodHandoffGet, map[string]any{"handoff_id": created.HandoffID}))
+	var truth toolserver.HandoffGetOutput
+	if err := json.Unmarshal(handoffGet, &truth); err != nil {
+		t.Fatalf("decode handoff get result: %v; body=%s", err, string(handoffGet))
+	}
+	if truth.Handoff.State != orchestrator.StateFailed {
+		t.Fatalf("expected failed handoff truth, got %+v", truth.Handoff)
+	}
+	if len(truth.Timeline) != 1 || truth.Timeline[0].Type != orchestrator.EventFailed || !truth.Timeline[0].Accepted {
+		t.Fatalf("expected one accepted failed event, got %+v", truth.Timeline)
+	}
+	if truth.Timeline[0].ProducerActor.Type != orchestrator.ActorSystem || truth.Timeline[0].ProducerActor.ID != "workflow-controller" {
+		t.Fatalf("expected workflow-controller failed event, got %+v", truth.Timeline[0])
+	}
+}
+
+func TestTasksCancelIsIdempotentForAlreadyFailedTask(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+	created := createControlledA2ATask(t, handler, "rpc-secret", "cancel-task-1")
+
+	_ = rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksCancel, map[string]any{"id": created.HandoffID}))
+	secondResult := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksCancel, map[string]any{"id": created.HandoffID}))
+	var second A2ATask
+	if err := json.Unmarshal(secondResult, &second); err != nil {
+		t.Fatalf("decode second cancel result: %v; body=%s", err, string(secondResult))
+	}
+	if second.Status.State != "failed" {
+		t.Fatalf("expected idempotent cancel to return failed task, got %+v", second.Status)
+	}
+
+	handoffGet := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodHandoffGet, map[string]any{"handoff_id": created.HandoffID}))
+	var truth toolserver.HandoffGetOutput
+	if err := json.Unmarshal(handoffGet, &truth); err != nil {
+		t.Fatalf("decode handoff get result: %v; body=%s", err, string(handoffGet))
+	}
+	failedEvents := 0
+	for _, event := range truth.Timeline {
+		if event.Type == orchestrator.EventFailed && event.Accepted {
+			failedEvents++
+		}
+	}
+	if failedEvents != 1 {
+		t.Fatalf("expected one accepted failed event after cancel retry, got %+v", truth.Timeline)
+	}
+}
+
+func TestTasksCancelRejectsUnsafeParams(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+	created := createControlledA2ATask(t, handler, "rpc-secret", "cancel-task-1")
+	unsafeValue := "redacted-cancel-value-123"
+
+	for name, tc := range map[string]struct {
+		field  string
+		params map[string]any
+	}{
+		"blank id":        {params: map[string]any{"id": "   "}},
+		"command":         {field: "command", params: map[string]any{"id": created.HandoffID, "command": unsafeValue}},
+		"args":            {field: "args", params: map[string]any{"id": created.HandoffID, "args": []string{unsafeValue}}},
+		"cwd":             {field: "cwd", params: map[string]any{"id": created.HandoffID, "cwd": "/Users/example/project"}},
+		"session id":      {field: "session_id", params: map[string]any{"id": created.HandoffID, "session_id": unsafeValue}},
+		"prompt":          {field: "prompt", params: map[string]any{"id": created.HandoffID, "prompt": unsafeValue}},
+		"token":           {field: "token", params: map[string]any{"id": created.HandoffID, "token": unsafeValue}},
+		"sender job id":   {field: "sender_job_id", params: map[string]any{"id": created.HandoffID, "sender_job_id": unsafeValue}},
+		"delivery job id": {field: "delivery_job_id", params: map[string]any{"id": created.HandoffID, "delivery_job_id": unsafeValue}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			recorder := postRPCJSON(t, handler, "rpc-secret", MethodTasksCancel, tc.params)
+			assertRPCError(t, recorder, rpcInvalidParams)
+			body := recorder.Body.String()
+			if strings.Contains(body, unsafeValue) || (tc.field != "" && strings.Contains(body, tc.field)) {
+				t.Fatalf("tasks/cancel error echoed unsafe request data: %s", body)
+			}
+		})
+	}
+
+	taskGet := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{"id": created.HandoffID}))
+	var task A2ATask
+	if err := json.Unmarshal(taskGet, &task); err != nil {
+		t.Fatalf("decode tasks/get result: %v; body=%s", err, string(taskGet))
+	}
+	if task.Status.State != "submitted" {
+		t.Fatalf("unsafe cancel params mutated task, got %+v", task.Status)
+	}
+}
+
+func TestTasksCancelRejectsCompletedTask(t *testing.T) {
+	handler, handlers := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+	created := createControlledA2ATask(t, handler, "rpc-secret", "cancel-task-1")
+	ctx := context.Background()
+
+	if _, err := handlers.HandleHandoffDispatch(ctx, toolserver.HandoffDispatchInput{HandoffID: created.HandoffID, Adapter: "manual", Target: "agent:writer"}); err != nil {
+		t.Fatalf("dispatch handoff: %v", err)
+	}
+	for _, action := range []string{"receive", "claim", "start", "checkpoint", "complete"} {
+		if _, err := handlers.HandleHandoffProgress(ctx, toolserver.HandoffProgressInput{
+			Action:    action,
+			HandoffID: created.HandoffID,
+			Actor:     toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		}); err != nil {
+			t.Fatalf("progress %s: %v", action, err)
+		}
+	}
+
+	assertRPCError(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksCancel, map[string]any{"id": created.HandoffID}), rpcInvalidParams)
+	taskGet := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{"id": created.HandoffID}))
+	var task A2ATask
+	if err := json.Unmarshal(taskGet, &task); err != nil {
+		t.Fatalf("decode tasks/get result: %v; body=%s", err, string(taskGet))
+	}
+	if task.Status.State != "completed" || task.Metadata["internalState"] != string(orchestrator.StateCompleted) {
+		t.Fatalf("expected completed task to remain completed, got %+v metadata=%+v", task.Status, task.Metadata)
+	}
+}
+
 func assertNoForbiddenA2AFields(t *testing.T, raw []byte) {
 	t.Helper()
 	var payload any
@@ -976,6 +1116,16 @@ func validTaskCreateParams(idempotencyKey string) map[string]any {
 			{"uri": "https://example.invalid/specs/api.md", "type": "spec", "checksum": "sha256:abc123"},
 		},
 	}
+}
+
+func createControlledA2ATask(t *testing.T, handler http.Handler, authKey, idempotencyKey string) TaskCreateOutput {
+	t.Helper()
+	createResult := rpcResult(t, postRPCJSON(t, handler, authKey, MethodTaskCreate, validTaskCreateParams(idempotencyKey)))
+	var output TaskCreateOutput
+	if err := json.Unmarshal(createResult, &output); err != nil {
+		t.Fatalf("decode task create output: %v; body=%s", err, string(createResult))
+	}
+	return output
 }
 
 func newTestA2AHandler(t *testing.T, cfg Config) (http.Handler, *toolserver.Handlers) {

@@ -427,6 +427,15 @@ curl -sS http://127.0.0.1:8789/a2a/rpc \
   }'
 ```
 
+Cancel a controlled inbound task. This marks the corresponding Clawside handoff failed in the truth-plane only; it does not stop processes, sessions, workers, or sender delivery:
+
+```bash
+curl -sS http://127.0.0.1:8789/a2a/rpc \
+  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"tasks/cancel","params":{"id":"hf_example"}}'
+```
+
 Method matrix:
 
 | Method | Transport | Mode | Notes |
@@ -438,12 +447,13 @@ Method matrix:
 | `clawside.work.next` | JSON-RPC `/a2a/rpc` | read | List executable handoffs for an agent/filter. |
 | `clawside.work.blocked` | JSON-RPC `/a2a/rpc` | read | List blocked handoffs with reasons and suggestions. |
 | `clawside.task.create` | JSON-RPC `/a2a/rpc` | controlled write | Create one idempotent inbound workflow/handoff without runtime or delivery execution. |
+| `tasks/cancel` | JSON-RPC `/a2a/rpc` | controlled write | Mark the corresponding Clawside handoff failed in the truth-plane only; does not stop processes, sessions, workers, or sender delivery. |
 | `tasks/get` | JSON-RPC `/a2a/rpc` | read | Return an A2A-style task projection for a Clawside handoff id. |
 | `tasks/events` | SSE `/a2a/tasks/{handoffID}/events` | stream | Path-based stream only; not a JSON-RPC method. |
 
 JSON-RPC contract: unsupported methods return `-32601`; invalid or unsafe params return `-32602`; parse/invalid request errors use JSON-RPC standard error codes; missing or wrong bearer auth fails at HTTP `401/403` before dispatch. Error payloads are stable and do not echo command, args, local paths, private prompts, tokens, stdout/stderr, sender jobs, or delivery jobs.
 
-Boundaries: this endpoint only allows the controlled idempotent `clawside.task.create` mutation plus read-only task event streaming. It does not implement the full Google A2A message runtime, raw `handoff_create`, `message/send`, `tasks/cancel`, push notifications, sandboxing, managed OpenClaw / Claude sessions, command / args / local path / runtime session / private prompt / worker launch parameters, sender delivery, or dynamic mutating JSON-RPC mapping.
+Boundaries: this endpoint only allows controlled truth-plane mutations (`clawside.task.create` and `tasks/cancel`) plus read-only task event streaming. `tasks/cancel` only marks the corresponding handoff failed; it does not stop runtime processes, managed sessions, workers, sender delivery, or Telegram delivery. It does not implement the full Google A2A message runtime, raw `handoff_create`, `message/send`, push notifications, sandboxing, managed OpenClaw / Claude sessions, command / args / local path / runtime session / private prompt / worker launch parameters, sender delivery, or dynamic mutating JSON-RPC mapping.
 
 ## OpenClaw MCP smoke verifier
 

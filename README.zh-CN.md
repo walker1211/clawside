@@ -427,6 +427,15 @@ curl -sS http://127.0.0.1:8789/a2a/rpc \
   }'
 ```
 
+取消一条受控 inbound task。该调用只会把对应 Clawside handoff 在 truth-plane 中标记为 failed；不会停止进程、session、worker 或 sender delivery：
+
+```bash
+curl -sS http://127.0.0.1:8789/a2a/rpc \
+  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":"1","method":"tasks/cancel","params":{"id":"hf_example"}}'
+```
+
 Method matrix：
 
 | Method | Transport | Mode | 说明 |
@@ -438,12 +447,13 @@ Method matrix：
 | `clawside.work.next` | JSON-RPC `/a2a/rpc` | read | 查询某个 agent/filter 当前可执行的 handoffs。 |
 | `clawside.work.blocked` | JSON-RPC `/a2a/rpc` | read | 查询 blocked handoffs、原因和建议。 |
 | `clawside.task.create` | JSON-RPC `/a2a/rpc` | controlled write | 幂等创建一条 inbound workflow/handoff，不执行 runtime 或 delivery。 |
+| `tasks/cancel` | JSON-RPC `/a2a/rpc` | controlled write | 只把对应 Clawside handoff 在 truth-plane 中标记为 failed；不停止进程、session、worker 或 sender delivery。 |
 | `tasks/get` | JSON-RPC `/a2a/rpc` | read | 用 Clawside handoff id 返回 A2A-style task projection。 |
 | `tasks/events` | SSE `/a2a/tasks/{handoffID}/events` | stream | 只通过 path-based stream 暴露，不是 JSON-RPC method。 |
 
 JSON-RPC 契约：unsupported method 返回 `-32601`；invalid 或 unsafe params 返回 `-32602`；parse/invalid request 使用 JSON-RPC 标准错误码；缺失或错误 bearer auth 在 dispatch 前返回 HTTP `401/403`。错误 payload 保持稳定，不回显 command、args、本地路径、private prompt、token、stdout/stderr、sender job 或 delivery job。
 
-边界：这个 endpoint 只允许受控幂等的 `clawside.task.create` mutation，以及只读 task event streaming；不实现完整 Google A2A message runtime、raw `handoff_create`、`message/send`、`tasks/cancel`、push notification、sandbox、OpenClaw / Claude managed session、command / args / 本地路径 / runtime session / private prompt / worker launch 参数、sender delivery 或动态 mutating JSON-RPC mapping。
+边界：这个 endpoint 只允许受控 truth-plane mutation（`clawside.task.create` 和 `tasks/cancel`），以及只读 task event streaming。`tasks/cancel` 只会把对应 handoff 标记为 failed；不会停止 runtime 进程、managed session、worker、sender delivery 或 Telegram delivery。不实现完整 Google A2A message runtime、raw `handoff_create`、`message/send`、push notification、sandbox、OpenClaw / Claude managed session、command / args / 本地路径 / runtime session / private prompt / worker launch 参数、sender delivery 或动态 mutating JSON-RPC mapping。
 
 ## OpenClaw MCP smoke verifier
 

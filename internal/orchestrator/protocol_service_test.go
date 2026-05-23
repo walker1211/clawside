@@ -88,6 +88,24 @@ func TestProtocolActionFailMovesToFailed(t *testing.T) {
 	}
 }
 
+func TestProtocolActionFailMovesCreatedToFailed(t *testing.T) {
+	svc := newTestService(t)
+	created := mustCreateTestHandoff(t, svc)
+
+	result, err := svc.ApplyProtocolAction(context.Background(), ProtocolRequest{
+		Action:     ProtocolActionFail,
+		HandoffID:  created.Handoff.ID,
+		WorkflowID: created.Workflow.ID,
+		Actor:      ActorRef{Type: ActorSystem, ID: "workflow-controller"},
+	})
+	if err != nil {
+		t.Fatalf("ApplyProtocolAction(fail): %v", err)
+	}
+	if result.Handoff.State != StateFailed {
+		t.Fatalf("expected failed state, got %s", result.Handoff.State)
+	}
+}
+
 func TestProtocolActionRejectsIncompleteDependencies(t *testing.T) {
 	svc := newTestService(t)
 	root := mustCreateTestHandoff(t, svc)

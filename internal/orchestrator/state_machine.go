@@ -159,7 +159,7 @@ func (m *StateMachine) Apply(event EventRecord) (Handoff, Decision) {
 			return next, rejectDecision(next.State, err.Error())
 		}
 		if !canTransitionToFailed(next.State) {
-			return next, rejectDecision(next.State, "failed requires dispatched, received, claimed, started, checkpointed, submitted, or reviewed")
+			return next, rejectDecision(next.State, "failed requires created, dispatched, received, claimed, started, checkpointed, submitted, or reviewed")
 		}
 		next.State = StateFailed
 	case EventExpired:
@@ -268,7 +268,7 @@ func canTransitionToCompleted(h Handoff) bool {
 
 func canTransitionToFailed(state HandoffState) bool {
 	switch state {
-	case StateDispatched, StateReceived, StateClaimed, StateStarted, StateCheckpointed, StateSubmitted, StateReviewed:
+	case StateCreated, StateDispatched, StateReceived, StateClaimed, StateStarted, StateCheckpointed, StateSubmitted, StateReviewed:
 		return true
 	default:
 		return false

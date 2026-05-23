@@ -258,8 +258,20 @@ func TestApplyEventAllowsAndRejectsFailurePaths(t *testing.T) {
 		Type:          EventFailed,
 		SubjectActor:  ActorRef{Type: ActorAgent, ID: "writer"},
 		ProducerActor: ActorRef{Type: ActorAgent, ID: "writer"},
+	}); !decision.Accepted {
+		t.Fatalf("expected failed from created to be accepted, got %s", decision.Reason)
+	}
+
+	machine = NewStateMachine(Handoff{
+		State:         StateCompleted,
+		ReceiverActor: ActorRef{Type: ActorAgent, ID: "writer"},
+	})
+	if _, decision := machine.Apply(EventRecord{
+		Type:          EventFailed,
+		SubjectActor:  ActorRef{Type: ActorAgent, ID: "writer"},
+		ProducerActor: ActorRef{Type: ActorAgent, ID: "writer"},
 	}); decision.Accepted {
-		t.Fatalf("expected failed from created to be rejected")
+		t.Fatalf("expected failed from completed to be rejected")
 	}
 }
 

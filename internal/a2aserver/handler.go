@@ -21,6 +21,8 @@ import (
 
 const rpcBodyLimitBytes = 64 << 10
 
+var errInvalidTasksCancel = errors.New("invalid tasks/cancel")
+
 type Handler struct {
 	handlers *toolserver.Handlers
 	cfg      Config
@@ -242,6 +244,22 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
 		}
 		return result, nil
+	case MethodTasksCancel:
+		var input TasksCancelInput
+		if err := decodeRPCParams(params, &input); err != nil {
+			return nil, &RPCError{Code: rpcInvalidParams, Message: "invalid params"}
+		}
+		if !validTasksCancelInput(input) {
+			return nil, &RPCError{Code: rpcInvalidParams, Message: "invalid params"}
+		}
+		result, err := h.handleTasksCancel(r, input)
+		if err != nil {
+			if errors.Is(err, errInvalidTasksCancel) {
+				return nil, &RPCError{Code: rpcInvalidParams, Message: "invalid params"}
+			}
+			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
+		}
+		return result, nil
 	default:
 		return nil, &RPCError{Code: rpcMethodNotFound, Message: "method not found"}
 	}
@@ -287,6 +305,39 @@ func (h *Handler) handleTasksGet(r *http.Request, input TasksGetInput) (A2ATask,
 		return A2ATask{}, err
 	}
 	return toA2ATask(result, input.HistoryLength), nil
+}
+
+func (h *Handler) handleTasksCancel(r *http.Request, input TasksCancelInput) (A2ATask, error) {
+	handoffID := strings.TrimSpace(input.ID)
+	current, err := h.handlers.HandleHandoffGet(r.Context(), toolserver.HandoffGetInput{HandoffID: handoffID})
+	if err != nil {
+		return A2ATask{}, err
+	}
+
+	switch current.Handoff.State {
+	case orchestrator.StateFailed:
+		return toA2ATask(current, nil), nil
+	case orchestrator.StateCompleted, orchestrator.StateExpired:
+		return A2ATask{}, errInvalidTasksCancel
+	}
+
+	if _, err := h.handlers.HandleHandoffProgress(r.Context(), toolserver.HandoffProgressInput{
+		Action:     string(orchestrator.ProtocolActionFail),
+		WorkflowID: current.Handoff.WorkflowID,
+		HandoffID:  handoffID,
+		Actor: toolserver.ActorRefInput{
+			Type: string(orchestrator.ActorSystem),
+			ID:   "workflow-controller",
+		},
+	}); err != nil {
+		return A2ATask{}, err
+	}
+
+	updated, err := h.handlers.HandleHandoffGet(r.Context(), toolserver.HandoffGetInput{HandoffID: handoffID})
+	if err != nil {
+		return A2ATask{}, err
+	}
+	return toA2ATask(updated, nil), nil
 }
 
 const (
@@ -465,6 +516,10 @@ func validTasksGetInput(input TasksGetInput) bool {
 		return false
 	}
 	return input.HistoryLength == nil || *input.HistoryLength >= 0
+}
+
+func validTasksCancelInput(input TasksCancelInput) bool {
+	return strings.TrimSpace(input.ID) != ""
 }
 
 const (
@@ -721,6 +776,7 @@ func buildAgentCard(rpcURL string) AgentCard {
 			newSkill(MethodBlockedWork, "Blocked work", "List blocked handoffs with reasons and suggestions."),
 			newSkill(MethodTaskCreate, "Create controlled task", "Create an idempotent controlled inbound task without runtime or delivery execution."),
 			newSkill(MethodTasksGet, "Get task", "Get A2A-compatible read-only task status for a Clawside handoff."),
+			newSkill(MethodTasksCancel, "Cancel task", "Cancel an A2A task by marking the corresponding Clawside handoff failed in the truth-plane only."),
 			newStreamingSkill(MethodTasksEvents, "Task events", "Subscribe to read-only A2A task projection events for a Clawside handoff."),
 		},
 		Metadata: buildAgentCardMetadata(),
@@ -746,6 +802,7 @@ func buildAgentCardMetadata() AgentCardMetadata {
 			newAgentCardMethodMetadata(MethodBlockedWork, "json-rpc", "read", "/a2a/rpc"),
 			newAgentCardMethodMetadata(MethodTaskCreate, "json-rpc", "controlled-write", "/a2a/rpc"),
 			newAgentCardMethodMetadata(MethodTasksGet, "json-rpc", "read", "/a2a/rpc"),
+			newAgentCardMethodMetadata(MethodTasksCancel, "json-rpc", "controlled-write", "/a2a/rpc"),
 			newAgentCardMethodMetadata(MethodTasksEvents, "sse", "stream", "/a2a/tasks/{handoffID}/events"),
 		},
 		SSE: AgentCardSSEMetadata{

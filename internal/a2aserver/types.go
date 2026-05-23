@@ -11,6 +11,7 @@ const (
 	MethodBlockedWork    = "clawside.work.blocked"
 	MethodTaskCreate     = "clawside.task.create"
 	MethodTasksGet       = "tasks/get"
+	MethodTasksCancel    = "tasks/cancel"
 	MethodTasksEvents    = "tasks/events"
 )
 
@@ -110,6 +111,10 @@ type RPCError struct {
 type TasksGetInput struct {
 	ID            string `json:"id"`
 	HistoryLength *int   `json:"historyLength,omitempty"`
+}
+
+type TasksCancelInput struct {
+	ID string `json:"id"`
 }
 
 type TaskCreateInput struct {
