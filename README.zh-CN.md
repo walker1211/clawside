@@ -369,37 +369,41 @@ CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
 go run ./cmd/clawside-a2a --help
 ```
 
-读取公开 Agent Card：
+外部 client 建议按这个顺序接入：
 
-```bash
-curl -sS http://127.0.0.1:8789/.well-known/agent-card.json
-```
+1. 读取公开 Agent Card。它的 `metadata` 会声明 endpoint hints、稳定 method matrix、SSE 指引和安全边界。
 
-执行只读 workflow 查询：
+   ```bash
+   curl -sS http://127.0.0.1:8789/.well-known/agent-card.json
+   ```
 
-```bash
-curl -sS http://127.0.0.1:8789/a2a/rpc \
-  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":"1","method":"clawside.workflow.list","params":{}}'
-```
+2. 通过 `/a2a/rpc` 携带 bearer auth 调用 JSON-RPC method：
 
-执行标准风格的只读 task status 查询，读取某个 Clawside handoff 的状态：
+   ```bash
+   curl -sS http://127.0.0.1:8789/a2a/rpc \
+     -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":"1","method":"clawside.workflow.list","params":{}}'
+   ```
 
-```bash
-curl -sS http://127.0.0.1:8789/a2a/rpc \
-  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":"1","method":"tasks/get","params":{"id":"hf_example","historyLength":0}}'
-```
+3. 用 `tasks/get` 读取某个 Clawside handoff 的标准风格 task status：
 
-订阅某个 Clawside handoff 的只读 task projection events：
+   ```bash
+   curl -sS http://127.0.0.1:8789/a2a/rpc \
+     -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":"1","method":"tasks/get","params":{"id":"hf_example","historyLength":0}}'
+   ```
 
-```bash
-curl -N http://127.0.0.1:8789/a2a/tasks/hf_example/events?historyLength=1 \
-  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
-  -H "Accept: text/event-stream"
-```
+4. 订阅某个 Clawside handoff 的只读 task projection events：
+
+   ```bash
+   curl -N http://127.0.0.1:8789/a2a/tasks/hf_example/events?historyLength=1 \
+     -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+     -H "Accept: text/event-stream"
+   ```
+
+5. 断线重连时，先调用 `tasks/get` 刷新当前 task snapshot，再重新订阅 SSE stream。stream 会发送 `retry: 3000` 和当前 truth-plane projection 的 `id:` cursor，但不保证基于 `Last-Event-ID` 回放历史事件。
 
 创建一条受控 inbound task。该调用会创建一个 root workflow / handoff，并返回之后可由 `tasks/get` 读取的同一 task view：
 
@@ -423,7 +427,21 @@ curl -sS http://127.0.0.1:8789/a2a/rpc \
   }'
 ```
 
-支持的 JSON-RPC methods 包括标准风格的只读 `tasks/get` handoff status mapping、受控幂等的 `clawside.task.create` inbound creation method，以及刻意放在 `clawside.*` 命名空间下的查询：`clawside.workflow.list`、`clawside.workflow.status`、`clawside.handoff.get`、`clawside.agent.list`、`clawside.work.next` 和 `clawside.work.blocked`。SSE endpoint 是 `GET /a2a/tasks/<handoff-id>/events`；它只输出 task projection snapshot，不暴露 raw event payload。
+Method matrix：
+
+| Method | Transport | Mode | 说明 |
+| --- | --- | --- | --- |
+| `clawside.workflow.list` | JSON-RPC `/a2a/rpc` | read | 列出 workflow 和 projected handoffs。 |
+| `clawside.workflow.status` | JSON-RPC `/a2a/rpc` | read | 读取单个 workflow 和 projected handoffs。 |
+| `clawside.handoff.get` | JSON-RPC `/a2a/rpc` | read | 读取 handoff 当前 truth 和 timeline。 |
+| `clawside.agent.list` | JSON-RPC `/a2a/rpc` | read | 用安全过滤条件列出已注册 agents。 |
+| `clawside.work.next` | JSON-RPC `/a2a/rpc` | read | 查询某个 agent/filter 当前可执行的 handoffs。 |
+| `clawside.work.blocked` | JSON-RPC `/a2a/rpc` | read | 查询 blocked handoffs、原因和建议。 |
+| `clawside.task.create` | JSON-RPC `/a2a/rpc` | controlled write | 幂等创建一条 inbound workflow/handoff，不执行 runtime 或 delivery。 |
+| `tasks/get` | JSON-RPC `/a2a/rpc` | read | 用 Clawside handoff id 返回 A2A-style task projection。 |
+| `tasks/events` | SSE `/a2a/tasks/{handoffID}/events` | stream | 只通过 path-based stream 暴露，不是 JSON-RPC method。 |
+
+JSON-RPC 契约：unsupported method 返回 `-32601`；invalid 或 unsafe params 返回 `-32602`；parse/invalid request 使用 JSON-RPC 标准错误码；缺失或错误 bearer auth 在 dispatch 前返回 HTTP `401/403`。错误 payload 保持稳定，不回显 command、args、本地路径、private prompt、token、stdout/stderr、sender job 或 delivery job。
 
 边界：这个 endpoint 只允许受控幂等的 `clawside.task.create` mutation，以及只读 task event streaming；不实现完整 Google A2A message runtime、raw `handoff_create`、`message/send`、`tasks/cancel`、push notification、sandbox、OpenClaw / Claude managed session、command / args / 本地路径 / runtime session / private prompt / worker launch 参数、sender delivery 或动态 mutating JSON-RPC mapping。
 

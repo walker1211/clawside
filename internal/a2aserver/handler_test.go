@@ -42,14 +42,37 @@ func TestAgentCardAndHealthz(t *testing.T) {
 	if !card.Capabilities.Streaming || card.Capabilities.PushNotifications {
 		t.Fatalf("expected streaming non-push card capabilities, got %+v", card.Capabilities)
 	}
-	for _, method := range []string{MethodWorkflowList, MethodWorkflowStatus, MethodHandoffGet, MethodAgentList, MethodNextWork, MethodBlockedWork, MethodTasksGet, "tasks/events"} {
+	expectedMethods := []string{MethodWorkflowList, MethodWorkflowStatus, MethodHandoffGet, MethodAgentList, MethodNextWork, MethodBlockedWork, MethodTaskCreate, MethodTasksGet, MethodTasksEvents}
+	for _, method := range expectedMethods {
 		if !cardHasSkill(card, method) {
 			t.Fatalf("expected agent card to include skill %s, got %+v", method, card.Skills)
 		}
 	}
-	taskEventsSkill, ok := cardSkill(card, "tasks/events")
+	taskEventsSkill, ok := cardSkill(card, MethodTasksEvents)
 	if !ok || !containsString(taskEventsSkill.OutputModes, "text/event-stream") {
 		t.Fatalf("expected tasks/events skill to advertise text/event-stream output, got %+v", taskEventsSkill)
+	}
+	if card.Metadata.Endpoints.JSONRPC != "/a2a/rpc" || card.Metadata.Endpoints.TaskEvents != "/a2a/tasks/{handoffID}/events" {
+		t.Fatalf("expected endpoint hints for external clients, got %+v", card.Metadata.Endpoints)
+	}
+	if !slices.Equal(agentCardMethodIDs(card.Metadata.Methods), expectedMethods) {
+		t.Fatalf("unexpected agent card method metadata: %+v", card.Metadata.Methods)
+	}
+	taskCreateMetadata, ok := agentCardMethodMetadata(card.Metadata.Methods, MethodTaskCreate)
+	if !ok || taskCreateMetadata.Transport != "json-rpc" || taskCreateMetadata.Mode != "controlled-write" || taskCreateMetadata.Endpoint != "/a2a/rpc" {
+		t.Fatalf("unexpected task create method metadata: %+v", taskCreateMetadata)
+	}
+	taskEventsMetadata, ok := agentCardMethodMetadata(card.Metadata.Methods, MethodTasksEvents)
+	if !ok || taskEventsMetadata.Transport != "sse" || taskEventsMetadata.Mode != "stream" || taskEventsMetadata.Endpoint != "/a2a/tasks/{handoffID}/events" {
+		t.Fatalf("unexpected tasks/events method metadata: %+v", taskEventsMetadata)
+	}
+	if card.Metadata.SSE.RetryMilliseconds != 3000 || !strings.Contains(card.Metadata.SSE.Reconnect, MethodTasksGet) {
+		t.Fatalf("expected SSE retry and reconnect guidance, got %+v", card.Metadata.SSE)
+	}
+	for _, boundary := range []string{"bearer_auth_required", "no_command_execution", "no_worker_launch", "no_sender_delivery", "no_local_path_access"} {
+		if !containsString(card.Metadata.Safety, boundary) {
+			t.Fatalf("expected safety boundary %q in metadata, got %+v", boundary, card.Metadata.Safety)
+		}
 	}
 
 	healthRecorder := httptest.NewRecorder()
@@ -108,6 +131,67 @@ func TestRPCAuthAndProtocol(t *testing.T) {
 				t.Fatalf("expected invalid id response to use id null, got %s", invalidID.Body.String())
 			}
 		})
+	}
+}
+
+func TestA2AExternalMethodMatrixStability(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+
+	cardRecorder := httptest.NewRecorder()
+	cardRequest := httptest.NewRequest(http.MethodGet, "/.well-known/agent-card.json", nil)
+	handler.ServeHTTP(cardRecorder, cardRequest)
+	if cardRecorder.Code != http.StatusOK {
+		t.Fatalf("expected agent card status 200, got %d: %s", cardRecorder.Code, cardRecorder.Body.String())
+	}
+	var card AgentCard
+	if err := json.Unmarshal(cardRecorder.Body.Bytes(), &card); err != nil {
+		t.Fatalf("decode agent card: %v", err)
+	}
+
+	expectedMethods := []AgentCardMethodMetadata{
+		{ID: MethodWorkflowList, Transport: "json-rpc", Mode: "read", Endpoint: "/a2a/rpc"},
+		{ID: MethodWorkflowStatus, Transport: "json-rpc", Mode: "read", Endpoint: "/a2a/rpc"},
+		{ID: MethodHandoffGet, Transport: "json-rpc", Mode: "read", Endpoint: "/a2a/rpc"},
+		{ID: MethodAgentList, Transport: "json-rpc", Mode: "read", Endpoint: "/a2a/rpc"},
+		{ID: MethodNextWork, Transport: "json-rpc", Mode: "read", Endpoint: "/a2a/rpc"},
+		{ID: MethodBlockedWork, Transport: "json-rpc", Mode: "read", Endpoint: "/a2a/rpc"},
+		{ID: MethodTaskCreate, Transport: "json-rpc", Mode: "controlled-write", Endpoint: "/a2a/rpc"},
+		{ID: MethodTasksGet, Transport: "json-rpc", Mode: "read", Endpoint: "/a2a/rpc"},
+		{ID: MethodTasksEvents, Transport: "sse", Mode: "stream", Endpoint: "/a2a/tasks/{handoffID}/events"},
+	}
+	if !slices.Equal(card.Metadata.Methods, expectedMethods) {
+		t.Fatalf("unexpected method matrix: %+v", card.Metadata.Methods)
+	}
+	for _, method := range expectedMethods {
+		if !cardHasSkill(card, method.ID) {
+			t.Fatalf("expected card skill for %s", method.ID)
+		}
+		if method.Transport == "sse" {
+			assertRPCError(t, postRPCJSON(t, handler, "rpc-secret", method.ID, map[string]any{}), rpcMethodNotFound)
+		}
+	}
+}
+
+func TestRPCErrorContractDoesNotEchoUnsafeParamValues(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+	unsafeValue := "redacted-value-123"
+
+	invalidParams := postRPCJSON(t, handler, "rpc-secret", MethodTaskCreate, map[string]any{
+		"idempotency_key": "task-1",
+		"intent":          "review",
+		"receiver":        map[string]any{"id": "writer"},
+		"command":         unsafeValue,
+		"prompt":          unsafeValue,
+	})
+	assertRPCError(t, invalidParams, rpcInvalidParams)
+	if strings.Contains(invalidParams.Body.String(), unsafeValue) || strings.Contains(invalidParams.Body.String(), "command") || strings.Contains(invalidParams.Body.String(), "prompt") {
+		t.Fatalf("invalid params response echoed unsafe request data: %s", invalidParams.Body.String())
+	}
+
+	unknownMethod := postRPCJSON(t, handler, "rpc-secret", "message/send", map[string]any{"token": unsafeValue})
+	assertRPCError(t, unknownMethod, rpcMethodNotFound)
+	if strings.Contains(unknownMethod.Body.String(), unsafeValue) || strings.Contains(unknownMethod.Body.String(), "token") {
+		t.Fatalf("method not found response echoed unsafe request data: %s", unknownMethod.Body.String())
 	}
 }
 
@@ -414,6 +498,9 @@ func TestTaskEventsStreamsInitialTaskSnapshot(t *testing.T) {
 	if event.name != "task" {
 		t.Fatalf("expected task event, got %+v", event)
 	}
+	if event.retry != "3000" {
+		t.Fatalf("expected initial task event retry 3000, got %+v", event)
+	}
 	if event.id != created.Handoff.ID {
 		t.Fatalf("expected initial event id %s, got %+v", created.Handoff.ID, event)
 	}
@@ -619,8 +706,8 @@ func TestA2AMinimumClosedLoopValidation(t *testing.T) {
 
 	reader := bufio.NewReader(response.Body)
 	initial := readSSEEvent(t, reader)
-	if initial.name != "task" || initial.id == "" {
-		t.Fatalf("expected initial task event with id, got %+v", initial)
+	if initial.name != "task" || initial.id == "" || initial.retry != "3000" {
+		t.Fatalf("expected initial task event with id and retry, got %+v", initial)
 	}
 	assertNoForbiddenA2AFields(t, initial.data)
 	var initialPayload TaskStreamEvent
@@ -928,10 +1015,28 @@ func containsString(values []string, target string) bool {
 	return slices.Contains(values, target)
 }
 
+func agentCardMethodIDs(methods []AgentCardMethodMetadata) []string {
+	ids := make([]string, 0, len(methods))
+	for _, method := range methods {
+		ids = append(ids, method.ID)
+	}
+	return ids
+}
+
+func agentCardMethodMetadata(methods []AgentCardMethodMetadata, id string) (AgentCardMethodMetadata, bool) {
+	for _, method := range methods {
+		if method.ID == id {
+			return method, true
+		}
+	}
+	return AgentCardMethodMetadata{}, false
+}
+
 type testSSEEvent struct {
-	name string
-	id   string
-	data []byte
+	name  string
+	id    string
+	retry string
+	data  []byte
 }
 
 func readSSEEvent(t *testing.T, reader *bufio.Reader) testSSEEvent {
@@ -951,6 +1056,8 @@ func readSSEEvent(t *testing.T, reader *bufio.Reader) testSSEEvent {
 			event.name = strings.TrimPrefix(line, "event: ")
 		case strings.HasPrefix(line, "id: "):
 			event.id = strings.TrimPrefix(line, "id: ")
+		case strings.HasPrefix(line, "retry: "):
+			event.retry = strings.TrimPrefix(line, "retry: ")
 		case strings.HasPrefix(line, "data: "):
 			event.data = append(event.data, strings.TrimPrefix(line, "data: ")...)
 		}

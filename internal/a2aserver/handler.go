@@ -292,6 +292,7 @@ func (h *Handler) handleTasksGet(r *http.Request, input TasksGetInput) (A2ATask,
 const (
 	taskEventsPathPrefix           = "/a2a/tasks/"
 	taskEventsPathSuffix           = "/events"
+	defaultTaskEventsRetryMs       = 3000
 	defaultTaskEventsPollMs        = 1000
 	minimumTaskEventsPollMs        = 250
 	maximumTaskEventsPollMs        = 10000
@@ -338,6 +339,9 @@ func (h *Handler) handleTaskEvents(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
+	if err := writeSSERetry(w, defaultTaskEventsRetryMs); err != nil {
+		return
+	}
 	if err := writeSSEJSON(w, "task", snapshot.EventID, snapshot); err != nil {
 		return
 	}
@@ -719,11 +723,48 @@ func buildAgentCard(rpcURL string) AgentCard {
 			newSkill(MethodTasksGet, "Get task", "Get A2A-compatible read-only task status for a Clawside handoff."),
 			newStreamingSkill(MethodTasksEvents, "Task events", "Subscribe to read-only A2A task projection events for a Clawside handoff."),
 		},
+		Metadata: buildAgentCardMetadata(),
 		SecuritySchemes: map[string]AgentCardSecurity{
 			"bearer": {Type: "http", Scheme: "bearer"},
 		},
 		Security: []map[string][]string{{"bearer": {}}},
 	}
+}
+
+func buildAgentCardMetadata() AgentCardMetadata {
+	return AgentCardMetadata{
+		Endpoints: AgentCardEndpointMetadata{
+			JSONRPC:    "/a2a/rpc",
+			TaskEvents: "/a2a/tasks/{handoffID}/events",
+		},
+		Methods: []AgentCardMethodMetadata{
+			newAgentCardMethodMetadata(MethodWorkflowList, "json-rpc", "read", "/a2a/rpc"),
+			newAgentCardMethodMetadata(MethodWorkflowStatus, "json-rpc", "read", "/a2a/rpc"),
+			newAgentCardMethodMetadata(MethodHandoffGet, "json-rpc", "read", "/a2a/rpc"),
+			newAgentCardMethodMetadata(MethodAgentList, "json-rpc", "read", "/a2a/rpc"),
+			newAgentCardMethodMetadata(MethodNextWork, "json-rpc", "read", "/a2a/rpc"),
+			newAgentCardMethodMetadata(MethodBlockedWork, "json-rpc", "read", "/a2a/rpc"),
+			newAgentCardMethodMetadata(MethodTaskCreate, "json-rpc", "controlled-write", "/a2a/rpc"),
+			newAgentCardMethodMetadata(MethodTasksGet, "json-rpc", "read", "/a2a/rpc"),
+			newAgentCardMethodMetadata(MethodTasksEvents, "sse", "stream", "/a2a/tasks/{handoffID}/events"),
+		},
+		SSE: AgentCardSSEMetadata{
+			RetryMilliseconds: defaultTaskEventsRetryMs,
+			Reconnect:         "call tasks/get, then resubscribe to the task events stream",
+		},
+		Safety: []string{
+			"bearer_auth_required",
+			"no_command_execution",
+			"no_worker_launch",
+			"no_sender_delivery",
+			"no_local_path_access",
+			"no_private_prompt_or_secret_echo",
+		},
+	}
+}
+
+func newAgentCardMethodMetadata(id, transport, mode, endpoint string) AgentCardMethodMetadata {
+	return AgentCardMethodMetadata{ID: id, Transport: transport, Mode: mode, Endpoint: endpoint}
 }
 
 func newSkill(id, name, description string) AgentSkill {
@@ -744,6 +785,11 @@ func newStreamingSkill(id, name, description string) AgentSkill {
 
 func writeRPCResult(w http.ResponseWriter, id json.RawMessage, result any) {
 	writeJSON(w, http.StatusOK, RPCResponse{JSONRPC: "2.0", ID: normalizeRPCID(id), Result: result})
+}
+
+func writeSSERetry(w io.Writer, retryMs int) error {
+	_, err := fmt.Fprintf(w, "retry: %d\n", retryMs)
+	return err
 }
 
 func writeSSEJSON(w io.Writer, eventName, id string, payload any) error {

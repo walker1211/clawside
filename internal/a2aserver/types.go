@@ -37,6 +37,7 @@ type AgentCard struct {
 	DefaultInputModes  []string                     `json:"defaultInputModes"`
 	DefaultOutputModes []string                     `json:"defaultOutputModes"`
 	Skills             []AgentSkill                 `json:"skills"`
+	Metadata           AgentCardMetadata            `json:"metadata,omitempty"`
 	SecuritySchemes    map[string]AgentCardSecurity `json:"securitySchemes,omitempty"`
 	Security           []map[string][]string        `json:"security,omitempty"`
 }
@@ -56,6 +57,30 @@ type AgentSkill struct {
 	Description string   `json:"description"`
 	InputModes  []string `json:"inputModes"`
 	OutputModes []string `json:"outputModes"`
+}
+
+type AgentCardMetadata struct {
+	Endpoints AgentCardEndpointMetadata `json:"endpoints"`
+	Methods   []AgentCardMethodMetadata `json:"methods"`
+	SSE       AgentCardSSEMetadata      `json:"sse"`
+	Safety    []string                  `json:"safety"`
+}
+
+type AgentCardEndpointMetadata struct {
+	JSONRPC    string `json:"jsonrpc"`
+	TaskEvents string `json:"taskEvents"`
+}
+
+type AgentCardMethodMetadata struct {
+	ID        string `json:"id"`
+	Transport string `json:"transport"`
+	Mode      string `json:"mode"`
+	Endpoint  string `json:"endpoint"`
+}
+
+type AgentCardSSEMetadata struct {
+	RetryMilliseconds int    `json:"retryMilliseconds"`
+	Reconnect         string `json:"reconnect"`
 }
 
 type AgentCardSecurity struct {

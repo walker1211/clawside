@@ -369,37 +369,41 @@ Show command help:
 go run ./cmd/clawside-a2a --help
 ```
 
-Fetch the public Agent Card:
+External client sequence:
 
-```bash
-curl -sS http://127.0.0.1:8789/.well-known/agent-card.json
-```
+1. Fetch the public Agent Card. Its `metadata` block advertises endpoint hints, the stable method matrix, SSE guidance, and safety boundaries.
 
-Run a read-only workflow query:
+   ```bash
+   curl -sS http://127.0.0.1:8789/.well-known/agent-card.json
+   ```
 
-```bash
-curl -sS http://127.0.0.1:8789/a2a/rpc \
-  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":"1","method":"clawside.workflow.list","params":{}}'
-```
+2. Call JSON-RPC methods through `/a2a/rpc` with bearer auth:
 
-Run a standard-style read-only task status query for a Clawside handoff:
+   ```bash
+   curl -sS http://127.0.0.1:8789/a2a/rpc \
+     -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":"1","method":"clawside.workflow.list","params":{}}'
+   ```
 
-```bash
-curl -sS http://127.0.0.1:8789/a2a/rpc \
-  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":"1","method":"tasks/get","params":{"id":"hf_example","historyLength":0}}'
-```
+3. Read standard-style task status for a Clawside handoff with `tasks/get`:
 
-Subscribe to read-only task projection events for a Clawside handoff:
+   ```bash
+   curl -sS http://127.0.0.1:8789/a2a/rpc \
+     -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+     -H "Content-Type: application/json" \
+     -d '{"jsonrpc":"2.0","id":"1","method":"tasks/get","params":{"id":"hf_example","historyLength":0}}'
+   ```
 
-```bash
-curl -N http://127.0.0.1:8789/a2a/tasks/hf_example/events?historyLength=1 \
-  -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
-  -H "Accept: text/event-stream"
-```
+4. Subscribe to read-only task projection events for a Clawside handoff:
+
+   ```bash
+   curl -N http://127.0.0.1:8789/a2a/tasks/hf_example/events?historyLength=1 \
+     -H "Authorization: Bearer $CLAWSIDE_A2A_AUTH_KEY" \
+     -H "Accept: text/event-stream"
+   ```
+
+5. On reconnect, call `tasks/get` first to refresh the current task snapshot, then resubscribe to the SSE stream. The stream sends `retry: 3000` and an `id:` cursor for the current truth-plane projection, but it does not guarantee historical replay from `Last-Event-ID`.
 
 Create one controlled inbound task. This creates one root workflow / handoff and returns the same task view that `tasks/get` can later read:
 
@@ -423,7 +427,21 @@ curl -sS http://127.0.0.1:8789/a2a/rpc \
   }'
 ```
 
-Supported JSON-RPC methods include the standard-style read-only `tasks/get` handoff status mapping, the controlled idempotent `clawside.task.create` inbound creation method, and the intentionally namespaced `clawside.*` queries: `clawside.workflow.list`, `clawside.workflow.status`, `clawside.handoff.get`, `clawside.agent.list`, `clawside.work.next`, and `clawside.work.blocked`. The SSE endpoint is `GET /a2a/tasks/<handoff-id>/events`; it emits task projection snapshots only and does not expose raw event payloads.
+Method matrix:
+
+| Method | Transport | Mode | Notes |
+| --- | --- | --- | --- |
+| `clawside.workflow.list` | JSON-RPC `/a2a/rpc` | read | List workflows with projected handoffs. |
+| `clawside.workflow.status` | JSON-RPC `/a2a/rpc` | read | Read one workflow and projected handoffs. |
+| `clawside.handoff.get` | JSON-RPC `/a2a/rpc` | read | Read current handoff truth and timeline. |
+| `clawside.agent.list` | JSON-RPC `/a2a/rpc` | read | List registered agents by safe filters. |
+| `clawside.work.next` | JSON-RPC `/a2a/rpc` | read | List executable handoffs for an agent/filter. |
+| `clawside.work.blocked` | JSON-RPC `/a2a/rpc` | read | List blocked handoffs with reasons and suggestions. |
+| `clawside.task.create` | JSON-RPC `/a2a/rpc` | controlled write | Create one idempotent inbound workflow/handoff without runtime or delivery execution. |
+| `tasks/get` | JSON-RPC `/a2a/rpc` | read | Return an A2A-style task projection for a Clawside handoff id. |
+| `tasks/events` | SSE `/a2a/tasks/{handoffID}/events` | stream | Path-based stream only; not a JSON-RPC method. |
+
+JSON-RPC contract: unsupported methods return `-32601`; invalid or unsafe params return `-32602`; parse/invalid request errors use JSON-RPC standard error codes; missing or wrong bearer auth fails at HTTP `401/403` before dispatch. Error payloads are stable and do not echo command, args, local paths, private prompts, tokens, stdout/stderr, sender jobs, or delivery jobs.
 
 Boundaries: this endpoint only allows the controlled idempotent `clawside.task.create` mutation plus read-only task event streaming. It does not implement the full Google A2A message runtime, raw `handoff_create`, `message/send`, `tasks/cancel`, push notifications, sandboxing, managed OpenClaw / Claude sessions, command / args / local path / runtime session / private prompt / worker launch parameters, sender delivery, or dynamic mutating JSON-RPC mapping.
 
