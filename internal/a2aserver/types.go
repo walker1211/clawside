@@ -104,8 +104,13 @@ type RPCResponse struct {
 }
 
 type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int           `json:"code"`
+	Message string        `json:"message"`
+	Data    *RPCErrorData `json:"data,omitempty"`
+}
+
+type RPCErrorData struct {
+	Code string `json:"code"`
 }
 
 type TasksGetInput struct {

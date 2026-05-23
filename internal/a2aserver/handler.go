@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,15 @@ import (
 )
 
 const rpcBodyLimitBytes = 64 << 10
+
+const (
+	rpcErrorDataParseError     = "parse_error"
+	rpcErrorDataInvalidRequest = "invalid_request"
+	rpcErrorDataMethodNotFound = "method_not_found"
+	rpcErrorDataInvalidParams  = "invalid_params"
+	rpcErrorDataNotFound       = "not_found"
+	rpcErrorDataInternalError  = "internal_error"
+)
 
 var errInvalidTasksCancel = errors.New("invalid tasks/cancel")
 
@@ -147,7 +157,7 @@ func (h *Handler) handleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if rpcErr != nil {
-		writeRPCError(w, request.ID, rpcErr.Code, rpcErr.Message)
+		writeRPCErrorObject(w, request.ID, rpcErr)
 		return
 	}
 	writeRPCResult(w, request.ID, result)
@@ -171,7 +181,7 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 		}
 		result, err := h.handlers.HandleWorkflowStatus(r.Context(), input)
 		if err != nil {
-			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
+			return nil, rpcErrorFromLookup(err)
 		}
 		return result, nil
 	case MethodHandoffGet:
@@ -181,7 +191,7 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 		}
 		result, err := h.handlers.HandleHandoffGet(r.Context(), input)
 		if err != nil {
-			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
+			return nil, rpcErrorFromLookup(err)
 		}
 		return result, nil
 	case MethodAgentList:
@@ -241,7 +251,7 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 		}
 		result, err := h.handleTasksGet(r, input)
 		if err != nil {
-			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
+			return nil, rpcErrorFromLookup(err)
 		}
 		return result, nil
 	case MethodTasksCancel:
@@ -255,9 +265,9 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 		result, err := h.handleTasksCancel(r, input)
 		if err != nil {
 			if errors.Is(err, errInvalidTasksCancel) {
-				return nil, &RPCError{Code: rpcInvalidParams, Message: "invalid params"}
+				return nil, newRPCError(rpcInvalidParams, "invalid params", rpcErrorDataInvalidParams)
 			}
-			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
+			return nil, rpcErrorFromLookup(err)
 		}
 		return result, nil
 	default:
@@ -867,7 +877,49 @@ func writeSSEJSON(w io.Writer, eventName, id string, payload any) error {
 }
 
 func writeRPCError(w http.ResponseWriter, id json.RawMessage, code int, message string) {
-	writeJSON(w, http.StatusOK, RPCResponse{JSONRPC: "2.0", ID: normalizeRPCID(id), Error: &RPCError{Code: code, Message: message}})
+	writeRPCErrorObject(w, id, newRPCError(code, message, defaultRPCErrorDataCode(code)))
+}
+
+func writeRPCErrorObject(w http.ResponseWriter, id json.RawMessage, rpcErr *RPCError) {
+	writeJSON(w, http.StatusOK, RPCResponse{JSONRPC: "2.0", ID: normalizeRPCID(id), Error: normalizeRPCError(rpcErr)})
+}
+
+func newRPCError(code int, message, dataCode string) *RPCError {
+	return &RPCError{Code: code, Message: message, Data: &RPCErrorData{Code: dataCode}}
+}
+
+func normalizeRPCError(rpcErr *RPCError) *RPCError {
+	if rpcErr == nil {
+		return newRPCError(rpcInternalError, "internal error", rpcErrorDataInternalError)
+	}
+	if rpcErr.Data != nil && rpcErr.Data.Code != "" {
+		return rpcErr
+	}
+	return newRPCError(rpcErr.Code, rpcErr.Message, defaultRPCErrorDataCode(rpcErr.Code))
+}
+
+func rpcErrorFromLookup(err error) *RPCError {
+	if errors.Is(err, sql.ErrNoRows) {
+		return newRPCError(rpcInvalidParams, "invalid params", rpcErrorDataNotFound)
+	}
+	return newRPCError(rpcInternalError, "internal error", rpcErrorDataInternalError)
+}
+
+func defaultRPCErrorDataCode(code int) string {
+	switch code {
+	case rpcParseError:
+		return rpcErrorDataParseError
+	case rpcInvalidRequest:
+		return rpcErrorDataInvalidRequest
+	case rpcMethodNotFound:
+		return rpcErrorDataMethodNotFound
+	case rpcInvalidParams:
+		return rpcErrorDataInvalidParams
+	case rpcInternalError:
+		return rpcErrorDataInternalError
+	default:
+		return rpcErrorDataInternalError
+	}
 }
 
 func writeNoRPCResponse(w http.ResponseWriter) {

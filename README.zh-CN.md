@@ -451,7 +451,9 @@ Method matrix：
 | `tasks/get` | JSON-RPC `/a2a/rpc` | read | 用 Clawside handoff id 返回 A2A-style task projection。 |
 | `tasks/events` | SSE `/a2a/tasks/{handoffID}/events` | stream | 只通过 path-based stream 暴露，不是 JSON-RPC method。 |
 
-JSON-RPC 契约：unsupported method 返回 `-32601`；invalid 或 unsafe params 返回 `-32602`；parse/invalid request 使用 JSON-RPC 标准错误码；缺失或错误 bearer auth 在 dispatch 前返回 HTTP `401/403`。错误 payload 保持稳定，不回显 command、args、本地路径、private prompt、token、stdout/stderr、sender job 或 delivery job。
+JSON-RPC 契约：unsupported method 返回 `-32601`；invalid 或 unsafe params 返回 `-32602`；parse/invalid request 使用 JSON-RPC 标准错误码；缺失或错误 bearer auth 在 dispatch 前返回 HTTP `401/403`。JSON-RPC error object 会包含安全、机器可读的 `error.data.code`，例如 `parse_error`、`invalid_request`、`method_not_found`、`invalid_params`、`not_found` 或 `internal_error`；caller 提供的 workflow/handoff/task id 不存在时返回 `-32602` 和 `not_found`。错误 payload 保持稳定，不回显 command、args、本地路径、private prompt、token、stdout/stderr、sender job、delivery job、raw SQL/internal error 或缺失资源 id。
+
+Task status projection 保持稳定：`created`、`dispatched`、`submitted` 映射为 `submitted`；`received`、`claimed`、`started`、`checkpointed`、`reviewed` 映射为 `working`；`completed` 映射为 `completed`；`failed` 和 `expired` 映射为 `failed`。
 
 边界：这个 endpoint 只允许受控 truth-plane mutation（`clawside.task.create` 和 `tasks/cancel`），以及只读 task event streaming。`tasks/cancel` 只会把对应 handoff 标记为 failed；不会停止 runtime 进程、managed session、worker、sender delivery 或 Telegram delivery。不实现完整 Google A2A message runtime、raw `handoff_create`、`message/send`、push notification、sandbox、OpenClaw / Claude managed session、command / args / 本地路径 / runtime session / private prompt / worker launch 参数、sender delivery 或动态 mutating JSON-RPC mapping。
 

@@ -196,6 +196,85 @@ func TestRPCErrorContractDoesNotEchoUnsafeParamValues(t *testing.T) {
 	}
 }
 
+func TestRPCErrorShapeIncludesSafeDataCode(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+
+	cases := []struct {
+		name     string
+		recorder *httptest.ResponseRecorder
+		code     int
+		message  string
+		dataCode string
+	}{
+		{
+			name:     "parse error",
+			recorder: postRPC(t, handler, "rpc-secret", `{"jsonrpc":`),
+			code:     rpcParseError,
+			message:  "parse error",
+			dataCode: "parse_error",
+		},
+		{
+			name:     "invalid request",
+			recorder: postRPC(t, handler, "rpc-secret", `[{"jsonrpc":"2.0","id":"1","method":"`+MethodWorkflowList+`"}]`),
+			code:     rpcInvalidRequest,
+			message:  "batch requests are not supported",
+			dataCode: "invalid_request",
+		},
+		{
+			name:     "method not found",
+			recorder: postRPCJSON(t, handler, "rpc-secret", "message/send", map[string]any{}),
+			code:     rpcMethodNotFound,
+			message:  "method not found",
+			dataCode: "method_not_found",
+		},
+		{
+			name:     "invalid params",
+			recorder: postRPCJSON(t, handler, "rpc-secret", MethodTaskCreate, map[string]any{"command": "rm -rf /"}),
+			code:     rpcInvalidParams,
+			message:  "invalid params",
+			dataCode: "invalid_params",
+		},
+		{
+			name:     "not found",
+			recorder: postRPCJSON(t, handler, "rpc-secret", MethodTasksGet, map[string]any{"id": "hf_missing"}),
+			code:     rpcInvalidParams,
+			message:  "invalid params",
+			dataCode: "not_found",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			response := assertRPCErrorData(t, tc.recorder, tc.code, tc.dataCode)
+			if response.Error.Message != tc.message {
+				t.Fatalf("expected error message %q, got %+v body=%s", tc.message, response.Error, tc.recorder.Body.String())
+			}
+			assertRPCErrorPayloadDoesNotEcho(t, tc.recorder, "rm -rf /", "hf_missing", "command")
+		})
+	}
+}
+
+func TestRPCMissingResourceMapsToInvalidParams(t *testing.T) {
+	handler, _ := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+
+	for _, tc := range []struct {
+		name   string
+		method string
+		params map[string]any
+	}{
+		{name: "tasks get", method: MethodTasksGet, params: map[string]any{"id": "hf_missing"}},
+		{name: "tasks cancel", method: MethodTasksCancel, params: map[string]any{"id": "hf_missing"}},
+		{name: "handoff get", method: MethodHandoffGet, params: map[string]any{"handoff_id": "hf_missing"}},
+		{name: "workflow status", method: MethodWorkflowStatus, params: map[string]any{"workflow_id": "wf_missing"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := postRPCJSON(t, handler, "rpc-secret", tc.method, tc.params)
+			assertRPCErrorData(t, recorder, rpcInvalidParams, "not_found")
+			assertRPCErrorPayloadDoesNotEcho(t, recorder, "hf_missing", "wf_missing")
+		})
+	}
+}
+
 func TestRPCReadOnlyMethodsDispatch(t *testing.T) {
 	handler, handlers := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
 	ctx := context.Background()
@@ -303,6 +382,44 @@ func TestTasksGetReturnsA2ATaskStatus(t *testing.T) {
 	}
 	if task.Metadata["internalState"] != string(orchestrator.StateCreated) {
 		t.Fatalf("expected internalState created, got %+v", task.Metadata)
+	}
+}
+
+func TestA2ATaskStateProjectionStability(t *testing.T) {
+	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		state orchestrator.HandoffState
+		want  string
+	}{
+		{orchestrator.StateCreated, "submitted"},
+		{orchestrator.StateDispatched, "submitted"},
+		{orchestrator.StateSubmitted, "submitted"},
+		{orchestrator.StateReceived, "working"},
+		{orchestrator.StateClaimed, "working"},
+		{orchestrator.StateStarted, "working"},
+		{orchestrator.StateCheckpointed, "working"},
+		{orchestrator.StateReviewed, "working"},
+		{orchestrator.StateCompleted, "completed"},
+		{orchestrator.StateFailed, "failed"},
+		{orchestrator.StateExpired, "failed"},
+		{orchestrator.HandoffState("weird"), "unknown"},
+	}
+
+	for _, tc := range cases {
+		t.Run(string(tc.state), func(t *testing.T) {
+			task := toA2ATask(toolserver.HandoffGetOutput{Handoff: orchestrator.Handoff{
+				ID:         "hf_state",
+				WorkflowID: "wf_state",
+				State:      tc.state,
+				UpdatedAt:  now,
+			}}, nil)
+			if task.Status.State != tc.want {
+				t.Fatalf("expected %s to map to %s, got %+v", tc.state, tc.want, task.Status)
+			}
+			if task.Status.Timestamp != now.UTC().Format(time.RFC3339Nano) {
+				t.Fatalf("expected stable timestamp, got %+v", task.Status)
+			}
+		})
 	}
 }
 
@@ -1270,6 +1387,40 @@ func assertRPCError(t *testing.T, recorder *httptest.ResponseRecorder, code int)
 	}
 	if response.Error == nil || response.Error.Code != code {
 		t.Fatalf("expected rpc error code %d, got %+v body=%s", code, response.Error, recorder.Body.String())
+	}
+}
+
+func assertRPCErrorData(t *testing.T, recorder *httptest.ResponseRecorder, code int, dataCode string) RPCResponse {
+	t.Helper()
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected JSON-RPC error over HTTP 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response RPCResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode rpc error response: %v", err)
+	}
+	if response.JSONRPC != "2.0" {
+		t.Fatalf("expected jsonrpc 2.0, got %+v body=%s", response, recorder.Body.String())
+	}
+	if response.Result != nil {
+		t.Fatalf("expected no result in error response, got %+v body=%s", response.Result, recorder.Body.String())
+	}
+	if response.Error == nil || response.Error.Code != code {
+		t.Fatalf("expected rpc error code %d, got %+v body=%s", code, response.Error, recorder.Body.String())
+	}
+	if response.Error.Data == nil || response.Error.Data.Code != dataCode {
+		t.Fatalf("expected rpc error data code %q, got %+v body=%s", dataCode, response.Error, recorder.Body.String())
+	}
+	return response
+}
+
+func assertRPCErrorPayloadDoesNotEcho(t *testing.T, recorder *httptest.ResponseRecorder, values ...string) {
+	t.Helper()
+	body := recorder.Body.String()
+	for _, value := range values {
+		if value != "" && strings.Contains(body, value) {
+			t.Fatalf("rpc error response echoed %q: %s", value, body)
+		}
 	}
 }
 
