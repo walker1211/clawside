@@ -378,6 +378,14 @@ CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
 
 `self-test` fetches the Agent Card, calls JSON-RPC with bearer auth, creates one controlled inbound task, reads `tasks/get`, reads the SSE task stream, then calls `tasks/cancel`. It only writes one local truth-plane self-test handoff and marks it failed; it does not launch runtime sessions, workers, sender delivery, or Telegram delivery.
 
+For a repeatable local or CI readiness gate, run the wrapper script instead:
+
+```bash
+./scripts/verify_clawside_a2a.sh
+```
+
+The wrapper builds a temporary `clawside-a2a` binary, creates a temporary sqlite DB and A2A auth key, starts a localhost server, runs `self-test`, and cleans up. It uses only the local truth-plane endpoint and does not launch runtime sessions, workers, sender delivery, or Telegram delivery.
+
 External client sequence:
 
 1. Fetch the public Agent Card. Its `metadata` block advertises endpoint hints, the stable method matrix, SSE guidance, and safety boundaries.

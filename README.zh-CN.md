@@ -378,6 +378,14 @@ CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
 
 `self-test` 会读取 Agent Card、携带 bearer auth 调用 JSON-RPC、创建一条受控 inbound task、读取 `tasks/get`、读取 SSE task stream，然后调用 `tasks/cancel` 收尾。它只会写入一条本地 truth-plane self-test handoff 并标记为 failed；不会启动 runtime session、worker、sender delivery 或 Telegram delivery。
 
+如果要做可重复的本地或 CI readiness gate，优先运行封装脚本：
+
+```bash
+./scripts/verify_clawside_a2a.sh
+```
+
+该脚本会构建临时 `clawside-a2a` binary，创建临时 sqlite DB 和 A2A auth key，启动 localhost server，运行 `self-test`，最后清理临时文件和进程。它只使用本地 truth-plane endpoint，不会启动 runtime session、worker、sender delivery 或 Telegram delivery。
+
 外部 client 建议按这个顺序接入：
 
 1. 读取公开 Agent Card。它的 `metadata` 会声明 endpoint hints、稳定 method matrix、SSE 指引和安全边界。
