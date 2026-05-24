@@ -324,7 +324,7 @@ go run ./cmd/clawside-mcp \
 - `agent_list`：按 capability、project ref、task kind 或 status 列出已注册 agents
 - `next_work`：列出可执行 handoffs，并包含非阻断的 liveness / lease warnings 和 suggestions
 - `blocked_work`：列出带有 dependency、watch、reviewer、liveness、lease 原因与建议的 handoffs
-- `collaboration_template_list`：列出 built-in truth-plane 模板，并返回 graph pattern、roles、dependencies、acceptance criteria 和 safety boundaries
+- `collaboration_template_list`：列出 built-in truth-plane 模板（`upstream_downstream_review`、`review_gate`），并返回 graph pattern、roles、dependencies、acceptance criteria 和 safety boundaries
 - `collaboration_template_apply`：应用 built-in 模板，只创建 durable workflow / handoff / dependency / watch 记录
 - `watch_list`：列出单个 handoff 当前挂载的 watches
 - `watch_run`：按给定 RFC3339 时间运行 due watch 检查
@@ -497,7 +497,7 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 ```
 
-如需验收 built-in collaboration template catalog 和 dependency chain，可打开 opt-in template smoke。它会检查 `upstream_downstream_review` catalog metadata，应用模板，验证 upstream → downstream → reviewer 的依赖 gating，并且仍不会启动 runtime session、worker、sender delivery 或 Telegram delivery：
+如需验收 built-in collaboration template catalog 和 dependency chain，可打开 opt-in template smoke。它会检查 `upstream_downstream_review` 和 `review_gate` catalog metadata，应用 `upstream_downstream_review`，验证 upstream → downstream → reviewer 的依赖 gating，并且仍不会启动 runtime session、worker、sender delivery 或 Telegram delivery：
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke

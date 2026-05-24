@@ -9,6 +9,7 @@ import (
 
 const (
 	CollaborationTemplateUpstreamDownstreamReview = "upstream_downstream_review"
+	CollaborationTemplateReviewGate               = "review_gate"
 	defaultCollaborationTemplateWorkflowKind      = "multi_project_collaboration"
 )
 
@@ -76,12 +77,43 @@ func (s *Service) ListCollaborationTemplates() []CollaborationTemplate {
 				"does not accept command, args, local paths, prompts, tokens, session IDs, or job IDs",
 			},
 		},
+		{
+			Name:           CollaborationTemplateReviewGate,
+			Description:    "Create an upstream -> reviewer gate -> downstream workflow using durable handoffs.",
+			HandoffCount:   3,
+			RequiresReview: true,
+			GraphPattern:   "review_gate",
+			Roles:          []string{"upstream", "reviewer", "downstream"},
+			Dependencies: []CollaborationTemplateDependency{
+				{HandoffRole: "reviewer", DependsOnRole: "upstream"},
+				{HandoffRole: "downstream", DependsOnRole: "reviewer"},
+			},
+			AcceptanceCriteria: []string{
+				"creates one workflow with upstream, reviewer, and downstream handoffs",
+				"reviewer is blocked until upstream completes",
+				"downstream is blocked until reviewer completes",
+				"all handoffs are required for workflow completion",
+				"default watches are created for each handoff",
+			},
+			SafetyBoundaries: []string{
+				"truth-plane-only workflow and handoff creation",
+				"does not launch workers or runtime sessions",
+				"does not call sender delivery or Telegram",
+				"does not accept command, args, local paths, prompts, tokens, session IDs, or job IDs",
+			},
+		},
 	}
 }
 
 func (s *Service) ApplyCollaborationTemplate(ctx context.Context, input CollaborationTemplateApplyInput) (CollaborationTemplateApplyResult, error) {
 	input = trimCollaborationTemplateApplyInput(input)
-	if input.TemplateName != CollaborationTemplateUpstreamDownstreamReview {
+	var createTemplate func(context.Context, CollaborationTemplateApplyInput) (Workflow, []Handoff, error)
+	switch input.TemplateName {
+	case CollaborationTemplateUpstreamDownstreamReview:
+		createTemplate = s.createUpstreamDownstreamReviewTemplate
+	case CollaborationTemplateReviewGate:
+		createTemplate = s.createReviewGateTemplate
+	default:
 		return CollaborationTemplateApplyResult{}, fmt.Errorf("unknown collaboration template %q", input.TemplateName)
 	}
 	if input.WorkflowKind == "" {
@@ -100,7 +132,7 @@ func (s *Service) ApplyCollaborationTemplate(ctx context.Context, input Collabor
 		return CollaborationTemplateApplyResult{}, err
 	}
 
-	workflow, handoffs, err := s.createUpstreamDownstreamReviewTemplate(ctx, input)
+	workflow, handoffs, err := createTemplate(ctx, input)
 	if err != nil {
 		return CollaborationTemplateApplyResult{}, err
 	}
@@ -161,6 +193,57 @@ func (s *Service) createUpstreamDownstreamReviewTemplate(ctx context.Context, in
 		return Workflow{}, nil, fmt.Errorf("commit collaboration template tx: %w", err)
 	}
 	return workflow, []Handoff{upstream, downstream, reviewer}, nil
+}
+
+func (s *Service) createReviewGateTemplate(ctx context.Context, input CollaborationTemplateApplyInput) (Workflow, []Handoff, error) {
+	now := s.now().UTC()
+	rootSender := ActorRef{Type: ActorSystem, ID: "clawside-template"}
+	workflow, upstream, upstreamWatches := newRootHandoffCreation(CreateHandoffInput{
+		WorkflowKind:                  input.WorkflowKind,
+		Sender:                        rootSender,
+		Receiver:                      templateRoleReceiver(input.Upstream),
+		TaskKind:                      TaskGeneric,
+		Intent:                        input.Intent,
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    input.Upstream.ProjectRef,
+		DeliveryTargetRef:             templateRoleDeliveryTarget(input.Upstream),
+	}, now)
+	reviewer := newTemplateAppendHandoff(workflow, upstream.ReceiverActor, input.Reviewer, input.Intent, []string{upstream.ID}, now)
+	downstream := newTemplateAppendHandoff(workflow, reviewer.ReceiverActor, input.Downstream, input.Intent, []string{reviewer.ID}, now)
+	reviewerWatches := CreateDefaultWatches(reviewer, now)
+	downstreamWatches := CreateDefaultWatches(downstream, now)
+	workflow.CurrentHandoffID = downstream.ID
+	workflow.UpdatedAt = now
+
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Workflow{}, nil, fmt.Errorf("begin collaboration template tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := saveWorkflowExec(ctx, tx, workflow); err != nil {
+		return Workflow{}, nil, err
+	}
+	for _, handoff := range []struct {
+		handoff Handoff
+		watches []Watch
+	}{
+		{handoff: upstream, watches: upstreamWatches},
+		{handoff: reviewer, watches: reviewerWatches},
+		{handoff: downstream, watches: downstreamWatches},
+	} {
+		if err := saveHandoffExec(ctx, tx, handoff.handoff); err != nil {
+			return Workflow{}, nil, err
+		}
+		for _, watch := range handoff.watches {
+			if err := saveWatchExec(ctx, tx, watch); err != nil {
+				return Workflow{}, nil, err
+			}
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return Workflow{}, nil, fmt.Errorf("commit collaboration template tx: %w", err)
+	}
+	return workflow, []Handoff{upstream, reviewer, downstream}, nil
 }
 
 func newTemplateAppendHandoff(workflow Workflow, sender ActorRef, role CollaborationTemplateRole, intent string, dependencies []string, now time.Time) Handoff {

@@ -430,6 +430,26 @@ func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
 		t.Fatalf("expected collaboration_template_list success")
 	}
 	assertStructuredObject(t, listed, "templates")
+	var catalog struct {
+		Templates []struct {
+			Name         string `json:"name"`
+			GraphPattern string `json:"graph_pattern"`
+		} `json:"templates"`
+	}
+	decodeStructuredContent(t, listed, &catalog)
+	hasUpstreamDownstreamReview := false
+	hasReviewGate := false
+	for _, template := range catalog.Templates {
+		if template.Name == "upstream_downstream_review" && template.GraphPattern == "linear_upstream_downstream_review" {
+			hasUpstreamDownstreamReview = true
+		}
+		if template.Name == "review_gate" && template.GraphPattern == "review_gate" {
+			hasReviewGate = true
+		}
+	}
+	if !hasUpstreamDownstreamReview || !hasReviewGate {
+		t.Fatalf("expected collaboration template catalog metadata, got %+v", catalog.Templates)
+	}
 
 	applied, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "collaboration_template_apply", Arguments: map[string]any{
 		"template_name": "upstream_downstream_review",
@@ -475,6 +495,44 @@ func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
 	}
 	if len(payload.Handoffs[2].DependsOnHandoffIDs) != 1 || payload.Handoffs[2].DependsOnHandoffIDs[0] != payload.Handoffs[1].ID {
 		t.Fatalf("expected reviewer dependency on downstream, got %+v", payload.Handoffs[2].DependsOnHandoffIDs)
+	}
+
+	reviewGate, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "collaboration_template_apply", Arguments: map[string]any{
+		"template_name": "review_gate",
+		"intent":        "Gate downstream implementation on upstream review",
+		"upstream":      map[string]any{"receiver_id": "upstream", "project_ref": "project://upstream"},
+		"downstream":    map[string]any{"receiver_id": "downstream", "project_ref": "project://downstream"},
+		"reviewer":      map[string]any{"receiver_id": "reviewer", "project_ref": "project://review"},
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(collaboration_template_apply review_gate): %v", err)
+	}
+	if reviewGate.IsError {
+		t.Fatalf("expected review_gate collaboration_template_apply success")
+	}
+	payload = struct {
+		TemplateName string `json:"template_name"`
+		Workflow     struct {
+			ID string `json:"id"`
+		} `json:"workflow"`
+		Handoffs []struct {
+			ID                  string   `json:"id"`
+			WorkflowID          string   `json:"workflow_id"`
+			DependsOnHandoffIDs []string `json:"depends_on_handoff_ids"`
+		} `json:"handoffs"`
+	}{}
+	decodeStructuredContent(t, reviewGate, &payload)
+	if payload.TemplateName != "review_gate" {
+		t.Fatalf("expected review_gate template name, got %q", payload.TemplateName)
+	}
+	if len(payload.Handoffs) != 3 {
+		t.Fatalf("expected 3 review_gate handoffs, got %+v", payload.Handoffs)
+	}
+	if len(payload.Handoffs[1].DependsOnHandoffIDs) != 1 || payload.Handoffs[1].DependsOnHandoffIDs[0] != payload.Handoffs[0].ID {
+		t.Fatalf("expected reviewer dependency on upstream, got %+v", payload.Handoffs[1].DependsOnHandoffIDs)
+	}
+	if len(payload.Handoffs[2].DependsOnHandoffIDs) != 1 || payload.Handoffs[2].DependsOnHandoffIDs[0] != payload.Handoffs[1].ID {
+		t.Fatalf("expected downstream dependency on reviewer, got %+v", payload.Handoffs[2].DependsOnHandoffIDs)
 	}
 }
 

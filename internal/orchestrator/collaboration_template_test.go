@@ -6,48 +6,16 @@ import (
 	"testing"
 )
 
-func TestListCollaborationTemplatesReturnsUpstreamDownstreamReview(t *testing.T) {
+func TestListCollaborationTemplatesReturnsBuiltInCatalog(t *testing.T) {
 	svc := newTestService(t)
 
 	templates := svc.ListCollaborationTemplates()
 
-	if len(templates) != 1 {
-		t.Fatalf("expected 1 collaboration template, got %+v", templates)
+	if len(templates) != 2 {
+		t.Fatalf("expected 2 collaboration templates, got %+v", templates)
 	}
-	template := templates[0]
-	if template.Name != "upstream_downstream_review" {
-		t.Fatalf("expected upstream_downstream_review template, got %q", template.Name)
-	}
-	if template.Description == "" {
-		t.Fatalf("expected template description")
-	}
-	if template.HandoffCount != 3 {
-		t.Fatalf("expected 3 handoffs, got %d", template.HandoffCount)
-	}
-	if !template.RequiresReview {
-		t.Fatalf("expected template to require review")
-	}
-	if template.GraphPattern != "linear_upstream_downstream_review" {
-		t.Fatalf("expected graph pattern, got %q", template.GraphPattern)
-	}
-	assertStringSet(t, template.Roles, []string{"upstream", "downstream", "reviewer"})
-	assertTemplateDependencies(t, template.Dependencies, []CollaborationTemplateDependency{
-		{HandoffRole: "downstream", DependsOnRole: "upstream"},
-		{HandoffRole: "reviewer", DependsOnRole: "downstream"},
-	})
-	assertStringSet(t, template.AcceptanceCriteria, []string{
-		"creates one workflow with upstream, downstream, and reviewer handoffs",
-		"downstream is blocked until upstream completes",
-		"reviewer is blocked until downstream completes",
-		"all handoffs are required for workflow completion",
-		"default watches are created for each handoff",
-	})
-	assertStringSet(t, template.SafetyBoundaries, []string{
-		"truth-plane-only workflow and handoff creation",
-		"does not launch workers or runtime sessions",
-		"does not call sender delivery or Telegram",
-		"does not accept command, args, local paths, prompts, tokens, session IDs, or job IDs",
-	})
+	assertUpstreamDownstreamReviewTemplateMetadata(t, collaborationTemplateByName(t, templates, CollaborationTemplateUpstreamDownstreamReview))
+	assertReviewGateTemplateMetadata(t, collaborationTemplateByName(t, templates, CollaborationTemplateReviewGate))
 }
 
 func TestApplyCollaborationTemplateCreatesDependencyChain(t *testing.T) {
@@ -98,6 +66,59 @@ func TestApplyCollaborationTemplateCreatesDependencyChain(t *testing.T) {
 	}
 	if len(reviewer.DependsOnHandoffIDs) != 1 || reviewer.DependsOnHandoffIDs[0] != downstream.ID {
 		t.Fatalf("expected reviewer to depend on downstream, got %+v", reviewer.DependsOnHandoffIDs)
+	}
+}
+
+func TestApplyReviewGateCollaborationTemplateCreatesDependencyChain(t *testing.T) {
+	svc := newTestService(t)
+	input := validCollaborationTemplateApplyInput()
+	input.TemplateName = CollaborationTemplateReviewGate
+
+	result, err := svc.ApplyCollaborationTemplate(context.Background(), input)
+	if err != nil {
+		t.Fatalf("ApplyCollaborationTemplate: %v", err)
+	}
+
+	if result.TemplateName != CollaborationTemplateReviewGate {
+		t.Fatalf("expected result template review_gate, got %q", result.TemplateName)
+	}
+	if result.Workflow.Kind != "multi_project_collaboration" {
+		t.Fatalf("expected default workflow kind, got %q", result.Workflow.Kind)
+	}
+	if result.Workflow.InitiatorActor != (ActorRef{Type: ActorSystem, ID: "clawside-template"}) {
+		t.Fatalf("expected clawside-template initiator, got %+v", result.Workflow.InitiatorActor)
+	}
+	if len(result.Handoffs) != 3 {
+		t.Fatalf("expected 3 handoffs, got %+v", result.Handoffs)
+	}
+
+	upstream, reviewer, downstream := result.Handoffs[0], result.Handoffs[1], result.Handoffs[2]
+	if result.Workflow.RootHandoffID != upstream.ID {
+		t.Fatalf("expected upstream as root handoff, got %s", result.Workflow.RootHandoffID)
+	}
+	if result.Workflow.CurrentHandoffID != downstream.ID {
+		t.Fatalf("expected downstream as current handoff, got %s", result.Workflow.CurrentHandoffID)
+	}
+	for _, handoff := range result.Handoffs {
+		if handoff.WorkflowID != result.Workflow.ID {
+			t.Fatalf("expected handoff %s in workflow %s, got %s", handoff.ID, result.Workflow.ID, handoff.WorkflowID)
+		}
+		if !handoff.RequiredForWorkflowCompletion {
+			t.Fatalf("expected handoff %s to be required", handoff.ID)
+		}
+		if handoff.TaskKind != TaskGeneric {
+			t.Fatalf("expected handoff %s generic task, got %s", handoff.ID, handoff.TaskKind)
+		}
+	}
+
+	assertTemplateHandoff(t, upstream, ActorRef{Type: ActorSystem, ID: "clawside-template"}, "upstream", "project://upstream")
+	assertTemplateHandoff(t, reviewer, ActorRef{Type: ActorAgent, ID: "upstream"}, "reviewer", "project://review")
+	assertTemplateHandoff(t, downstream, ActorRef{Type: ActorAgent, ID: "reviewer"}, "downstream", "project://downstream")
+	if len(reviewer.DependsOnHandoffIDs) != 1 || reviewer.DependsOnHandoffIDs[0] != upstream.ID {
+		t.Fatalf("expected reviewer to depend on upstream, got %+v", reviewer.DependsOnHandoffIDs)
+	}
+	if len(downstream.DependsOnHandoffIDs) != 1 || downstream.DependsOnHandoffIDs[0] != reviewer.ID {
+		t.Fatalf("expected downstream to depend on reviewer, got %+v", downstream.DependsOnHandoffIDs)
 	}
 }
 
@@ -168,6 +189,89 @@ func TestApplyCollaborationTemplateIntegratesWithNextAndBlockedWork(t *testing.T
 	}
 	if len(reviewerNext) != 1 || reviewerNext[0].Handoff.ID != reviewer.ID {
 		t.Fatalf("expected reviewer next work after downstream completion, got %+v", reviewerNext)
+	}
+}
+
+func TestApplyReviewGateCollaborationTemplateIntegratesWithNextAndBlockedWork(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	mustRegisterTestAgent(t, svc, "upstream", []string{"planning"}, []string{"project://upstream"}, []TaskKind{TaskGeneric})
+	mustRegisterTestAgent(t, svc, "downstream", []string{"implementation"}, []string{"project://downstream"}, []TaskKind{TaskGeneric})
+	mustRegisterTestAgent(t, svc, "reviewer", []string{"review"}, []string{"project://review"}, []TaskKind{TaskGeneric})
+	input := validCollaborationTemplateApplyInput()
+	input.TemplateName = CollaborationTemplateReviewGate
+
+	result, err := svc.ApplyCollaborationTemplate(ctx, input)
+	if err != nil {
+		t.Fatalf("ApplyCollaborationTemplate: %v", err)
+	}
+	upstream, reviewer, downstream := result.Handoffs[0], result.Handoffs[1], result.Handoffs[2]
+
+	upstreamWork, err := svc.NextWork(ctx, WorkQuery{AgentID: "upstream"})
+	if err != nil {
+		t.Fatalf("NextWork upstream: %v", err)
+	}
+	if len(upstreamWork) != 1 || upstreamWork[0].Handoff.ID != upstream.ID {
+		t.Fatalf("expected upstream next work, got %+v", upstreamWork)
+	}
+	reviewerNext, err := svc.NextWork(ctx, WorkQuery{AgentID: "reviewer"})
+	if err != nil {
+		t.Fatalf("NextWork reviewer blocked: %v", err)
+	}
+	if len(reviewerNext) != 0 {
+		t.Fatalf("expected no reviewer next work before upstream completion, got %+v", reviewerNext)
+	}
+	reviewerBlocked, err := svc.BlockedWork(ctx, WorkQuery{AgentID: "reviewer"})
+	if err != nil {
+		t.Fatalf("BlockedWork reviewer: %v", err)
+	}
+	if len(reviewerBlocked) != 1 || reviewerBlocked[0].Handoff.ID != reviewer.ID {
+		t.Fatalf("expected reviewer blocked work, got %+v", reviewerBlocked)
+	}
+	if len(reviewerBlocked[0].Reasons) != 1 || reviewerBlocked[0].Reasons[0].Code != "dependency_incomplete" || reviewerBlocked[0].Reasons[0].DependencyHandoffID != upstream.ID {
+		t.Fatalf("expected reviewer dependency reason, got %+v", reviewerBlocked[0].Reasons)
+	}
+
+	upstreamCreated := CreateHandoffResult{Workflow: result.Workflow, Handoff: upstream}
+	mustRecordAcceptedEvent(t, svc, upstreamCreated, EventReceived, upstream.ReceiverActor)
+	mustRecordAcceptedEvent(t, svc, upstreamCreated, EventStarted, upstream.ReceiverActor)
+	mustRecordAcceptedEvent(t, svc, upstreamCreated, EventCompleted, upstream.ReceiverActor)
+	reviewerNext, err = svc.NextWork(ctx, WorkQuery{AgentID: "reviewer"})
+	if err != nil {
+		t.Fatalf("NextWork reviewer unblocked: %v", err)
+	}
+	if len(reviewerNext) != 1 || reviewerNext[0].Handoff.ID != reviewer.ID {
+		t.Fatalf("expected reviewer next work after upstream completion, got %+v", reviewerNext)
+	}
+
+	downstreamNext, err := svc.NextWork(ctx, WorkQuery{AgentID: "downstream"})
+	if err != nil {
+		t.Fatalf("NextWork downstream blocked: %v", err)
+	}
+	if len(downstreamNext) != 0 {
+		t.Fatalf("expected no downstream next work before reviewer completion, got %+v", downstreamNext)
+	}
+	downstreamBlocked, err := svc.BlockedWork(ctx, WorkQuery{AgentID: "downstream"})
+	if err != nil {
+		t.Fatalf("BlockedWork downstream: %v", err)
+	}
+	if len(downstreamBlocked) != 1 || downstreamBlocked[0].Handoff.ID != downstream.ID {
+		t.Fatalf("expected downstream blocked work, got %+v", downstreamBlocked)
+	}
+	if len(downstreamBlocked[0].Reasons) != 1 || downstreamBlocked[0].Reasons[0].Code != "dependency_incomplete" || downstreamBlocked[0].Reasons[0].DependencyHandoffID != reviewer.ID {
+		t.Fatalf("expected downstream dependency reason, got %+v", downstreamBlocked[0].Reasons)
+	}
+
+	reviewerCreated := CreateHandoffResult{Workflow: result.Workflow, Handoff: reviewer}
+	mustRecordAcceptedEvent(t, svc, reviewerCreated, EventReceived, reviewer.ReceiverActor)
+	mustRecordAcceptedEvent(t, svc, reviewerCreated, EventStarted, reviewer.ReceiverActor)
+	mustRecordAcceptedEvent(t, svc, reviewerCreated, EventCompleted, reviewer.ReceiverActor)
+	downstreamNext, err = svc.NextWork(ctx, WorkQuery{AgentID: "downstream"})
+	if err != nil {
+		t.Fatalf("NextWork downstream unblocked: %v", err)
+	}
+	if len(downstreamNext) != 1 || downstreamNext[0].Handoff.ID != downstream.ID {
+		t.Fatalf("expected downstream next work after reviewer completion, got %+v", downstreamNext)
 	}
 }
 
@@ -264,6 +368,91 @@ func assertTemplateHandoff(t *testing.T, handoff Handoff, wantSender ActorRef, w
 	if handoff.DeliveryTargetRef != "agent:"+wantReceiverID {
 		t.Fatalf("expected delivery target agent:%s, got %q", wantReceiverID, handoff.DeliveryTargetRef)
 	}
+}
+
+func collaborationTemplateByName(t *testing.T, templates []CollaborationTemplate, name string) CollaborationTemplate {
+	t.Helper()
+	for _, template := range templates {
+		if template.Name == name {
+			return template
+		}
+	}
+	t.Fatalf("expected collaboration template %q in %+v", name, templates)
+	return CollaborationTemplate{}
+}
+
+func assertUpstreamDownstreamReviewTemplateMetadata(t *testing.T, template CollaborationTemplate) {
+	t.Helper()
+	if template.Name != CollaborationTemplateUpstreamDownstreamReview {
+		t.Fatalf("expected upstream_downstream_review template, got %q", template.Name)
+	}
+	if template.Description == "" {
+		t.Fatalf("expected template description")
+	}
+	if template.HandoffCount != 3 {
+		t.Fatalf("expected 3 handoffs, got %d", template.HandoffCount)
+	}
+	if !template.RequiresReview {
+		t.Fatalf("expected template to require review")
+	}
+	if template.GraphPattern != "linear_upstream_downstream_review" {
+		t.Fatalf("expected graph pattern, got %q", template.GraphPattern)
+	}
+	assertStringSet(t, template.Roles, []string{"upstream", "downstream", "reviewer"})
+	assertTemplateDependencies(t, template.Dependencies, []CollaborationTemplateDependency{
+		{HandoffRole: "downstream", DependsOnRole: "upstream"},
+		{HandoffRole: "reviewer", DependsOnRole: "downstream"},
+	})
+	assertStringSet(t, template.AcceptanceCriteria, []string{
+		"creates one workflow with upstream, downstream, and reviewer handoffs",
+		"downstream is blocked until upstream completes",
+		"reviewer is blocked until downstream completes",
+		"all handoffs are required for workflow completion",
+		"default watches are created for each handoff",
+	})
+	assertStringSet(t, template.SafetyBoundaries, []string{
+		"truth-plane-only workflow and handoff creation",
+		"does not launch workers or runtime sessions",
+		"does not call sender delivery or Telegram",
+		"does not accept command, args, local paths, prompts, tokens, session IDs, or job IDs",
+	})
+}
+
+func assertReviewGateTemplateMetadata(t *testing.T, template CollaborationTemplate) {
+	t.Helper()
+	if template.Name != CollaborationTemplateReviewGate {
+		t.Fatalf("expected review_gate template, got %q", template.Name)
+	}
+	if template.Description == "" {
+		t.Fatalf("expected template description")
+	}
+	if template.HandoffCount != 3 {
+		t.Fatalf("expected 3 handoffs, got %d", template.HandoffCount)
+	}
+	if !template.RequiresReview {
+		t.Fatalf("expected template to require review")
+	}
+	if template.GraphPattern != "review_gate" {
+		t.Fatalf("expected review_gate graph pattern, got %q", template.GraphPattern)
+	}
+	assertStringSet(t, template.Roles, []string{"upstream", "reviewer", "downstream"})
+	assertTemplateDependencies(t, template.Dependencies, []CollaborationTemplateDependency{
+		{HandoffRole: "reviewer", DependsOnRole: "upstream"},
+		{HandoffRole: "downstream", DependsOnRole: "reviewer"},
+	})
+	assertStringSet(t, template.AcceptanceCriteria, []string{
+		"creates one workflow with upstream, reviewer, and downstream handoffs",
+		"reviewer is blocked until upstream completes",
+		"downstream is blocked until reviewer completes",
+		"all handoffs are required for workflow completion",
+		"default watches are created for each handoff",
+	})
+	assertStringSet(t, template.SafetyBoundaries, []string{
+		"truth-plane-only workflow and handoff creation",
+		"does not launch workers or runtime sessions",
+		"does not call sender delivery or Telegram",
+		"does not accept command, args, local paths, prompts, tokens, session IDs, or job IDs",
+	})
 }
 
 func assertStringSet(t *testing.T, got, want []string) {

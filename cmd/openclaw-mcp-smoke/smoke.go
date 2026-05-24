@@ -835,7 +835,7 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 	if err != nil {
 		return failedCheck("collaboration_template", err.Error())
 	}
-	if failure := collaborationTemplateCatalogMetadataFailure(catalog, "upstream_downstream_review"); failure != "" {
+	if failure := collaborationTemplateCatalogMetadataFailure(catalog); failure != "" {
 		return failedCheck("collaboration_template", failure)
 	}
 
@@ -1036,13 +1036,48 @@ func workItemsContainHandoff(value map[string]any, handoffID string) bool {
 	return false
 }
 
-func collaborationTemplateCatalogMetadataFailure(value map[string]any, templateName string) string {
-	template := collaborationTemplateCatalogTemplate(value, templateName)
-	if template == nil {
-		return "collaboration_template_list did not return " + templateName
-	}
-	if !collaborationTemplateCatalogHasMetadata(template) {
-		return "collaboration_template_list metadata for " + templateName + " is incomplete"
+type collaborationTemplateCatalogMetadataExpectation struct {
+	templateName string
+	graphPattern string
+	roles        []string
+	dependencies []collaborationTemplateCatalogDependencyExpectation
+}
+
+type collaborationTemplateCatalogDependencyExpectation struct {
+	handoffRole   string
+	dependsOnRole string
+}
+
+var collaborationTemplateCatalogMetadataExpectations = []collaborationTemplateCatalogMetadataExpectation{
+	{
+		templateName: "upstream_downstream_review",
+		graphPattern: "linear_upstream_downstream_review",
+		roles:        []string{"upstream", "downstream", "reviewer"},
+		dependencies: []collaborationTemplateCatalogDependencyExpectation{
+			{handoffRole: "downstream", dependsOnRole: "upstream"},
+			{handoffRole: "reviewer", dependsOnRole: "downstream"},
+		},
+	},
+	{
+		templateName: "review_gate",
+		graphPattern: "review_gate",
+		roles:        []string{"upstream", "reviewer", "downstream"},
+		dependencies: []collaborationTemplateCatalogDependencyExpectation{
+			{handoffRole: "reviewer", dependsOnRole: "upstream"},
+			{handoffRole: "downstream", dependsOnRole: "reviewer"},
+		},
+	},
+}
+
+func collaborationTemplateCatalogMetadataFailure(value map[string]any) string {
+	for _, expectation := range collaborationTemplateCatalogMetadataExpectations {
+		template := collaborationTemplateCatalogTemplate(value, expectation.templateName)
+		if template == nil {
+			return "collaboration_template_list did not return " + expectation.templateName
+		}
+		if !collaborationTemplateCatalogHasMetadata(template, expectation) {
+			return "collaboration_template_list metadata for " + expectation.templateName + " is incomplete"
+		}
 	}
 	return ""
 }
@@ -1068,14 +1103,24 @@ func collaborationTemplateCatalogTemplate(value map[string]any, templateName str
 	return nil
 }
 
-func collaborationTemplateCatalogHasMetadata(template map[string]any) bool {
+func collaborationTemplateCatalogHasMetadata(template map[string]any, expectation collaborationTemplateCatalogMetadataExpectation) bool {
 	roles, ok := structuredValue(template, "roles")
-	if !ok || !stringCollectionContains(roles, "upstream") || !stringCollectionContains(roles, "downstream") || !stringCollectionContains(roles, "reviewer") {
+	if !ok {
 		return false
 	}
+	for _, role := range expectation.roles {
+		if !stringCollectionContains(roles, role) {
+			return false
+		}
+	}
 	dependencies, ok := structuredValue(template, "dependencies")
-	if !ok || !collaborationTemplateDependencyContains(dependencies, "downstream", "upstream") || !collaborationTemplateDependencyContains(dependencies, "reviewer", "downstream") {
+	if !ok {
 		return false
+	}
+	for _, dependency := range expectation.dependencies {
+		if !collaborationTemplateDependencyContains(dependencies, dependency.handoffRole, dependency.dependsOnRole) {
+			return false
+		}
 	}
 	acceptanceCriteria, ok := structuredValue(template, "acceptance_criteria")
 	if !ok || !nonEmptyStringCollection(acceptanceCriteria) {
@@ -1085,7 +1130,7 @@ func collaborationTemplateCatalogHasMetadata(template map[string]any) bool {
 	if !ok || !nonEmptyStringCollection(safetyBoundaries) {
 		return false
 	}
-	return collaborationTemplateNumberEquals(template, "handoff_count", 3) && collaborationTemplateBoolEquals(template, "requires_review", true) && nestedString(template, "graph_pattern") == "linear_upstream_downstream_review"
+	return collaborationTemplateNumberEquals(template, "handoff_count", 3) && collaborationTemplateBoolEquals(template, "requires_review", true) && nestedString(template, "graph_pattern") == expectation.graphPattern
 }
 
 func collaborationTemplateDependencyContains(value any, handoffRole, dependsOnRole string) bool {

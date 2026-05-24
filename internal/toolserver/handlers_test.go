@@ -135,15 +135,19 @@ func TestHandleCollaborationTemplateList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleCollaborationTemplateList: %v", err)
 	}
-	if len(listed.Templates) != 1 {
-		t.Fatalf("expected 1 template, got %+v", listed.Templates)
+	if len(listed.Templates) != 2 {
+		t.Fatalf("expected 2 templates, got %+v", listed.Templates)
 	}
-	template := listed.Templates[0]
-	if template.Name != "upstream_downstream_review" {
-		t.Fatalf("expected upstream_downstream_review, got %q", template.Name)
+	upstreamReview := toolserverTemplateByName(t, listed.Templates, "upstream_downstream_review")
+	if upstreamReview.GraphPattern != "linear_upstream_downstream_review" || len(upstreamReview.AcceptanceCriteria) == 0 || len(upstreamReview.SafetyBoundaries) == 0 {
+		t.Fatalf("expected upstream_downstream_review metadata, got %+v", upstreamReview)
 	}
-	if template.GraphPattern != "linear_upstream_downstream_review" || len(template.AcceptanceCriteria) == 0 || len(template.SafetyBoundaries) == 0 {
-		t.Fatalf("expected template metadata, got %+v", template)
+	reviewGate := toolserverTemplateByName(t, listed.Templates, "review_gate")
+	if reviewGate.GraphPattern != "review_gate" || len(reviewGate.AcceptanceCriteria) == 0 || len(reviewGate.SafetyBoundaries) == 0 {
+		t.Fatalf("expected review_gate metadata, got %+v", reviewGate)
+	}
+	if !toolserverTemplateDependencyContains(reviewGate.Dependencies, "reviewer", "upstream") || !toolserverTemplateDependencyContains(reviewGate.Dependencies, "downstream", "reviewer") {
+		t.Fatalf("expected review_gate dependency metadata, got %+v", reviewGate.Dependencies)
 	}
 }
 
@@ -168,6 +172,35 @@ func TestHandleCollaborationTemplateApplyCreatesChain(t *testing.T) {
 	}
 	if len(result.Handoffs[2].DependsOnHandoffIDs) != 1 || result.Handoffs[2].DependsOnHandoffIDs[0] != result.Handoffs[1].ID {
 		t.Fatalf("expected reviewer dependency on downstream, got %+v", result.Handoffs[2].DependsOnHandoffIDs)
+	}
+}
+
+func TestHandleCollaborationTemplateApplyCreatesReviewGateChain(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	input := validToolserverCollaborationTemplateApplyInput()
+	input.TemplateName = "review_gate"
+
+	result, err := h.HandleCollaborationTemplateApply(context.Background(), input)
+	if err != nil {
+		t.Fatalf("HandleCollaborationTemplateApply: %v", err)
+	}
+	if result.TemplateName != "review_gate" {
+		t.Fatalf("expected template name, got %q", result.TemplateName)
+	}
+	if len(result.Handoffs) != 3 {
+		t.Fatalf("expected 3 handoffs, got %+v", result.Handoffs)
+	}
+	if result.Workflow.ID == "" || result.Workflow.ID != result.Handoffs[0].WorkflowID || result.Workflow.ID != result.Handoffs[2].WorkflowID {
+		t.Fatalf("expected one workflow, got workflow=%+v handoffs=%+v", result.Workflow, result.Handoffs)
+	}
+	if result.Workflow.CurrentHandoffID != result.Handoffs[2].ID {
+		t.Fatalf("expected downstream current handoff, got %+v", result.Workflow)
+	}
+	if len(result.Handoffs[1].DependsOnHandoffIDs) != 1 || result.Handoffs[1].DependsOnHandoffIDs[0] != result.Handoffs[0].ID {
+		t.Fatalf("expected reviewer dependency on upstream, got %+v", result.Handoffs[1].DependsOnHandoffIDs)
+	}
+	if len(result.Handoffs[2].DependsOnHandoffIDs) != 1 || result.Handoffs[2].DependsOnHandoffIDs[0] != result.Handoffs[1].ID {
+		t.Fatalf("expected downstream dependency on reviewer, got %+v", result.Handoffs[2].DependsOnHandoffIDs)
 	}
 }
 
@@ -226,6 +259,26 @@ func TestHandleCollaborationTemplateApplyRejectsUnsafeProjectRef(t *testing.T) {
 	if !strings.Contains(err.Error(), "project_ref") {
 		t.Fatalf("expected project_ref error, got %v", err)
 	}
+}
+
+func toolserverTemplateByName(t *testing.T, templates []orchestrator.CollaborationTemplate, name string) orchestrator.CollaborationTemplate {
+	t.Helper()
+	for _, template := range templates {
+		if template.Name == name {
+			return template
+		}
+	}
+	t.Fatalf("expected collaboration template %q in %+v", name, templates)
+	return orchestrator.CollaborationTemplate{}
+}
+
+func toolserverTemplateDependencyContains(dependencies []orchestrator.CollaborationTemplateDependency, handoffRole, dependsOnRole string) bool {
+	for _, dependency := range dependencies {
+		if dependency.HandoffRole == handoffRole && dependency.DependsOnRole == dependsOnRole {
+			return true
+		}
+	}
+	return false
 }
 
 func validToolserverCollaborationTemplateApplyInput() CollaborationTemplateApplyInput {
