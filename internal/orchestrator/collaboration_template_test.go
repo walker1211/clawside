@@ -27,6 +27,27 @@ func TestListCollaborationTemplatesReturnsUpstreamDownstreamReview(t *testing.T)
 	if !template.RequiresReview {
 		t.Fatalf("expected template to require review")
 	}
+	if template.GraphPattern != "linear_upstream_downstream_review" {
+		t.Fatalf("expected graph pattern, got %q", template.GraphPattern)
+	}
+	assertStringSet(t, template.Roles, []string{"upstream", "downstream", "reviewer"})
+	assertTemplateDependencies(t, template.Dependencies, []CollaborationTemplateDependency{
+		{HandoffRole: "downstream", DependsOnRole: "upstream"},
+		{HandoffRole: "reviewer", DependsOnRole: "downstream"},
+	})
+	assertStringSet(t, template.AcceptanceCriteria, []string{
+		"creates one workflow with upstream, downstream, and reviewer handoffs",
+		"downstream is blocked until upstream completes",
+		"reviewer is blocked until downstream completes",
+		"all handoffs are required for workflow completion",
+		"default watches are created for each handoff",
+	})
+	assertStringSet(t, template.SafetyBoundaries, []string{
+		"truth-plane-only workflow and handoff creation",
+		"does not launch workers or runtime sessions",
+		"does not call sender delivery or Telegram",
+		"does not accept command, args, local paths, prompts, tokens, session IDs, or job IDs",
+	})
 }
 
 func TestApplyCollaborationTemplateCreatesDependencyChain(t *testing.T) {
@@ -242,5 +263,37 @@ func assertTemplateHandoff(t *testing.T, handoff Handoff, wantSender ActorRef, w
 	}
 	if handoff.DeliveryTargetRef != "agent:"+wantReceiverID {
 		t.Fatalf("expected delivery target agent:%s, got %q", wantReceiverID, handoff.DeliveryTargetRef)
+	}
+}
+
+func assertStringSet(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("expected %+v, got %+v", want, got)
+	}
+	seen := make(map[string]bool, len(got))
+	for _, value := range got {
+		seen[value] = true
+	}
+	for _, value := range want {
+		if !seen[value] {
+			t.Fatalf("expected %+v to contain %q", got, value)
+		}
+	}
+}
+
+func assertTemplateDependencies(t *testing.T, got, want []CollaborationTemplateDependency) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("expected dependencies %+v, got %+v", want, got)
+	}
+	seen := make(map[CollaborationTemplateDependency]bool, len(got))
+	for _, dependency := range got {
+		seen[dependency] = true
+	}
+	for _, dependency := range want {
+		if !seen[dependency] {
+			t.Fatalf("expected dependencies %+v to contain %+v", got, dependency)
+		}
 	}
 }

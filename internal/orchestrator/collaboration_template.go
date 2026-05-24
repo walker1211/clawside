@@ -13,10 +13,20 @@ const (
 )
 
 type CollaborationTemplate struct {
-	Name           string `json:"name"`
-	Description    string `json:"description"`
-	HandoffCount   int    `json:"handoff_count"`
-	RequiresReview bool   `json:"requires_review"`
+	Name               string                            `json:"name"`
+	Description        string                            `json:"description"`
+	HandoffCount       int                               `json:"handoff_count"`
+	RequiresReview     bool                              `json:"requires_review"`
+	GraphPattern       string                            `json:"graph_pattern"`
+	Roles              []string                          `json:"roles"`
+	Dependencies       []CollaborationTemplateDependency `json:"dependencies"`
+	AcceptanceCriteria []string                          `json:"acceptance_criteria"`
+	SafetyBoundaries   []string                          `json:"safety_boundaries"`
+}
+
+type CollaborationTemplateDependency struct {
+	HandoffRole   string `json:"handoff_role"`
+	DependsOnRole string `json:"depends_on_role"`
 }
 
 type CollaborationTemplateApplyInput struct {
@@ -46,6 +56,25 @@ func (s *Service) ListCollaborationTemplates() []CollaborationTemplate {
 			Description:    "Create an upstream -> downstream -> reviewer workflow using durable handoffs.",
 			HandoffCount:   3,
 			RequiresReview: true,
+			GraphPattern:   "linear_upstream_downstream_review",
+			Roles:          []string{"upstream", "downstream", "reviewer"},
+			Dependencies: []CollaborationTemplateDependency{
+				{HandoffRole: "downstream", DependsOnRole: "upstream"},
+				{HandoffRole: "reviewer", DependsOnRole: "downstream"},
+			},
+			AcceptanceCriteria: []string{
+				"creates one workflow with upstream, downstream, and reviewer handoffs",
+				"downstream is blocked until upstream completes",
+				"reviewer is blocked until downstream completes",
+				"all handoffs are required for workflow completion",
+				"default watches are created for each handoff",
+			},
+			SafetyBoundaries: []string{
+				"truth-plane-only workflow and handoff creation",
+				"does not launch workers or runtime sessions",
+				"does not call sender delivery or Telegram",
+				"does not accept command, args, local paths, prompts, tokens, session IDs, or job IDs",
+			},
 		},
 	}
 }

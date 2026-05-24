@@ -913,9 +913,7 @@ func TestCheckMultiAgentCoordinationCoversRegistryWorkAndWatchSuggestions(t *tes
 
 func TestCheckCollaborationTemplateCreatesChainAndProjection(t *testing.T) {
 	client := &scriptedSmokeMCPClient{results: []*mcp.CallToolResult{
-		structuredSmokeResult(map[string]any{"templates": []any{
-			map[string]any{"name": "upstream_downstream_review", "handoff_count": float64(3), "requires_review": true},
-		}}),
+		structuredSmokeResult(collaborationTemplateCatalogFixture()),
 		structuredSmokeResult(map[string]any{
 			"template_name": "upstream_downstream_review",
 			"workflow":      map[string]any{"id": "workflow-1"},
@@ -995,6 +993,85 @@ func TestCheckCollaborationTemplateCreatesChainAndProjection(t *testing.T) {
 	}
 	if _, ok := applyArgs["command"]; ok {
 		t.Fatalf("collaboration template smoke must not pass caller command: %+v", applyArgs)
+	}
+}
+
+func collaborationTemplateCatalogFixture() map[string]any {
+	return map[string]any{"templates": []any{
+		map[string]any{
+			"name":                "upstream_downstream_review",
+			"handoff_count":       float64(3),
+			"requires_review":     true,
+			"graph_pattern":       "linear_upstream_downstream_review",
+			"roles":               []any{"upstream", "downstream", "reviewer"},
+			"dependencies":        []any{map[string]any{"handoff_role": "downstream", "depends_on_role": "upstream"}, map[string]any{"handoff_role": "reviewer", "depends_on_role": "downstream"}},
+			"acceptance_criteria": []any{"creates one workflow with upstream, downstream, and reviewer handoffs"},
+			"safety_boundaries":   []any{"truth-plane-only workflow and handoff creation", "does not launch workers or runtime sessions"},
+		},
+	}}
+}
+
+func TestCheckCollaborationTemplateRequiresCatalogMetadata(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: collaborationTemplateSmokeResults(map[string]any{"templates": []any{
+		map[string]any{"name": "upstream_downstream_review", "handoff_count": float64(3), "requires_review": true},
+	}})}
+	report := Report{Status: reportStatusOK}
+
+	check := checkCollaborationTemplate(context.Background(), client, &report, Options{Text: "coordinate template"})
+
+	if check.Status != checkStatusFailed {
+		t.Fatalf("expected collaboration template metadata check to fail, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "metadata") {
+		t.Fatalf("expected metadata failure detail, got %+v", check)
+	}
+}
+
+func collaborationTemplateSmokeResults(catalog map[string]any) []*mcp.CallToolResult {
+	return []*mcp.CallToolResult{
+		structuredSmokeResult(catalog),
+		structuredSmokeResult(map[string]any{
+			"template_name": "upstream_downstream_review",
+			"workflow":      map[string]any{"id": "workflow-1"},
+			"handoffs": []any{
+				map[string]any{"id": "upstream-1", "workflow_id": "workflow-1"},
+				map[string]any{"id": "downstream-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"upstream-1"}},
+				map[string]any{"id": "reviewer-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"downstream-1"}},
+			},
+		}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "upstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{
+				"handoff": map[string]any{"id": "downstream-1"},
+				"reasons": []any{map[string]any{"code": "dependency_incomplete", "dependency_handoff_id": "upstream-1"}},
+			},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-upstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "downstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-downstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "reviewer-1"}},
+		}}),
 	}
 }
 

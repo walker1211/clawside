@@ -138,8 +138,12 @@ func TestHandleCollaborationTemplateList(t *testing.T) {
 	if len(listed.Templates) != 1 {
 		t.Fatalf("expected 1 template, got %+v", listed.Templates)
 	}
-	if listed.Templates[0].Name != "upstream_downstream_review" {
-		t.Fatalf("expected upstream_downstream_review, got %q", listed.Templates[0].Name)
+	template := listed.Templates[0]
+	if template.Name != "upstream_downstream_review" {
+		t.Fatalf("expected upstream_downstream_review, got %q", template.Name)
+	}
+	if template.GraphPattern != "linear_upstream_downstream_review" || len(template.AcceptanceCriteria) == 0 || len(template.SafetyBoundaries) == 0 {
+		t.Fatalf("expected template metadata, got %+v", template)
 	}
 }
 

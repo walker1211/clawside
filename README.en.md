@@ -291,6 +291,8 @@ Current v1 tools:
 - `agent_list`
 - `next_work`
 - `blocked_work`
+- `collaboration_template_list`
+- `collaboration_template_apply`
 - `watch_list`
 - `watch_run`
 - `watch_update`
@@ -322,6 +324,8 @@ Recommended reading:
 - `agent_list`: lists registered agents by capability, project ref, task kind, or status.
 - `next_work`: lists executable handoffs and includes non-blocking liveness / lease warnings plus suggestions.
 - `blocked_work`: lists handoffs with deterministic dependency, watch, reviewer, liveness, and lease reasons plus suggestions.
+- `collaboration_template_list`: lists built-in truth-plane templates with graph pattern, roles, dependencies, acceptance criteria, and safety boundaries.
+- `collaboration_template_apply`: applies a built-in template by creating durable workflow / handoff / dependency / watch records only.
 - `watch_list`: lists watches attached to a handoff.
 - `watch_run`: runs due watch checks at a provided RFC3339 timestamp.
 - `watch_update`: updates a watch deadline, status, or escalation policy.
@@ -349,6 +353,7 @@ Boundaries:
 - `sender_*` observability tools are read-only and do not expose raw message text, raw idempotency keys, or Telegram bot tokens.
 - `handoff_*` / `workflow_*` / `agent_*` / `*_work` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` depend on `--db` pointing to the same sqlite truth store.
 - Agent liveness and lease policy are projection signals only: they do not launch workers, execute commands, clear owners, steal leases, or mutate handoff lifecycle state automatically.
+- Collaboration templates are built-in and truth-plane-only: catalog metadata is descriptive, and apply creates durable workflow / handoff records without accepting command, args, local paths, prompts, tokens, session ids, worker launch fields, sender delivery, or Telegram delivery.
 
 To register with OpenClaw, configure it as a stdio MCP server and point `command` to this repository's `scripts/start_mcp.sh`.
 
@@ -490,6 +495,12 @@ For machine-readable output:
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
+```
+
+To validate the built-in collaboration template catalog and dependency chain, enable the opt-in template smoke. It checks the `upstream_downstream_review` catalog metadata, applies the template, verifies upstream → downstream → reviewer dependency gating, and still does not launch runtime sessions, workers, sender delivery, or Telegram delivery:
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke
 ```
 
 To run a real OpenClaw dispatch smoke through `handoff_dispatch adapter=openclaw`, point the MCP server at the local `openclaw-dispatch` helper and choose an agent that exists in your OpenClaw config. This invokes a real `openclaw agent` run, so it can consume model quota and write local OpenClaw session state:

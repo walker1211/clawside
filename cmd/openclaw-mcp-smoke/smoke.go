@@ -835,8 +835,8 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 	if err != nil {
 		return failedCheck("collaboration_template", err.Error())
 	}
-	if !collaborationTemplateCatalogContains(catalog, "upstream_downstream_review") {
-		return failedCheck("collaboration_template", "collaboration_template_list did not return upstream_downstream_review")
+	if failure := collaborationTemplateCatalogMetadataFailure(catalog, "upstream_downstream_review"); failure != "" {
+		return failedCheck("collaboration_template", failure)
 	}
 
 	applied, err := callStructuredTool(ctx, client, "collaboration_template_apply", map[string]any{
@@ -1036,14 +1036,25 @@ func workItemsContainHandoff(value map[string]any, handoffID string) bool {
 	return false
 }
 
-func collaborationTemplateCatalogContains(value map[string]any, templateName string) bool {
+func collaborationTemplateCatalogMetadataFailure(value map[string]any, templateName string) string {
+	template := collaborationTemplateCatalogTemplate(value, templateName)
+	if template == nil {
+		return "collaboration_template_list did not return " + templateName
+	}
+	if !collaborationTemplateCatalogHasMetadata(template) {
+		return "collaboration_template_list metadata for " + templateName + " is incomplete"
+	}
+	return ""
+}
+
+func collaborationTemplateCatalogTemplate(value map[string]any, templateName string) map[string]any {
 	rawTemplates, ok := structuredValue(value, "templates")
 	if !ok {
-		return false
+		return nil
 	}
 	templates, ok := rawTemplates.([]any)
 	if !ok {
-		return false
+		return nil
 	}
 	for _, template := range templates {
 		templateMap, ok := template.(map[string]any)
@@ -1051,7 +1062,87 @@ func collaborationTemplateCatalogContains(value map[string]any, templateName str
 			continue
 		}
 		if nestedString(templateMap, "name") == templateName {
+			return templateMap
+		}
+	}
+	return nil
+}
+
+func collaborationTemplateCatalogHasMetadata(template map[string]any) bool {
+	roles, ok := structuredValue(template, "roles")
+	if !ok || !stringCollectionContains(roles, "upstream") || !stringCollectionContains(roles, "downstream") || !stringCollectionContains(roles, "reviewer") {
+		return false
+	}
+	dependencies, ok := structuredValue(template, "dependencies")
+	if !ok || !collaborationTemplateDependencyContains(dependencies, "downstream", "upstream") || !collaborationTemplateDependencyContains(dependencies, "reviewer", "downstream") {
+		return false
+	}
+	acceptanceCriteria, ok := structuredValue(template, "acceptance_criteria")
+	if !ok || !nonEmptyStringCollection(acceptanceCriteria) {
+		return false
+	}
+	safetyBoundaries, ok := structuredValue(template, "safety_boundaries")
+	if !ok || !nonEmptyStringCollection(safetyBoundaries) {
+		return false
+	}
+	return collaborationTemplateNumberEquals(template, "handoff_count", 3) && collaborationTemplateBoolEquals(template, "requires_review", true) && nestedString(template, "graph_pattern") == "linear_upstream_downstream_review"
+}
+
+func collaborationTemplateDependencyContains(value any, handoffRole, dependsOnRole string) bool {
+	dependencies, ok := value.([]any)
+	if !ok {
+		return false
+	}
+	for _, dependency := range dependencies {
+		dependencyMap, ok := dependency.(map[string]any)
+		if !ok {
+			continue
+		}
+		if nestedString(dependencyMap, "handoff_role") == handoffRole && nestedString(dependencyMap, "depends_on_role") == dependsOnRole {
 			return true
+		}
+	}
+	return false
+}
+
+func collaborationTemplateNumberEquals(value map[string]any, key string, want float64) bool {
+	raw, ok := structuredValue(value, key)
+	if !ok {
+		return false
+	}
+	switch number := raw.(type) {
+	case float64:
+		return number == want
+	case int:
+		return float64(number) == want
+	case int64:
+		return float64(number) == want
+	}
+	return false
+}
+
+func collaborationTemplateBoolEquals(value map[string]any, key string, want bool) bool {
+	raw, ok := structuredValue(value, key)
+	if !ok {
+		return false
+	}
+	actual, ok := raw.(bool)
+	return ok && actual == want
+}
+
+func nonEmptyStringCollection(value any) bool {
+	switch values := value.(type) {
+	case []any:
+		for _, value := range values {
+			if text, ok := value.(string); ok && strings.TrimSpace(text) != "" {
+				return true
+			}
+		}
+	case []string:
+		for _, value := range values {
+			if strings.TrimSpace(value) != "" {
+				return true
+			}
 		}
 	}
 	return false

@@ -291,6 +291,8 @@ go run ./cmd/clawside-mcp \
 - `agent_list`
 - `next_work`
 - `blocked_work`
+- `collaboration_template_list`
+- `collaboration_template_apply`
 - `watch_list`
 - `watch_run`
 - `watch_update`
@@ -322,6 +324,8 @@ go run ./cmd/clawside-mcp \
 - `agent_list`：按 capability、project ref、task kind 或 status 列出已注册 agents
 - `next_work`：列出可执行 handoffs，并包含非阻断的 liveness / lease warnings 和 suggestions
 - `blocked_work`：列出带有 dependency、watch、reviewer、liveness、lease 原因与建议的 handoffs
+- `collaboration_template_list`：列出 built-in truth-plane 模板，并返回 graph pattern、roles、dependencies、acceptance criteria 和 safety boundaries
+- `collaboration_template_apply`：应用 built-in 模板，只创建 durable workflow / handoff / dependency / watch 记录
 - `watch_list`：列出单个 handoff 当前挂载的 watches
 - `watch_run`：按给定 RFC3339 时间运行 due watch 检查
 - `watch_update`：更新单个 watch 的 deadline、status 或 escalation policy
@@ -349,6 +353,7 @@ go run ./cmd/clawside-mcp \
 - `sender_*` observability tools 只读，不暴露原始消息文本、raw idempotency key 或 Telegram bot token
 - `handoff_*` / `workflow_*` / `agent_*` / `*_work` / `watch_*` / `ownership_get` / `repair_*` / `divergence_list` 依赖 `--db` 指向同一个 sqlite truth store
 - Agent liveness 和 lease policy 只作为 projection signal：不会启动 worker、执行命令、清空 owner、抢占 lease，也不会自动改写 handoff lifecycle state
+- Collaboration templates 是内置且 truth-plane-only：catalog metadata 只描述模板契约，apply 只创建 durable workflow / handoff 记录，不接受 command、args、本地路径、prompt、token、session id、worker launch 字段，也不触发 sender delivery 或 Telegram delivery
 
 如果要在 OpenClaw 中注册，核心是把它作为一个 stdio MCP server 注册，并让 OpenClaw 通过该 server 调用上述 tools。`command` 建议指向当前仓库的 `scripts/start_mcp.sh`。
 
@@ -490,6 +495,12 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
+```
+
+如需验收 built-in collaboration template catalog 和 dependency chain，可打开 opt-in template smoke。它会检查 `upstream_downstream_review` catalog metadata，应用模板，验证 upstream → downstream → reviewer 的依赖 gating，并且仍不会启动 runtime session、worker、sender delivery 或 Telegram delivery：
+
+```bash
+SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke
 ```
 
 如需通过 `handoff_dispatch adapter=openclaw` 跑一次真实 OpenClaw dispatch smoke，请把 MCP server 指向本地 `openclaw-dispatch` helper，并选择一个你的 OpenClaw 配置中真实存在的 agent。该命令会执行一次真实的 `openclaw agent` run，可能消耗模型额度并写入本机 OpenClaw session 状态：
