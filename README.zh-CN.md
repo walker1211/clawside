@@ -369,6 +369,15 @@ CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
 go run ./cmd/clawside-a2a --help
 ```
 
+server 启动后，可以用外部 A2A client 视角做一次本地自检：
+
+```bash
+CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
+  go run ./cmd/clawside-a2a self-test --base-url http://127.0.0.1:8789
+```
+
+`self-test` 会读取 Agent Card、携带 bearer auth 调用 JSON-RPC、创建一条受控 inbound task、读取 `tasks/get`、读取 SSE task stream，然后调用 `tasks/cancel` 收尾。它只会写入一条本地 truth-plane self-test handoff 并标记为 failed；不会启动 runtime session、worker、sender delivery 或 Telegram delivery。
+
 外部 client 建议按这个顺序接入：
 
 1. 读取公开 Agent Card。它的 `metadata` 会声明 endpoint hints、稳定 method matrix、SSE 指引和安全边界。

@@ -369,6 +369,15 @@ Show command help:
 go run ./cmd/clawside-a2a --help
 ```
 
+After the server is running, verify the endpoint as an external A2A client:
+
+```bash
+CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
+  go run ./cmd/clawside-a2a self-test --base-url http://127.0.0.1:8789
+```
+
+`self-test` fetches the Agent Card, calls JSON-RPC with bearer auth, creates one controlled inbound task, reads `tasks/get`, reads the SSE task stream, then calls `tasks/cancel`. It only writes one local truth-plane self-test handoff and marks it failed; it does not launch runtime sessions, workers, sender delivery, or Telegram delivery.
+
 External client sequence:
 
 1. Fetch the public Agent Card. Its `metadata` block advertises endpoint hints, the stable method matrix, SSE guidance, and safety boundaries.
