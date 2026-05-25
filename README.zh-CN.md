@@ -389,7 +389,16 @@ CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
 ./scripts/verify_clawside_a2a.sh
 ```
 
-该脚本会构建临时 `clawside-a2a` binary，创建临时 sqlite DB 和 A2A auth key，启动 localhost server，运行 `self-test`，最后清理临时文件和进程。它只使用本地 truth-plane endpoint，不会启动 runtime session、worker、sender delivery 或 Telegram delivery。
+该脚本会构建临时 A2A binaries，创建临时 sqlite DB 和 A2A auth key，启动 localhost server，运行 `self-test`，再运行外部 example client，最后清理临时文件和进程。它只使用本地 truth-plane endpoint，不会启动 runtime session、worker、sender delivery 或 Telegram delivery。
+
+如果需要一个可运行的外部 client 形态 Go 示例，可以让 `clawside-a2a-example` 连接到运行中的 endpoint：
+
+```bash
+CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
+  go run ./cmd/clawside-a2a-example --base-url http://127.0.0.1:8789
+```
+
+该示例只使用 Agent Card discovery、`/a2a/rpc`、`tasks/get`、path-based SSE 和 `tasks/cancel`。它会创建一条受控 truth-plane handoff，并默认 cancel 收尾；不会启动 worker、session、sender delivery、Telegram delivery 或本地 command。
 
 外部 client 建议按这个顺序接入：
 

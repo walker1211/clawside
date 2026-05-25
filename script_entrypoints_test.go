@@ -163,6 +163,22 @@ func TestStartMCPScriptPassesSenderAuthKeyViaEnv(t *testing.T) {
 	}
 }
 
+func TestVerifyClawsideA2AScriptRunsExternalExampleClient(t *testing.T) {
+	content := readTextFile(t, "scripts/verify_clawside_a2a.sh")
+	for _, want := range []string{
+		"./cmd/clawside-a2a-example",
+		"Running A2A external example client...",
+		"CLAWSIDE_A2A_AUTH_KEY=\"$AUTH_KEY\"",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected verify_clawside_a2a.sh to contain %q", want)
+		}
+	}
+	if strings.Contains(content, "--auth-key") {
+		t.Fatalf("verify_clawside_a2a.sh must not pass A2A auth through argv")
+	}
+}
+
 func TestSecretScanScriptEntrypoint(t *testing.T) {
 	path := "scripts/secret-scan.sh"
 	info, err := os.Stat(path)

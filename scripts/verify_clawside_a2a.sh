@@ -168,12 +168,15 @@ fi
 TMP_DIR="$(mktemp -d)"
 SERVER_LOG="$TMP_DIR/clawside-a2a.log"
 BIN_PATH="$TMP_DIR/clawside-a2a"
+EXAMPLE_BIN_PATH="$TMP_DIR/clawside-a2a-example"
 DB_PATH="$TMP_DIR/a2a.db"
 AUTH_KEY="clawside-a2a-readiness-${RANDOM}-${RANDOM}-$(date +%s)"
 IDEMPOTENCY_KEY="clawside-a2a-readiness-${RANDOM}-${RANDOM}-$(date +%s)"
+EXAMPLE_IDEMPOTENCY_KEY="clawside-a2a-example-${RANDOM}-${RANDOM}-$(date +%s)"
 
-printf 'Building clawside-a2a readiness binary...\n'
+printf 'Building clawside-a2a readiness binaries...\n'
 go -C "$ROOT_DIR" build -o "$BIN_PATH" ./cmd/clawside-a2a
+go -C "$ROOT_DIR" build -o "$EXAMPLE_BIN_PATH" ./cmd/clawside-a2a-example
 
 printf 'Starting temporary clawside-a2a server on %s...\n' "$ADDR"
 env -u SENDER_AUTH_KEY -u SENDER_BASE_URL -u CLAWSIDE_SENDER_BASE_URL \
@@ -190,5 +193,13 @@ env -u SENDER_AUTH_KEY -u SENDER_BASE_URL -u CLAWSIDE_SENDER_BASE_URL \
     --base-url "$BASE_URL" \
     --timeout "$TIMEOUT" \
     --idempotency-key "$IDEMPOTENCY_KEY"
+
+printf 'Running A2A external example client...\n'
+env -u SENDER_AUTH_KEY -u SENDER_BASE_URL -u CLAWSIDE_SENDER_BASE_URL \
+  CLAWSIDE_A2A_AUTH_KEY="$AUTH_KEY" \
+  "$EXAMPLE_BIN_PATH" \
+    --base-url "$BASE_URL" \
+    --timeout "$TIMEOUT" \
+    --idempotency-key "$EXAMPLE_IDEMPOTENCY_KEY"
 
 printf 'A2A readiness ok\n'

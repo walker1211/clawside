@@ -389,7 +389,16 @@ For a repeatable local or CI readiness gate, run the wrapper script instead:
 ./scripts/verify_clawside_a2a.sh
 ```
 
-The wrapper builds a temporary `clawside-a2a` binary, creates a temporary sqlite DB and A2A auth key, starts a localhost server, runs `self-test`, and cleans up. It uses only the local truth-plane endpoint and does not launch runtime sessions, workers, sender delivery, or Telegram delivery.
+The wrapper builds temporary A2A binaries, creates a temporary sqlite DB and A2A auth key, starts a localhost server, runs `self-test`, runs the external example client, and cleans up. It uses only the local truth-plane endpoint and does not launch runtime sessions, workers, sender delivery, or Telegram delivery.
+
+For a runnable external-client-shaped Go example, use `clawside-a2a-example` against a running endpoint:
+
+```bash
+CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
+  go run ./cmd/clawside-a2a-example --base-url http://127.0.0.1:8789
+```
+
+The example uses only Agent Card discovery, `/a2a/rpc`, `tasks/get`, path-based SSE, and `tasks/cancel`. It creates one controlled truth-plane handoff and cancels it by default; it does not launch workers, sessions, sender delivery, Telegram delivery, or local commands.
 
 External client sequence:
 
