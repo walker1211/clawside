@@ -157,16 +157,21 @@ type MultiAgentCoordinationSmokeResult struct {
 }
 
 type CollaborationTemplateSmokeResult struct {
-	TemplateName         string `json:"template_name"`
-	WorkflowID           string `json:"workflow_id"`
-	UpstreamHandoffID    string `json:"upstream_handoff_id"`
-	DownstreamHandoffID  string `json:"downstream_handoff_id"`
-	ReviewerHandoffID    string `json:"reviewer_handoff_id"`
-	DependencyReason     string `json:"dependency_reason"`
-	DownstreamReady      bool   `json:"downstream_ready"`
-	ReviewerReady        bool   `json:"reviewer_ready"`
-	UpstreamFinalState   string `json:"upstream_final_state"`
-	DownstreamFinalState string `json:"downstream_final_state"`
+	TemplateName             string `json:"template_name"`
+	WorkflowID               string `json:"workflow_id"`
+	UpstreamHandoffID        string `json:"upstream_handoff_id"`
+	DownstreamHandoffID      string `json:"downstream_handoff_id"`
+	ReviewerHandoffID        string `json:"reviewer_handoff_id"`
+	DependencyReason         string `json:"dependency_reason"`
+	RegisteredAgents         bool   `json:"registered_agents"`
+	UpstreamProjectReady     bool   `json:"upstream_project_ready"`
+	DownstreamProjectBlocked bool   `json:"downstream_project_blocked"`
+	DownstreamReady          bool   `json:"downstream_ready"`
+	DownstreamProjectReady   bool   `json:"downstream_project_ready"`
+	ReviewerReady            bool   `json:"reviewer_ready"`
+	ReviewerProjectReady     bool   `json:"reviewer_project_ready"`
+	UpstreamFinalState       string `json:"upstream_final_state"`
+	DownstreamFinalState     string `json:"downstream_final_state"`
 }
 
 func (r *Report) addCheck(check CheckResult) {
@@ -831,6 +836,32 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 	if message == "" {
 		message = "Collaboration template smoke test"
 	}
+	agents := []struct {
+		id         string
+		projectRef string
+	}{
+		{id: "upstream", projectRef: "project://smoke/template/upstream"},
+		{id: "downstream", projectRef: "project://smoke/template/downstream"},
+		{id: "reviewer", projectRef: "project://smoke/template/review"},
+	}
+	for _, agent := range agents {
+		if err := registerSmokeAgent(ctx, client, opts, agent.id, []string{agent.projectRef}); err != nil {
+			return failedCheck("collaboration_template", err.Error())
+		}
+	}
+	for _, agent := range agents {
+		listed, err := callStructuredTool(ctx, client, "agent_list", map[string]any{
+			"project_ref": agent.projectRef,
+			"task_kind":   "generic_task",
+			"status":      "available",
+		}, opts)
+		if err != nil {
+			return failedCheck("collaboration_template", err.Error())
+		}
+		if !agentsContainID(listed, agent.id) {
+			return failedCheck("collaboration_template", fmt.Sprintf("agent_list did not return %s for %s", agent.id, agent.projectRef))
+		}
+	}
 
 	catalog, err := callStructuredTool(ctx, client, "collaboration_template_list", map[string]any{}, opts)
 	if err != nil {
@@ -884,19 +915,21 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 		return failedCheck("collaboration_template", "replayed collaboration_template_apply did not return original workflow and handoffs")
 	}
 
-	upstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "upstream", "workflow_id": workflowID}, opts)
+	upstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "upstream", "project_ref": "project://smoke/template/upstream", "workflow_id": workflowID}, opts)
 	if err != nil {
 		return failedCheck("collaboration_template", err.Error())
 	}
-	if !workItemsContainHandoff(upstreamNext, upstreamID) {
+	upstreamProjectReady := workItemsContainHandoff(upstreamNext, upstreamID)
+	if !upstreamProjectReady {
 		return failedCheck("collaboration_template", "next_work did not return the upstream template handoff")
 	}
-	blocked, err := callStructuredTool(ctx, client, "blocked_work", map[string]any{"agent_id": "downstream", "workflow_id": workflowID}, opts)
+	blocked, err := callStructuredTool(ctx, client, "blocked_work", map[string]any{"agent_id": "downstream", "project_ref": "project://smoke/template/downstream", "workflow_id": workflowID}, opts)
 	if err != nil {
 		return failedCheck("collaboration_template", err.Error())
 	}
 	dependencyReason := blockedWorkReasonCode(blocked, downstreamID, "dependency_incomplete", upstreamID)
-	if dependencyReason == "" {
+	downstreamProjectBlocked := dependencyReason != ""
+	if !downstreamProjectBlocked {
 		return failedCheck("collaboration_template", "blocked_work did not report downstream dependency_incomplete")
 	}
 
@@ -904,7 +937,7 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 	if err != nil {
 		return failedCheck("collaboration_template", err.Error())
 	}
-	downstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "downstream", "workflow_id": workflowID}, opts)
+	downstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "downstream", "project_ref": "project://smoke/template/downstream", "workflow_id": workflowID}, opts)
 	if err != nil {
 		return failedCheck("collaboration_template", err.Error())
 	}
@@ -916,7 +949,7 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 	if err != nil {
 		return failedCheck("collaboration_template", err.Error())
 	}
-	reviewerNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "reviewer", "workflow_id": workflowID}, opts)
+	reviewerNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "reviewer", "project_ref": "project://smoke/template/review", "workflow_id": workflowID}, opts)
 	if err != nil {
 		return failedCheck("collaboration_template", err.Error())
 	}
@@ -926,16 +959,21 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 	}
 
 	report.CollaborationTemplateResult = &CollaborationTemplateSmokeResult{
-		TemplateName:         templateName,
-		WorkflowID:           workflowID,
-		UpstreamHandoffID:    upstreamID,
-		DownstreamHandoffID:  downstreamID,
-		ReviewerHandoffID:    reviewerID,
-		DependencyReason:     dependencyReason,
-		DownstreamReady:      downstreamReady,
-		ReviewerReady:        reviewerReady,
-		UpstreamFinalState:   upstreamFinal,
-		DownstreamFinalState: downstreamFinal,
+		TemplateName:             templateName,
+		WorkflowID:               workflowID,
+		UpstreamHandoffID:        upstreamID,
+		DownstreamHandoffID:      downstreamID,
+		ReviewerHandoffID:        reviewerID,
+		DependencyReason:         dependencyReason,
+		RegisteredAgents:         true,
+		UpstreamProjectReady:     upstreamProjectReady,
+		DownstreamProjectBlocked: downstreamProjectBlocked,
+		DownstreamReady:          downstreamReady,
+		DownstreamProjectReady:   downstreamReady,
+		ReviewerReady:            reviewerReady,
+		ReviewerProjectReady:     reviewerReady,
+		UpstreamFinalState:       upstreamFinal,
+		DownstreamFinalState:     downstreamFinal,
 	}
 	return CheckResult{Name: "collaboration_template", Status: checkStatusOK, Detail: fmt.Sprintf("workflow_id=%s reviewer_ready=%t", workflowID, reviewerReady)}
 }

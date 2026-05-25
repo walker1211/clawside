@@ -529,7 +529,7 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 ```
 
-如需验收 built-in collaboration template catalog 和 dependency chain，可打开 opt-in template smoke。它会检查 `upstream_downstream_review`、`review_gate` 和 `fanout_review` catalog metadata，应用 `upstream_downstream_review`，验证 upstream → downstream → reviewer 的依赖 gating，并且仍不会启动 runtime session、worker、sender delivery 或 Telegram delivery：
+如需验收 built-in collaboration template catalog 和 P17 多项目 agent 协作演练路径，可打开 opt-in template smoke。它会检查 `upstream_downstream_review`、`review_gate` 和 `fanout_review` catalog metadata，为 upstream/downstream/reviewer 注册 symbolic `project://...` refs，应用 `upstream_downstream_review`，验证带 project filter 的 `next_work` / `blocked_work` 依赖 gating，验证 upstream 完成后 downstream 进入可执行队列，验证 downstream 完成后 reviewer 进入可执行队列，并检查 template 幂等 replay。这只是 truth-plane coordination evidence：不会调用 `message/send` 或 `message/stream`，不会发送 push notifications，不会启动 runtime session、sandbox 或 worker，不会触发 sender/Telegram delivery，也不接受 command/args/local paths/private prompts/session IDs/tokens/job IDs。
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke

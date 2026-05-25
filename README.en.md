@@ -529,7 +529,7 @@ For machine-readable output:
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 ```
 
-To validate the built-in collaboration template catalog and dependency chain, enable the opt-in template smoke. It checks `upstream_downstream_review`, `review_gate`, and `fanout_review` catalog metadata, applies `upstream_downstream_review`, verifies upstream → downstream → reviewer dependency gating, and still does not launch runtime sessions, workers, sender delivery, or Telegram delivery:
+To validate the built-in collaboration template catalog and the P17 multi-project agent rehearsal path, enable the opt-in template smoke. It checks `upstream_downstream_review`, `review_gate`, and `fanout_review` catalog metadata, registers upstream/downstream/reviewer agents on symbolic `project://...` refs, applies `upstream_downstream_review`, verifies project-filtered `next_work` / `blocked_work` dependency gating, validates downstream readiness after upstream completion, validates reviewer readiness after downstream completion, and checks idempotent template replay. This is truth-plane coordination evidence only: it does not call `message/send` or `message/stream`, send push notifications, launch runtime sessions/sandboxes/workers, trigger sender/Telegram delivery, or accept command/args/local paths/private prompts/session IDs/tokens/job IDs.
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke

@@ -913,6 +913,12 @@ func TestCheckMultiAgentCoordinationCoversRegistryWorkAndWatchSuggestions(t *tes
 
 func TestCheckCollaborationTemplateCreatesChainAndProjection(t *testing.T) {
 	client := &scriptedSmokeMCPClient{results: []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "upstream"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "downstream"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "reviewer"}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "upstream"}}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "downstream"}}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "reviewer"}}}}),
 		structuredSmokeResult(collaborationTemplateCatalogFixture()),
 		structuredSmokeResult(map[string]any{
 			"template_name": "upstream_downstream_review",
@@ -981,7 +987,11 @@ func TestCheckCollaborationTemplateCreatesChainAndProjection(t *testing.T) {
 	if report.CollaborationTemplateResult.DependencyReason != "dependency_incomplete" || !report.CollaborationTemplateResult.DownstreamReady || !report.CollaborationTemplateResult.ReviewerReady {
 		t.Fatalf("unexpected collaboration template result: %+v", report.CollaborationTemplateResult)
 	}
+	if !report.CollaborationTemplateResult.RegisteredAgents || !report.CollaborationTemplateResult.UpstreamProjectReady || !report.CollaborationTemplateResult.DownstreamProjectBlocked || !report.CollaborationTemplateResult.DownstreamProjectReady || !report.CollaborationTemplateResult.ReviewerProjectReady {
+		t.Fatalf("expected project-filtered rehearsal evidence, got %+v", report.CollaborationTemplateResult)
+	}
 	wantNames := []string{
+		"agent_register", "agent_register", "agent_register", "agent_list", "agent_list", "agent_list",
 		"collaboration_template_list", "collaboration_template_apply", "collaboration_template_apply", "next_work", "blocked_work",
 		"handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
 		"next_work", "handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
@@ -995,29 +1005,98 @@ func TestCheckCollaborationTemplateCreatesChainAndProjection(t *testing.T) {
 			t.Fatalf("call %d: expected %q, got %+v", i, want, client.calls[i])
 		}
 	}
-	applyArgs, ok := client.calls[1].Params.Arguments.(map[string]any)
-	if !ok {
-		t.Fatalf("expected template apply args map, got %+v", client.calls[1].Params.Arguments)
+	for _, tc := range []struct {
+		callIndex  int
+		projectRef string
+	}{
+		{callIndex: 0, projectRef: "project://smoke/template/upstream"},
+		{callIndex: 1, projectRef: "project://smoke/template/downstream"},
+		{callIndex: 2, projectRef: "project://smoke/template/review"},
+	} {
+		registerArgs := smokeCallArgsMap(t, client, tc.callIndex)
+		assertSmokeProjectRefs(t, registerArgs, tc.projectRef)
+		assertSmokeArgsDoNotContainExecutionFields(t, registerArgs, "agent register")
 	}
+	for _, tc := range []struct {
+		callIndex  int
+		projectRef string
+	}{
+		{callIndex: 3, projectRef: "project://smoke/template/upstream"},
+		{callIndex: 4, projectRef: "project://smoke/template/downstream"},
+		{callIndex: 5, projectRef: "project://smoke/template/review"},
+	} {
+		assertSmokeProjectRef(t, smokeCallArgsMap(t, client, tc.callIndex), tc.projectRef)
+	}
+	applyArgs := smokeCallArgsMap(t, client, 7)
 	key, ok := applyArgs["idempotency_key"].(string)
 	if !ok || !strings.HasPrefix(key, "openclaw-smoke-collaboration-template-") || applyArgs["template_name"] != "upstream_downstream_review" || applyArgs["intent"] != "coordinate template" {
 		t.Fatalf("unexpected template apply args: %+v", applyArgs)
 	}
-	for _, forbidden := range []string{"command", "args", "path", "cwd", "prompt", "session_id", "token", "secret", "sender_job", "delivery_job"} {
-		if _, ok := applyArgs[forbidden]; ok {
-			t.Fatalf("collaboration template smoke must not pass execution field %q: %+v", forbidden, applyArgs)
-		}
-	}
-	replayApplyArgs, ok := client.calls[2].Params.Arguments.(map[string]any)
-	if !ok {
-		t.Fatalf("expected replay template apply args map, got %+v", client.calls[2].Params.Arguments)
-	}
+	assertSmokeArgsDoNotContainExecutionFields(t, applyArgs, "collaboration template apply")
+	replayApplyArgs := smokeCallArgsMap(t, client, 8)
 	if replayApplyArgs["idempotency_key"] != applyArgs["idempotency_key"] || replayApplyArgs["template_name"] != applyArgs["template_name"] || replayApplyArgs["intent"] != applyArgs["intent"] {
 		t.Fatalf("unexpected replay template apply args: first=%+v replay=%+v", applyArgs, replayApplyArgs)
 	}
+	assertSmokeArgsDoNotContainExecutionFields(t, replayApplyArgs, "collaboration template replay")
+	for _, tc := range []struct {
+		callIndex  int
+		agentID    string
+		projectRef string
+	}{
+		{callIndex: 9, agentID: "upstream", projectRef: "project://smoke/template/upstream"},
+		{callIndex: 10, agentID: "downstream", projectRef: "project://smoke/template/downstream"},
+		{callIndex: 17, agentID: "downstream", projectRef: "project://smoke/template/downstream"},
+		{callIndex: 24, agentID: "reviewer", projectRef: "project://smoke/template/review"},
+	} {
+		args := smokeCallArgsMap(t, client, tc.callIndex)
+		if args["agent_id"] != tc.agentID || args["workflow_id"] != "workflow-1" {
+			t.Fatalf("unexpected work query args at call %d: %+v", tc.callIndex, args)
+		}
+		assertSmokeProjectRef(t, args, tc.projectRef)
+	}
+}
+
+func smokeCallArgsMap(t *testing.T, client *scriptedSmokeMCPClient, index int) map[string]any {
+	t.Helper()
+	args, ok := client.calls[index].Params.Arguments.(map[string]any)
+	if !ok {
+		t.Fatalf("expected call %d args map, got %+v", index, client.calls[index].Params.Arguments)
+	}
+	return args
+}
+
+func assertSmokeProjectRef(t *testing.T, args map[string]any, want string) {
+	t.Helper()
+	if args["project_ref"] != want {
+		t.Fatalf("expected project_ref %q, got %+v", want, args)
+	}
+}
+
+func assertSmokeProjectRefs(t *testing.T, args map[string]any, want string) {
+	t.Helper()
+	rawRefs, ok := args["project_refs"]
+	if !ok {
+		t.Fatalf("expected project_refs in %+v", args)
+	}
+	switch refs := rawRefs.(type) {
+	case []string:
+		if len(refs) != 1 || refs[0] != want {
+			t.Fatalf("expected project_refs [%q], got %+v", want, refs)
+		}
+	case []any:
+		if len(refs) != 1 || refs[0] != want {
+			t.Fatalf("expected project_refs [%q], got %+v", want, refs)
+		}
+	default:
+		t.Fatalf("expected project_refs slice, got %+v", rawRefs)
+	}
+}
+
+func assertSmokeArgsDoNotContainExecutionFields(t *testing.T, args map[string]any, context string) {
+	t.Helper()
 	for _, forbidden := range []string{"command", "args", "path", "cwd", "prompt", "session_id", "token", "secret", "sender_job", "delivery_job"} {
-		if _, ok := replayApplyArgs[forbidden]; ok {
-			t.Fatalf("collaboration template replay smoke must not pass execution field %q: %+v", forbidden, replayApplyArgs)
+		if _, ok := args[forbidden]; ok {
+			t.Fatalf("%s smoke must not pass execution field %q: %+v", context, forbidden, args)
 		}
 	}
 }
@@ -1135,6 +1214,12 @@ func TestCheckCollaborationTemplateRequiresFanoutReviewCatalogMetadata(t *testin
 
 func collaborationTemplateSmokeResults(catalog map[string]any) []*mcp.CallToolResult {
 	return []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "upstream"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "downstream"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "reviewer"}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "upstream"}}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "downstream"}}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "reviewer"}}}}),
 		structuredSmokeResult(catalog),
 		structuredSmokeResult(map[string]any{
 			"template_name": "upstream_downstream_review",

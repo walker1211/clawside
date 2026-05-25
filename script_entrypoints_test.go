@@ -1364,6 +1364,29 @@ func TestOpenClawMCPSmokeVerifierScriptEntrypoint(t *testing.T) {
 	}
 }
 
+func TestVerifyOpenClawMCPScriptSupportsCollaborationTemplateSmoke(t *testing.T) {
+	path := "scripts/verify_openclaw_mcp.sh"
+	content := readTextFile(t, path)
+
+	for _, want := range []string{
+		"--collaboration-template-smoke",
+		"COLLABORATION_TEMPLATE_SMOKE=\"false\"",
+		"--collaboration-template-smoke)",
+		"COLLABORATION_TEMPLATE_SMOKE=\"true\"",
+		"if [[ \"$COLLABORATION_TEMPLATE_SMOKE\" == \"true\" ]]; then",
+		"set -- \"$@\" --collaboration-template-smoke",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	for _, forbidden := range []string{"COLLABORATION_TEMPLATE_ARGS=()", "${COLLABORATION_TEMPLATE_ARGS[@]}", "--sender-auth-key \"$"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("expected %s not to contain %q", path, forbidden)
+		}
+	}
+}
+
 func TestVerifyOpenClawMCPScriptSupportsDivergenceResultPath(t *testing.T) {
 	path := "scripts/verify_openclaw_mcp.sh"
 	content := readTextFile(t, path)

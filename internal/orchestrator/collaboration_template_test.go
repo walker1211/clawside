@@ -247,6 +247,76 @@ func TestApplyCollaborationTemplateIntegratesWithNextAndBlockedWork(t *testing.T
 	}
 }
 
+func TestApplyCollaborationTemplateSupportsProjectFilteredAgentRehearsal(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	mustRegisterTestAgent(t, svc, "upstream", []string{"planning"}, []string{"project://upstream"}, []TaskKind{TaskGeneric})
+	mustRegisterTestAgent(t, svc, "downstream", []string{"implementation"}, []string{"project://downstream"}, []TaskKind{TaskGeneric})
+	mustRegisterTestAgent(t, svc, "reviewer", []string{"review"}, []string{"project://review"}, []TaskKind{TaskGeneric})
+
+	result, err := svc.ApplyCollaborationTemplate(ctx, validCollaborationTemplateApplyInput())
+	if err != nil {
+		t.Fatalf("ApplyCollaborationTemplate: %v", err)
+	}
+	upstream, downstream, reviewer := result.Handoffs[0], result.Handoffs[1], result.Handoffs[2]
+
+	upstreamWork, err := svc.NextWork(ctx, WorkQuery{AgentID: "upstream", ProjectRef: "project://upstream", WorkflowID: result.Workflow.ID})
+	if err != nil {
+		t.Fatalf("NextWork upstream: %v", err)
+	}
+	if len(upstreamWork) != 1 || upstreamWork[0].Handoff.ID != upstream.ID {
+		t.Fatalf("expected upstream project next work, got %+v", upstreamWork)
+	}
+	downstreamWrongProject, err := svc.NextWork(ctx, WorkQuery{AgentID: "downstream", ProjectRef: "project://upstream", WorkflowID: result.Workflow.ID})
+	if err != nil {
+		t.Fatalf("NextWork downstream wrong project: %v", err)
+	}
+	if len(downstreamWrongProject) != 0 {
+		t.Fatalf("expected no downstream work for upstream project ref, got %+v", downstreamWrongProject)
+	}
+	downstreamBlocked, err := svc.BlockedWork(ctx, WorkQuery{AgentID: "downstream", ProjectRef: "project://downstream", WorkflowID: result.Workflow.ID})
+	if err != nil {
+		t.Fatalf("BlockedWork downstream: %v", err)
+	}
+	if len(downstreamBlocked) != 1 || downstreamBlocked[0].Handoff.ID != downstream.ID {
+		t.Fatalf("expected downstream project blocked work, got %+v", downstreamBlocked)
+	}
+	if len(downstreamBlocked[0].Reasons) != 1 || downstreamBlocked[0].Reasons[0].Code != "dependency_incomplete" || downstreamBlocked[0].Reasons[0].DependencyHandoffID != upstream.ID {
+		t.Fatalf("expected downstream dependency reason, got %+v", downstreamBlocked[0].Reasons)
+	}
+
+	upstreamCreated := CreateHandoffResult{Workflow: result.Workflow, Handoff: upstream}
+	mustRecordAcceptedEvent(t, svc, upstreamCreated, EventReceived, upstream.ReceiverActor)
+	mustRecordAcceptedEvent(t, svc, upstreamCreated, EventStarted, upstream.ReceiverActor)
+	mustRecordAcceptedEvent(t, svc, upstreamCreated, EventCompleted, upstream.ReceiverActor)
+	downstreamNext, err := svc.NextWork(ctx, WorkQuery{AgentID: "downstream", ProjectRef: "project://downstream", WorkflowID: result.Workflow.ID})
+	if err != nil {
+		t.Fatalf("NextWork downstream unblocked: %v", err)
+	}
+	if len(downstreamNext) != 1 || downstreamNext[0].Handoff.ID != downstream.ID {
+		t.Fatalf("expected downstream project next work after upstream completion, got %+v", downstreamNext)
+	}
+
+	downstreamCreated := CreateHandoffResult{Workflow: result.Workflow, Handoff: downstream}
+	mustRecordAcceptedEvent(t, svc, downstreamCreated, EventReceived, downstream.ReceiverActor)
+	mustRecordAcceptedEvent(t, svc, downstreamCreated, EventStarted, downstream.ReceiverActor)
+	mustRecordAcceptedEvent(t, svc, downstreamCreated, EventCompleted, downstream.ReceiverActor)
+	reviewerWrongProject, err := svc.NextWork(ctx, WorkQuery{AgentID: "reviewer", ProjectRef: "project://downstream", WorkflowID: result.Workflow.ID})
+	if err != nil {
+		t.Fatalf("NextWork reviewer wrong project: %v", err)
+	}
+	if len(reviewerWrongProject) != 0 {
+		t.Fatalf("expected no reviewer work for downstream project ref, got %+v", reviewerWrongProject)
+	}
+	reviewerNext, err := svc.NextWork(ctx, WorkQuery{AgentID: "reviewer", ProjectRef: "project://review", WorkflowID: result.Workflow.ID})
+	if err != nil {
+		t.Fatalf("NextWork reviewer unblocked: %v", err)
+	}
+	if len(reviewerNext) != 1 || reviewerNext[0].Handoff.ID != reviewer.ID {
+		t.Fatalf("expected reviewer project next work after downstream completion, got %+v", reviewerNext)
+	}
+}
+
 func TestApplyReviewGateCollaborationTemplateIntegratesWithNextAndBlockedWork(t *testing.T) {
 	svc := newTestService(t)
 	ctx := context.Background()
