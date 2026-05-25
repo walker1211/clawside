@@ -1018,6 +1018,16 @@ func collaborationTemplateCatalogFixture() map[string]any {
 			"acceptance_criteria": []any{"creates one workflow with upstream, reviewer, and downstream handoffs"},
 			"safety_boundaries":   []any{"truth-plane-only workflow and handoff creation", "does not launch workers or runtime sessions"},
 		},
+		map[string]any{
+			"name":                "fanout_review",
+			"handoff_count":       float64(3),
+			"requires_review":     true,
+			"graph_pattern":       "fanout_review",
+			"roles":               []any{"upstream", "downstream", "reviewer"},
+			"dependencies":        []any{map[string]any{"handoff_role": "downstream", "depends_on_role": "upstream"}, map[string]any{"handoff_role": "reviewer", "depends_on_role": "upstream"}},
+			"acceptance_criteria": []any{"creates one workflow with upstream, downstream, and reviewer handoffs"},
+			"safety_boundaries":   []any{"truth-plane-only workflow and handoff creation", "does not launch workers or runtime sessions"},
+		},
 	}}
 }
 
@@ -1059,6 +1069,41 @@ func TestCheckCollaborationTemplateRequiresReviewGateCatalogMetadata(t *testing.
 	}
 	if !strings.Contains(check.Detail, "review_gate") {
 		t.Fatalf("expected review_gate failure detail, got %+v", check)
+	}
+}
+
+func TestCheckCollaborationTemplateRequiresFanoutReviewCatalogMetadata(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: collaborationTemplateSmokeResults(map[string]any{"templates": []any{
+		map[string]any{
+			"name":                "upstream_downstream_review",
+			"handoff_count":       float64(3),
+			"requires_review":     true,
+			"graph_pattern":       "linear_upstream_downstream_review",
+			"roles":               []any{"upstream", "downstream", "reviewer"},
+			"dependencies":        []any{map[string]any{"handoff_role": "downstream", "depends_on_role": "upstream"}, map[string]any{"handoff_role": "reviewer", "depends_on_role": "downstream"}},
+			"acceptance_criteria": []any{"creates one workflow with upstream, downstream, and reviewer handoffs"},
+			"safety_boundaries":   []any{"truth-plane-only workflow and handoff creation", "does not launch workers or runtime sessions"},
+		},
+		map[string]any{
+			"name":                "review_gate",
+			"handoff_count":       float64(3),
+			"requires_review":     true,
+			"graph_pattern":       "review_gate",
+			"roles":               []any{"upstream", "reviewer", "downstream"},
+			"dependencies":        []any{map[string]any{"handoff_role": "reviewer", "depends_on_role": "upstream"}, map[string]any{"handoff_role": "downstream", "depends_on_role": "reviewer"}},
+			"acceptance_criteria": []any{"creates one workflow with upstream, reviewer, and downstream handoffs"},
+			"safety_boundaries":   []any{"truth-plane-only workflow and handoff creation", "does not launch workers or runtime sessions"},
+		},
+	}})}
+	report := Report{Status: reportStatusOK}
+
+	check := checkCollaborationTemplate(context.Background(), client, &report, Options{Text: "coordinate template"})
+
+	if check.Status != checkStatusFailed {
+		t.Fatalf("expected missing fanout_review metadata check to fail, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "fanout_review") {
+		t.Fatalf("expected fanout_review failure detail, got %+v", check)
 	}
 }
 

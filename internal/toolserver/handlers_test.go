@@ -135,8 +135,8 @@ func TestHandleCollaborationTemplateList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleCollaborationTemplateList: %v", err)
 	}
-	if len(listed.Templates) != 2 {
-		t.Fatalf("expected 2 templates, got %+v", listed.Templates)
+	if len(listed.Templates) != 3 {
+		t.Fatalf("expected 3 templates, got %+v", listed.Templates)
 	}
 	upstreamReview := toolserverTemplateByName(t, listed.Templates, "upstream_downstream_review")
 	if upstreamReview.GraphPattern != "linear_upstream_downstream_review" || len(upstreamReview.AcceptanceCriteria) == 0 || len(upstreamReview.SafetyBoundaries) == 0 {
@@ -148,6 +148,13 @@ func TestHandleCollaborationTemplateList(t *testing.T) {
 	}
 	if !toolserverTemplateDependencyContains(reviewGate.Dependencies, "reviewer", "upstream") || !toolserverTemplateDependencyContains(reviewGate.Dependencies, "downstream", "reviewer") {
 		t.Fatalf("expected review_gate dependency metadata, got %+v", reviewGate.Dependencies)
+	}
+	fanoutReview := toolserverTemplateByName(t, listed.Templates, "fanout_review")
+	if fanoutReview.GraphPattern != "fanout_review" || len(fanoutReview.AcceptanceCriteria) == 0 || len(fanoutReview.SafetyBoundaries) == 0 {
+		t.Fatalf("expected fanout_review metadata, got %+v", fanoutReview)
+	}
+	if !toolserverTemplateDependencyContains(fanoutReview.Dependencies, "downstream", "upstream") || !toolserverTemplateDependencyContains(fanoutReview.Dependencies, "reviewer", "upstream") {
+		t.Fatalf("expected fanout_review dependency metadata, got %+v", fanoutReview.Dependencies)
 	}
 }
 
@@ -201,6 +208,35 @@ func TestHandleCollaborationTemplateApplyCreatesReviewGateChain(t *testing.T) {
 	}
 	if len(result.Handoffs[2].DependsOnHandoffIDs) != 1 || result.Handoffs[2].DependsOnHandoffIDs[0] != result.Handoffs[1].ID {
 		t.Fatalf("expected downstream dependency on reviewer, got %+v", result.Handoffs[2].DependsOnHandoffIDs)
+	}
+}
+
+func TestHandleCollaborationTemplateApplyCreatesFanout(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	input := validToolserverCollaborationTemplateApplyInput()
+	input.TemplateName = "fanout_review"
+
+	result, err := h.HandleCollaborationTemplateApply(context.Background(), input)
+	if err != nil {
+		t.Fatalf("HandleCollaborationTemplateApply: %v", err)
+	}
+	if result.TemplateName != "fanout_review" {
+		t.Fatalf("expected template name, got %q", result.TemplateName)
+	}
+	if len(result.Handoffs) != 3 {
+		t.Fatalf("expected 3 handoffs, got %+v", result.Handoffs)
+	}
+	if result.Workflow.ID == "" || result.Workflow.ID != result.Handoffs[0].WorkflowID || result.Workflow.ID != result.Handoffs[2].WorkflowID {
+		t.Fatalf("expected one workflow, got workflow=%+v handoffs=%+v", result.Workflow, result.Handoffs)
+	}
+	if result.Workflow.CurrentHandoffID != result.Handoffs[2].ID {
+		t.Fatalf("expected reviewer scalar current handoff, got %+v", result.Workflow)
+	}
+	if len(result.Handoffs[1].DependsOnHandoffIDs) != 1 || result.Handoffs[1].DependsOnHandoffIDs[0] != result.Handoffs[0].ID {
+		t.Fatalf("expected downstream dependency on upstream, got %+v", result.Handoffs[1].DependsOnHandoffIDs)
+	}
+	if len(result.Handoffs[2].DependsOnHandoffIDs) != 1 || result.Handoffs[2].DependsOnHandoffIDs[0] != result.Handoffs[0].ID {
+		t.Fatalf("expected reviewer dependency on upstream, got %+v", result.Handoffs[2].DependsOnHandoffIDs)
 	}
 }
 

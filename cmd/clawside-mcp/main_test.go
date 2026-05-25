@@ -439,6 +439,7 @@ func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
 	decodeStructuredContent(t, listed, &catalog)
 	hasUpstreamDownstreamReview := false
 	hasReviewGate := false
+	hasFanoutReview := false
 	for _, template := range catalog.Templates {
 		if template.Name == "upstream_downstream_review" && template.GraphPattern == "linear_upstream_downstream_review" {
 			hasUpstreamDownstreamReview = true
@@ -446,8 +447,11 @@ func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
 		if template.Name == "review_gate" && template.GraphPattern == "review_gate" {
 			hasReviewGate = true
 		}
+		if template.Name == "fanout_review" && template.GraphPattern == "fanout_review" {
+			hasFanoutReview = true
+		}
 	}
-	if !hasUpstreamDownstreamReview || !hasReviewGate {
+	if !hasUpstreamDownstreamReview || !hasReviewGate || !hasFanoutReview {
 		t.Fatalf("expected collaboration template catalog metadata, got %+v", catalog.Templates)
 	}
 
@@ -533,6 +537,44 @@ func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
 	}
 	if len(payload.Handoffs[2].DependsOnHandoffIDs) != 1 || payload.Handoffs[2].DependsOnHandoffIDs[0] != payload.Handoffs[1].ID {
 		t.Fatalf("expected downstream dependency on reviewer, got %+v", payload.Handoffs[2].DependsOnHandoffIDs)
+	}
+
+	fanoutReview, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "collaboration_template_apply", Arguments: map[string]any{
+		"template_name": "fanout_review",
+		"intent":        "Fan out upstream completion to downstream and review",
+		"upstream":      map[string]any{"receiver_id": "upstream", "project_ref": "project://upstream"},
+		"downstream":    map[string]any{"receiver_id": "downstream", "project_ref": "project://downstream"},
+		"reviewer":      map[string]any{"receiver_id": "reviewer", "project_ref": "project://review"},
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(collaboration_template_apply fanout_review): %v", err)
+	}
+	if fanoutReview.IsError {
+		t.Fatalf("expected fanout_review collaboration_template_apply success")
+	}
+	payload = struct {
+		TemplateName string `json:"template_name"`
+		Workflow     struct {
+			ID string `json:"id"`
+		} `json:"workflow"`
+		Handoffs []struct {
+			ID                  string   `json:"id"`
+			WorkflowID          string   `json:"workflow_id"`
+			DependsOnHandoffIDs []string `json:"depends_on_handoff_ids"`
+		} `json:"handoffs"`
+	}{}
+	decodeStructuredContent(t, fanoutReview, &payload)
+	if payload.TemplateName != "fanout_review" {
+		t.Fatalf("expected fanout_review template name, got %q", payload.TemplateName)
+	}
+	if len(payload.Handoffs) != 3 {
+		t.Fatalf("expected 3 fanout_review handoffs, got %+v", payload.Handoffs)
+	}
+	if len(payload.Handoffs[1].DependsOnHandoffIDs) != 1 || payload.Handoffs[1].DependsOnHandoffIDs[0] != payload.Handoffs[0].ID {
+		t.Fatalf("expected downstream dependency on upstream, got %+v", payload.Handoffs[1].DependsOnHandoffIDs)
+	}
+	if len(payload.Handoffs[2].DependsOnHandoffIDs) != 1 || payload.Handoffs[2].DependsOnHandoffIDs[0] != payload.Handoffs[0].ID {
+		t.Fatalf("expected reviewer dependency on upstream, got %+v", payload.Handoffs[2].DependsOnHandoffIDs)
 	}
 }
 

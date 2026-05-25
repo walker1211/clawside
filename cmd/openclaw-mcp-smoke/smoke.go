@@ -1067,6 +1067,15 @@ var collaborationTemplateCatalogMetadataExpectations = []collaborationTemplateCa
 			{handoffRole: "downstream", dependsOnRole: "reviewer"},
 		},
 	},
+	{
+		templateName: "fanout_review",
+		graphPattern: "fanout_review",
+		roles:        []string{"upstream", "downstream", "reviewer"},
+		dependencies: []collaborationTemplateCatalogDependencyExpectation{
+			{handoffRole: "downstream", dependsOnRole: "upstream"},
+			{handoffRole: "reviewer", dependsOnRole: "upstream"},
+		},
+	},
 }
 
 func collaborationTemplateCatalogMetadataFailure(value map[string]any) string {

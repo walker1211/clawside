@@ -324,7 +324,7 @@ Recommended reading:
 - `agent_list`: lists registered agents by capability, project ref, task kind, or status.
 - `next_work`: lists executable handoffs and includes non-blocking liveness / lease warnings plus suggestions.
 - `blocked_work`: lists handoffs with deterministic dependency, watch, reviewer, liveness, and lease reasons plus suggestions.
-- `collaboration_template_list`: lists built-in truth-plane templates (`upstream_downstream_review`, `review_gate`) with graph pattern, roles, dependencies, acceptance criteria, and safety boundaries.
+- `collaboration_template_list`: lists built-in truth-plane templates (`upstream_downstream_review`, `review_gate`, `fanout_review`) with graph pattern, roles, dependencies, acceptance criteria, and safety boundaries; `fanout_review` models `upstream -> {downstream, reviewer}`.
 - `collaboration_template_apply`: applies a built-in template by creating durable workflow / handoff / dependency / watch records only.
 - `watch_list`: lists watches attached to a handoff.
 - `watch_run`: runs due watch checks at a provided RFC3339 timestamp.
@@ -497,7 +497,7 @@ For machine-readable output:
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 ```
 
-To validate the built-in collaboration template catalog and dependency chain, enable the opt-in template smoke. It checks both `upstream_downstream_review` and `review_gate` catalog metadata, applies `upstream_downstream_review`, verifies upstream → downstream → reviewer dependency gating, and still does not launch runtime sessions, workers, sender delivery, or Telegram delivery:
+To validate the built-in collaboration template catalog and dependency chain, enable the opt-in template smoke. It checks `upstream_downstream_review`, `review_gate`, and `fanout_review` catalog metadata, applies `upstream_downstream_review`, verifies upstream → downstream → reviewer dependency gating, and still does not launch runtime sessions, workers, sender delivery, or Telegram delivery:
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke
