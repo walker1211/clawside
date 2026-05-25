@@ -55,6 +55,53 @@ func TestGitHubReadinessFiles(t *testing.T) {
 	}
 }
 
+func TestReadmeOperatorIntegratorGuide(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want []string
+	}{
+		{
+			path: "README.en.md",
+			want: []string{
+				"Which verifier should I run?",
+				"Local operator",
+				"External A2A client",
+				"Swarm/runtime integrator",
+				"./scripts/ci-local.sh clean",
+				"./scripts/verify_clawside_a2a.sh",
+				"./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke",
+				"./scripts/github-readiness.sh <owner>/<repo>",
+				"Clawside does not launch model workers, runtime sessions, or sandboxes",
+			},
+		},
+		{
+			path: "README.zh-CN.md",
+			want: []string{
+				"该运行哪个 verifier？",
+				"本地 operator",
+				"外部 A2A client",
+				"Swarm/runtime integrator",
+				"./scripts/ci-local.sh clean",
+				"./scripts/verify_clawside_a2a.sh",
+				"./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke",
+				"./scripts/github-readiness.sh <owner>/<repo>",
+				"Clawside 不启动 model worker、runtime session 或 sandbox",
+			},
+		},
+	} {
+		contentBytes, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("expected %s to exist: %v", tc.path, err)
+		}
+		content := string(contentBytes)
+		for _, want := range tc.want {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", tc.path, want)
+			}
+		}
+	}
+}
+
 func TestRootReadmeLanguageSwitch(t *testing.T) {
 	contentBytes, err := os.ReadFile("README.md")
 	if err != nil {

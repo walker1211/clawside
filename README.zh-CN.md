@@ -24,6 +24,29 @@
 
 当前版本已把最小可用 v1 收口为可安装、可注册、可验证的 MCP server + skill 产品套件。
 
+## Operator / integrator 使用指南
+
+Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不启动 model worker、runtime session 或 sandbox；OpenClaw、Claude、Kimi 或其他 runtime 仍然负责模型执行。
+
+可以按三类角色使用本项目：
+
+| 角色 | 用 Clawside 做什么 | 主要入口 |
+| --- | --- | --- |
+| 本地 operator | 运行本地 sender、MCP server、smoke checks、release evidence 和 diagnostics。 | `./start.sh`、`./scripts/start_mcp.sh`、`./scripts/verify_openclaw_mcp.sh` |
+| 外部 A2A client | 发现 Agent Card，创建/查询/取消受控 task，并订阅只读 task events。 | `cmd/clawside-a2a`、`cmd/clawside-a2a-example`、`./scripts/verify_clawside_a2a.sh` |
+| Swarm/runtime integrator | 注册 agents，查询 `next_work` / `blocked_work`，推进 handoff，并消费 dependency/reviewer gates。 | MCP tools、`./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke` |
+
+该运行哪个 verifier？
+
+| 场景 | 命令 |
+| --- | --- |
+| 日常本地开发 | `./scripts/ci-local.sh clean` |
+| A2A compatibility 和外部 client readiness | `./scripts/verify_clawside_a2a.sh` |
+| MCP tool surface 和 OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
+| 多项目 upstream/downstream/reviewer rehearsal | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke` |
+| Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
+| 仓库切 public 前的 GitHub readiness | `./scripts/github-readiness.sh <owner>/<repo>` |
+
 ## 最小使用路径
 
 1. 生成本地 sender 配置：

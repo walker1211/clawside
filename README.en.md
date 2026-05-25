@@ -24,6 +24,29 @@ It is not the OpenClaw runtime itself, and it is not only a Telegram sender. The
 
 This version now productizes the minimal v1 into an installable, registerable, and verifiable MCP server + skill suite.
 
+## Operator and integrator guide
+
+Clawside is a durable coordination bridge, not a swarm runtime. Clawside does not launch model workers, runtime sessions, or sandboxes; OpenClaw, Claude, Kimi, or another runtime remains responsible for model execution.
+
+Use the project from three roles:
+
+| Role | Use Clawside for | Primary entrypoints |
+| --- | --- | --- |
+| Local operator | Run local sender, MCP server, smoke checks, release evidence, and diagnostics. | `./start.sh`, `./scripts/start_mcp.sh`, `./scripts/verify_openclaw_mcp.sh` |
+| External A2A client | Discover the Agent Card, create/query/cancel controlled tasks, and subscribe to read-only task events. | `cmd/clawside-a2a`, `cmd/clawside-a2a-example`, `./scripts/verify_clawside_a2a.sh` |
+| Swarm/runtime integrator | Register agents, query `next_work` / `blocked_work`, progress handoffs, and consume dependency/reviewer gates. | MCP tools, `./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke` |
+
+Which verifier should I run?
+
+| Situation | Command |
+| --- | --- |
+| Day-to-day local development | `./scripts/ci-local.sh clean` |
+| A2A compatibility and external client readiness | `./scripts/verify_clawside_a2a.sh` |
+| MCP tool surface and OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
+| Multi-project upstream/downstream/reviewer rehearsal | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke` |
+| Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
+| GitHub public readiness before opening the repository | `./scripts/github-readiness.sh <owner>/<repo>` |
+
 ## Minimal usage path
 
 1. Generate the local sender config:
