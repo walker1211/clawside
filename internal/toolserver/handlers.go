@@ -161,12 +161,13 @@ type CollaborationTemplateListOutput struct {
 }
 
 type CollaborationTemplateApplyInput struct {
-	TemplateName string                         `json:"template_name"`
-	WorkflowKind string                         `json:"workflow_kind,omitempty"`
-	Intent       string                         `json:"intent"`
-	Upstream     CollaborationTemplateRoleInput `json:"upstream"`
-	Downstream   CollaborationTemplateRoleInput `json:"downstream"`
-	Reviewer     CollaborationTemplateRoleInput `json:"reviewer"`
+	TemplateName   string                         `json:"template_name"`
+	WorkflowKind   string                         `json:"workflow_kind,omitempty"`
+	Intent         string                         `json:"intent"`
+	Upstream       CollaborationTemplateRoleInput `json:"upstream"`
+	Downstream     CollaborationTemplateRoleInput `json:"downstream"`
+	Reviewer       CollaborationTemplateRoleInput `json:"reviewer"`
+	IdempotencyKey string                         `json:"idempotency_key,omitempty"`
 }
 
 type CollaborationTemplateRoleInput struct {
@@ -178,6 +179,7 @@ type CollaborationTemplateApplyOutput struct {
 	TemplateName string                 `json:"template_name"`
 	Workflow     orchestrator.Workflow  `json:"workflow"`
 	Handoffs     []orchestrator.Handoff `json:"handoffs"`
+	Replayed     bool                   `json:"replayed"`
 }
 
 type CoordinationEvidenceSummaryInput struct {
@@ -523,12 +525,13 @@ func (h *Handlers) HandleCollaborationTemplateList(_ context.Context) (Collabora
 
 func (h *Handlers) HandleCollaborationTemplateApply(ctx context.Context, input CollaborationTemplateApplyInput) (CollaborationTemplateApplyOutput, error) {
 	result, err := h.svc.ApplyCollaborationTemplate(ctx, orchestrator.CollaborationTemplateApplyInput{
-		TemplateName: input.TemplateName,
-		WorkflowKind: input.WorkflowKind,
-		Intent:       input.Intent,
-		Upstream:     toCollaborationTemplateRole(input.Upstream),
-		Downstream:   toCollaborationTemplateRole(input.Downstream),
-		Reviewer:     toCollaborationTemplateRole(input.Reviewer),
+		TemplateName:   input.TemplateName,
+		WorkflowKind:   input.WorkflowKind,
+		Intent:         input.Intent,
+		Upstream:       toCollaborationTemplateRole(input.Upstream),
+		Downstream:     toCollaborationTemplateRole(input.Downstream),
+		Reviewer:       toCollaborationTemplateRole(input.Reviewer),
+		IdempotencyKey: input.IdempotencyKey,
 	})
 	if err != nil {
 		return CollaborationTemplateApplyOutput{}, err
@@ -537,6 +540,7 @@ func (h *Handlers) HandleCollaborationTemplateApply(ctx context.Context, input C
 		TemplateName: result.TemplateName,
 		Workflow:     result.Workflow,
 		Handoffs:     result.Handoffs,
+		Replayed:     result.Replayed,
 	}, nil
 }
 

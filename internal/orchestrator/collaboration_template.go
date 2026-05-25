@@ -2,6 +2,9 @@ package orchestrator
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -32,12 +35,13 @@ type CollaborationTemplateDependency struct {
 }
 
 type CollaborationTemplateApplyInput struct {
-	TemplateName string                    `json:"template_name"`
-	WorkflowKind string                    `json:"workflow_kind,omitempty"`
-	Intent       string                    `json:"intent"`
-	Upstream     CollaborationTemplateRole `json:"upstream"`
-	Downstream   CollaborationTemplateRole `json:"downstream"`
-	Reviewer     CollaborationTemplateRole `json:"reviewer"`
+	TemplateName   string                    `json:"template_name"`
+	WorkflowKind   string                    `json:"workflow_kind,omitempty"`
+	Intent         string                    `json:"intent"`
+	Upstream       CollaborationTemplateRole `json:"upstream"`
+	Downstream     CollaborationTemplateRole `json:"downstream"`
+	Reviewer       CollaborationTemplateRole `json:"reviewer"`
+	IdempotencyKey string                    `json:"idempotency_key,omitempty"`
 }
 
 type CollaborationTemplateRole struct {
@@ -49,7 +53,10 @@ type CollaborationTemplateApplyResult struct {
 	TemplateName string    `json:"template_name"`
 	Workflow     Workflow  `json:"workflow"`
 	Handoffs     []Handoff `json:"handoffs"`
+	Replayed     bool      `json:"replayed"`
 }
+
+type collaborationTemplateBuildFunc func(CollaborationTemplateApplyInput, time.Time) (Workflow, []Handoff, [][]Watch)
 
 func (s *Service) ListCollaborationTemplates() []CollaborationTemplate {
 	return []CollaborationTemplate{
@@ -134,16 +141,9 @@ func (s *Service) ListCollaborationTemplates() []CollaborationTemplate {
 
 func (s *Service) ApplyCollaborationTemplate(ctx context.Context, input CollaborationTemplateApplyInput) (CollaborationTemplateApplyResult, error) {
 	input = trimCollaborationTemplateApplyInput(input)
-	var createTemplate func(context.Context, CollaborationTemplateApplyInput) (Workflow, []Handoff, error)
-	switch input.TemplateName {
-	case CollaborationTemplateUpstreamDownstreamReview:
-		createTemplate = s.createUpstreamDownstreamReviewTemplate
-	case CollaborationTemplateReviewGate:
-		createTemplate = s.createReviewGateTemplate
-	case CollaborationTemplateFanoutReview:
-		createTemplate = s.createFanoutReviewTemplate
-	default:
-		return CollaborationTemplateApplyResult{}, fmt.Errorf("unknown collaboration template %q", input.TemplateName)
+	buildTemplate, err := collaborationTemplateBuilder(input.TemplateName)
+	if err != nil {
+		return CollaborationTemplateApplyResult{}, err
 	}
 	if input.WorkflowKind == "" {
 		input.WorkflowKind = defaultCollaborationTemplateWorkflowKind
@@ -161,9 +161,61 @@ func (s *Service) ApplyCollaborationTemplate(ctx context.Context, input Collabor
 		return CollaborationTemplateApplyResult{}, err
 	}
 
-	workflow, handoffs, err := createTemplate(ctx, input)
+	payloadHash := ""
+	if input.IdempotencyKey != "" {
+		payloadHash, err = collaborationTemplateApplyPayloadHash(input)
+		if err != nil {
+			return CollaborationTemplateApplyResult{}, err
+		}
+	}
+
+	now := s.now().UTC()
+	tx, err := s.store.db.BeginTx(ctx, nil)
 	if err != nil {
+		return CollaborationTemplateApplyResult{}, fmt.Errorf("begin collaboration template tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if input.IdempotencyKey != "" {
+		record, ok, err := loadCollaborationTemplateApplicationTx(ctx, tx, input.IdempotencyKey)
+		if err != nil {
+			return CollaborationTemplateApplyResult{}, err
+		}
+		if ok {
+			if record.PayloadHash != payloadHash {
+				return CollaborationTemplateApplyResult{}, ErrIdempotencyConflict
+			}
+			workflow, handoffs, err := loadCollaborationTemplateApplicationResultTx(ctx, tx, record)
+			if err != nil {
+				return CollaborationTemplateApplyResult{}, err
+			}
+			return CollaborationTemplateApplyResult{
+				TemplateName: record.TemplateName,
+				Workflow:     workflow,
+				Handoffs:     handoffs,
+				Replayed:     true,
+			}, nil
+		}
+	}
+
+	workflow, handoffs, watches := buildTemplate(input, now)
+	if err := saveCollaborationTemplateRecordsExec(ctx, tx, workflow, handoffs, watches); err != nil {
 		return CollaborationTemplateApplyResult{}, err
+	}
+	if input.IdempotencyKey != "" {
+		if err := saveCollaborationTemplateApplicationExec(ctx, tx, collaborationTemplateApplicationRecord{
+			IdempotencyKey: input.IdempotencyKey,
+			PayloadHash:    payloadHash,
+			TemplateName:   input.TemplateName,
+			WorkflowID:     workflow.ID,
+			HandoffIDs:     collaborationTemplateHandoffIDs(handoffs),
+			CreatedAt:      now,
+		}); err != nil {
+			return CollaborationTemplateApplyResult{}, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return CollaborationTemplateApplyResult{}, fmt.Errorf("commit collaboration template tx: %w", err)
 	}
 
 	return CollaborationTemplateApplyResult{
@@ -173,8 +225,100 @@ func (s *Service) ApplyCollaborationTemplate(ctx context.Context, input Collabor
 	}, nil
 }
 
+func collaborationTemplateBuilder(name string) (collaborationTemplateBuildFunc, error) {
+	switch name {
+	case CollaborationTemplateUpstreamDownstreamReview:
+		return buildUpstreamDownstreamReviewTemplate, nil
+	case CollaborationTemplateReviewGate:
+		return buildReviewGateTemplate, nil
+	case CollaborationTemplateFanoutReview:
+		return buildFanoutReviewTemplate, nil
+	default:
+		return nil, fmt.Errorf("unknown collaboration template %q", name)
+	}
+}
+
+func collaborationTemplateApplyPayloadHash(input CollaborationTemplateApplyInput) (string, error) {
+	input.IdempotencyKey = ""
+	payload, err := json.Marshal(input)
+	if err != nil {
+		return "", fmt.Errorf("marshal collaboration template apply payload: %w", err)
+	}
+	sum := sha256.Sum256(payload)
+	return hex.EncodeToString(sum[:]), nil
+}
+
+func loadCollaborationTemplateApplicationResultTx(ctx context.Context, db queryer, record collaborationTemplateApplicationRecord) (Workflow, []Handoff, error) {
+	workflow, err := loadWorkflowTx(ctx, db, record.WorkflowID)
+	if err != nil {
+		return Workflow{}, nil, err
+	}
+	handoffs := make([]Handoff, 0, len(record.HandoffIDs))
+	for _, handoffID := range record.HandoffIDs {
+		handoff, err := loadHandoffTx(ctx, db, handoffID)
+		if err != nil {
+			return Workflow{}, nil, err
+		}
+		handoffs = append(handoffs, handoff)
+	}
+	return workflow, handoffs, nil
+}
+
+func saveCollaborationTemplateRecordsExec(ctx context.Context, db execer, workflow Workflow, handoffs []Handoff, watches [][]Watch) error {
+	if err := saveWorkflowExec(ctx, db, workflow); err != nil {
+		return err
+	}
+	for i, handoff := range handoffs {
+		if err := saveHandoffExec(ctx, db, handoff); err != nil {
+			return err
+		}
+		for _, watch := range watches[i] {
+			if err := saveWatchExec(ctx, db, watch); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func collaborationTemplateHandoffIDs(handoffs []Handoff) []string {
+	ids := make([]string, 0, len(handoffs))
+	for _, handoff := range handoffs {
+		ids = append(ids, handoff.ID)
+	}
+	return ids
+}
+
 func (s *Service) createUpstreamDownstreamReviewTemplate(ctx context.Context, input CollaborationTemplateApplyInput) (Workflow, []Handoff, error) {
+	return s.createCollaborationTemplateRecords(ctx, input, buildUpstreamDownstreamReviewTemplate)
+}
+
+func (s *Service) createReviewGateTemplate(ctx context.Context, input CollaborationTemplateApplyInput) (Workflow, []Handoff, error) {
+	return s.createCollaborationTemplateRecords(ctx, input, buildReviewGateTemplate)
+}
+
+func (s *Service) createFanoutReviewTemplate(ctx context.Context, input CollaborationTemplateApplyInput) (Workflow, []Handoff, error) {
+	return s.createCollaborationTemplateRecords(ctx, input, buildFanoutReviewTemplate)
+}
+
+func (s *Service) createCollaborationTemplateRecords(ctx context.Context, input CollaborationTemplateApplyInput, buildTemplate collaborationTemplateBuildFunc) (Workflow, []Handoff, error) {
 	now := s.now().UTC()
+	workflow, handoffs, watches := buildTemplate(input, now)
+	tx, err := s.store.db.BeginTx(ctx, nil)
+	if err != nil {
+		return Workflow{}, nil, fmt.Errorf("begin collaboration template tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := saveCollaborationTemplateRecordsExec(ctx, tx, workflow, handoffs, watches); err != nil {
+		return Workflow{}, nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return Workflow{}, nil, fmt.Errorf("commit collaboration template tx: %w", err)
+	}
+	return workflow, handoffs, nil
+}
+
+func buildUpstreamDownstreamReviewTemplate(input CollaborationTemplateApplyInput, now time.Time) (Workflow, []Handoff, [][]Watch) {
 	rootSender := ActorRef{Type: ActorSystem, ID: "clawside-template"}
 	workflow, upstream, upstreamWatches := newRootHandoffCreation(CreateHandoffInput{
 		WorkflowKind:                  input.WorkflowKind,
@@ -188,44 +332,14 @@ func (s *Service) createUpstreamDownstreamReviewTemplate(ctx context.Context, in
 	}, now)
 	downstream := newTemplateAppendHandoff(workflow, upstream.ReceiverActor, input.Downstream, input.Intent, []string{upstream.ID}, now)
 	reviewer := newTemplateAppendHandoff(workflow, downstream.ReceiverActor, input.Reviewer, input.Intent, []string{downstream.ID}, now)
-	downstreamWatches := CreateDefaultWatches(downstream, now)
-	reviewerWatches := CreateDefaultWatches(reviewer, now)
 	workflow.CurrentHandoffID = reviewer.ID
 	workflow.UpdatedAt = now
-
-	tx, err := s.store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Workflow{}, nil, fmt.Errorf("begin collaboration template tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := saveWorkflowExec(ctx, tx, workflow); err != nil {
-		return Workflow{}, nil, err
-	}
-	for _, handoff := range []struct {
-		handoff Handoff
-		watches []Watch
-	}{
-		{handoff: upstream, watches: upstreamWatches},
-		{handoff: downstream, watches: downstreamWatches},
-		{handoff: reviewer, watches: reviewerWatches},
-	} {
-		if err := saveHandoffExec(ctx, tx, handoff.handoff); err != nil {
-			return Workflow{}, nil, err
-		}
-		for _, watch := range handoff.watches {
-			if err := saveWatchExec(ctx, tx, watch); err != nil {
-				return Workflow{}, nil, err
-			}
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return Workflow{}, nil, fmt.Errorf("commit collaboration template tx: %w", err)
-	}
-	return workflow, []Handoff{upstream, downstream, reviewer}, nil
+	return workflow,
+		[]Handoff{upstream, downstream, reviewer},
+		[][]Watch{upstreamWatches, CreateDefaultWatches(downstream, now), CreateDefaultWatches(reviewer, now)}
 }
 
-func (s *Service) createReviewGateTemplate(ctx context.Context, input CollaborationTemplateApplyInput) (Workflow, []Handoff, error) {
-	now := s.now().UTC()
+func buildReviewGateTemplate(input CollaborationTemplateApplyInput, now time.Time) (Workflow, []Handoff, [][]Watch) {
 	rootSender := ActorRef{Type: ActorSystem, ID: "clawside-template"}
 	workflow, upstream, upstreamWatches := newRootHandoffCreation(CreateHandoffInput{
 		WorkflowKind:                  input.WorkflowKind,
@@ -239,44 +353,14 @@ func (s *Service) createReviewGateTemplate(ctx context.Context, input Collaborat
 	}, now)
 	reviewer := newTemplateAppendHandoff(workflow, upstream.ReceiverActor, input.Reviewer, input.Intent, []string{upstream.ID}, now)
 	downstream := newTemplateAppendHandoff(workflow, reviewer.ReceiverActor, input.Downstream, input.Intent, []string{reviewer.ID}, now)
-	reviewerWatches := CreateDefaultWatches(reviewer, now)
-	downstreamWatches := CreateDefaultWatches(downstream, now)
 	workflow.CurrentHandoffID = downstream.ID
 	workflow.UpdatedAt = now
-
-	tx, err := s.store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Workflow{}, nil, fmt.Errorf("begin collaboration template tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := saveWorkflowExec(ctx, tx, workflow); err != nil {
-		return Workflow{}, nil, err
-	}
-	for _, handoff := range []struct {
-		handoff Handoff
-		watches []Watch
-	}{
-		{handoff: upstream, watches: upstreamWatches},
-		{handoff: reviewer, watches: reviewerWatches},
-		{handoff: downstream, watches: downstreamWatches},
-	} {
-		if err := saveHandoffExec(ctx, tx, handoff.handoff); err != nil {
-			return Workflow{}, nil, err
-		}
-		for _, watch := range handoff.watches {
-			if err := saveWatchExec(ctx, tx, watch); err != nil {
-				return Workflow{}, nil, err
-			}
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return Workflow{}, nil, fmt.Errorf("commit collaboration template tx: %w", err)
-	}
-	return workflow, []Handoff{upstream, reviewer, downstream}, nil
+	return workflow,
+		[]Handoff{upstream, reviewer, downstream},
+		[][]Watch{upstreamWatches, CreateDefaultWatches(reviewer, now), CreateDefaultWatches(downstream, now)}
 }
 
-func (s *Service) createFanoutReviewTemplate(ctx context.Context, input CollaborationTemplateApplyInput) (Workflow, []Handoff, error) {
-	now := s.now().UTC()
+func buildFanoutReviewTemplate(input CollaborationTemplateApplyInput, now time.Time) (Workflow, []Handoff, [][]Watch) {
 	rootSender := ActorRef{Type: ActorSystem, ID: "clawside-template"}
 	workflow, upstream, upstreamWatches := newRootHandoffCreation(CreateHandoffInput{
 		WorkflowKind:                  input.WorkflowKind,
@@ -290,40 +374,11 @@ func (s *Service) createFanoutReviewTemplate(ctx context.Context, input Collabor
 	}, now)
 	downstream := newTemplateAppendHandoff(workflow, upstream.ReceiverActor, input.Downstream, input.Intent, []string{upstream.ID}, now)
 	reviewer := newTemplateAppendHandoff(workflow, upstream.ReceiverActor, input.Reviewer, input.Intent, []string{upstream.ID}, now)
-	downstreamWatches := CreateDefaultWatches(downstream, now)
-	reviewerWatches := CreateDefaultWatches(reviewer, now)
 	workflow.CurrentHandoffID = reviewer.ID
 	workflow.UpdatedAt = now
-
-	tx, err := s.store.db.BeginTx(ctx, nil)
-	if err != nil {
-		return Workflow{}, nil, fmt.Errorf("begin collaboration template tx: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	if err := saveWorkflowExec(ctx, tx, workflow); err != nil {
-		return Workflow{}, nil, err
-	}
-	for _, handoff := range []struct {
-		handoff Handoff
-		watches []Watch
-	}{
-		{handoff: upstream, watches: upstreamWatches},
-		{handoff: downstream, watches: downstreamWatches},
-		{handoff: reviewer, watches: reviewerWatches},
-	} {
-		if err := saveHandoffExec(ctx, tx, handoff.handoff); err != nil {
-			return Workflow{}, nil, err
-		}
-		for _, watch := range handoff.watches {
-			if err := saveWatchExec(ctx, tx, watch); err != nil {
-				return Workflow{}, nil, err
-			}
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return Workflow{}, nil, fmt.Errorf("commit collaboration template tx: %w", err)
-	}
-	return workflow, []Handoff{upstream, downstream, reviewer}, nil
+	return workflow,
+		[]Handoff{upstream, downstream, reviewer},
+		[][]Watch{upstreamWatches, CreateDefaultWatches(downstream, now), CreateDefaultWatches(reviewer, now)}
 }
 
 func newTemplateAppendHandoff(workflow Workflow, sender ActorRef, role CollaborationTemplateRole, intent string, dependencies []string, now time.Time) Handoff {
@@ -354,6 +409,7 @@ func trimCollaborationTemplateApplyInput(input CollaborationTemplateApplyInput) 
 	input.TemplateName = strings.TrimSpace(input.TemplateName)
 	input.WorkflowKind = strings.TrimSpace(input.WorkflowKind)
 	input.Intent = strings.TrimSpace(input.Intent)
+	input.IdempotencyKey = strings.TrimSpace(input.IdempotencyKey)
 	input.Upstream = trimCollaborationTemplateRole(input.Upstream)
 	input.Downstream = trimCollaborationTemplateRole(input.Downstream)
 	input.Reviewer = trimCollaborationTemplateRole(input.Reviewer)

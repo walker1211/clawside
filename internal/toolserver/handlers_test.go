@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -280,6 +281,55 @@ func TestHandleCollaborationTemplateApplyReportsBlockedDownstream(t *testing.T) 
 	}
 	if len(downstreamBlocked.Items[0].Reasons) != 1 || downstreamBlocked.Items[0].Reasons[0].Code != "dependency_incomplete" || downstreamBlocked.Items[0].Reasons[0].DependencyHandoffID != upstream.ID {
 		t.Fatalf("expected dependency_incomplete on upstream, got %+v", downstreamBlocked.Items[0].Reasons)
+	}
+}
+
+func TestHandleCollaborationTemplateApplyReplaysIdempotencyKey(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	ctx := context.Background()
+	input := validToolserverCollaborationTemplateApplyInput()
+	input.IdempotencyKey = "toolserver-template-key-1"
+
+	first, err := h.HandleCollaborationTemplateApply(ctx, input)
+	if err != nil {
+		t.Fatalf("HandleCollaborationTemplateApply first: %v", err)
+	}
+	if first.Replayed {
+		t.Fatalf("expected first apply not replayed")
+	}
+	replay, err := h.HandleCollaborationTemplateApply(ctx, input)
+	if err != nil {
+		t.Fatalf("HandleCollaborationTemplateApply replay: %v", err)
+	}
+	if !replay.Replayed {
+		t.Fatalf("expected replayed result")
+	}
+	if replay.Workflow.ID != first.Workflow.ID {
+		t.Fatalf("expected same workflow, got first=%s replay=%s", first.Workflow.ID, replay.Workflow.ID)
+	}
+	if len(replay.Handoffs) != len(first.Handoffs) {
+		t.Fatalf("expected same handoff count, got first=%d replay=%d", len(first.Handoffs), len(replay.Handoffs))
+	}
+	for i := range first.Handoffs {
+		if replay.Handoffs[i].ID != first.Handoffs[i].ID {
+			t.Fatalf("handoff %d: expected %s, got %s", i, first.Handoffs[i].ID, replay.Handoffs[i].ID)
+		}
+	}
+}
+
+func TestHandleCollaborationTemplateApplyRejectsIdempotencyConflict(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	ctx := context.Background()
+	input := validToolserverCollaborationTemplateApplyInput()
+	input.IdempotencyKey = "toolserver-template-conflict"
+
+	if _, err := h.HandleCollaborationTemplateApply(ctx, input); err != nil {
+		t.Fatalf("HandleCollaborationTemplateApply first: %v", err)
+	}
+	input.Intent += " changed"
+	_, err := h.HandleCollaborationTemplateApply(ctx, input)
+	if !errors.Is(err, orchestrator.ErrIdempotencyConflict) {
+		t.Fatalf("expected ErrIdempotencyConflict, got %v", err)
 	}
 }
 

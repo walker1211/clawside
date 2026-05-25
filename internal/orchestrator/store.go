@@ -187,6 +187,15 @@ func (s *Store) init(ctx context.Context) error {
 			FOREIGN KEY (workflow_id) REFERENCES workflows(id),
 			FOREIGN KEY (handoff_id) REFERENCES handoffs(id)
 		)`,
+		`CREATE TABLE IF NOT EXISTS collaboration_template_applications (
+				idempotency_key TEXT PRIMARY KEY,
+				payload_hash TEXT NOT NULL,
+				template_name TEXT NOT NULL,
+				workflow_id TEXT NOT NULL,
+				handoff_ids_json TEXT NOT NULL,
+				created_at TEXT NOT NULL,
+				FOREIGN KEY (workflow_id) REFERENCES workflows(id)
+			)`,
 		`CREATE TABLE IF NOT EXISTS watches (
 			id TEXT PRIMARY KEY,
 			handoff_id TEXT NOT NULL,
@@ -812,6 +821,15 @@ type a2aInboundTaskCreationRecord struct {
 	CreatedAt      time.Time
 }
 
+type collaborationTemplateApplicationRecord struct {
+	IdempotencyKey string
+	PayloadHash    string
+	TemplateName   string
+	WorkflowID     string
+	HandoffIDs     []string
+	CreatedAt      time.Time
+}
+
 func saveHandoffExec(ctx context.Context, db execer, handoff Handoff) error {
 	dependsJSON, err := marshalJSON(handoff.DependsOnHandoffIDs)
 	if err != nil {
@@ -1006,6 +1024,48 @@ func saveA2AInboundTaskCreationExec(ctx context.Context, db execer, record a2aIn
 	`, record.IdempotencyKey, record.PayloadHash, record.WorkflowID, record.HandoffID, formatTime(record.CreatedAt))
 	if err != nil {
 		return fmt.Errorf("save a2a inbound task creation %s: %w", record.IdempotencyKey, err)
+	}
+	return nil
+}
+
+func loadCollaborationTemplateApplicationTx(ctx context.Context, db queryer, idempotencyKey string) (collaborationTemplateApplicationRecord, bool, error) {
+	row := db.QueryRowContext(ctx, `
+			SELECT idempotency_key, payload_hash, template_name, workflow_id, handoff_ids_json, created_at
+			FROM collaboration_template_applications
+			WHERE idempotency_key = ?
+		`, idempotencyKey)
+	var record collaborationTemplateApplicationRecord
+	var handoffIDsJSON string
+	var createdAt string
+	if err := row.Scan(&record.IdempotencyKey, &record.PayloadHash, &record.TemplateName, &record.WorkflowID, &handoffIDsJSON, &createdAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return collaborationTemplateApplicationRecord{}, false, nil
+		}
+		return collaborationTemplateApplicationRecord{}, false, fmt.Errorf("load collaboration template application %s: %w", idempotencyKey, err)
+	}
+	if err := unmarshalJSON(handoffIDsJSON, &record.HandoffIDs); err != nil {
+		return collaborationTemplateApplicationRecord{}, false, err
+	}
+	parsedCreatedAt, err := time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return collaborationTemplateApplicationRecord{}, false, fmt.Errorf("parse collaboration template application created_at: %w", err)
+	}
+	record.CreatedAt = parsedCreatedAt
+	return record, true, nil
+}
+
+func saveCollaborationTemplateApplicationExec(ctx context.Context, db execer, record collaborationTemplateApplicationRecord) error {
+	handoffIDsJSON, err := marshalJSON(record.HandoffIDs)
+	if err != nil {
+		return err
+	}
+	_, err = db.ExecContext(ctx, `
+			INSERT INTO collaboration_template_applications (
+				idempotency_key, payload_hash, template_name, workflow_id, handoff_ids_json, created_at
+			) VALUES (?, ?, ?, ?, ?, ?)
+		`, record.IdempotencyKey, record.PayloadHash, record.TemplateName, record.WorkflowID, handoffIDsJSON, formatTime(record.CreatedAt))
+	if err != nil {
+		return fmt.Errorf("save collaboration template application %s: %w", record.IdempotencyKey, err)
 	}
 	return nil
 }

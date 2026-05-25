@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -403,6 +404,78 @@ func TestApplyFanoutReviewCollaborationTemplateIntegratesWithNextAndBlockedWork(
 	}
 	if len(reviewerNext) != 1 || reviewerNext[0].Handoff.ID != reviewer.ID {
 		t.Fatalf("expected reviewer next work after upstream completion, got %+v", reviewerNext)
+	}
+}
+
+func TestApplyCollaborationTemplateIdempotencyReplaysSamePayload(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	input := validCollaborationTemplateApplyInput()
+	input.IdempotencyKey = "template-apply-key-1"
+
+	first, err := svc.ApplyCollaborationTemplate(ctx, input)
+	if err != nil {
+		t.Fatalf("ApplyCollaborationTemplate first: %v", err)
+	}
+	if first.Replayed {
+		t.Fatalf("expected first apply not replayed")
+	}
+
+	replay, err := svc.ApplyCollaborationTemplate(ctx, input)
+	if err != nil {
+		t.Fatalf("ApplyCollaborationTemplate replay: %v", err)
+	}
+	if !replay.Replayed {
+		t.Fatalf("expected replayed result")
+	}
+	if replay.Workflow.ID != first.Workflow.ID {
+		t.Fatalf("expected same workflow, got first=%s replay=%s", first.Workflow.ID, replay.Workflow.ID)
+	}
+	if len(replay.Handoffs) != len(first.Handoffs) {
+		t.Fatalf("expected same handoff count, got first=%d replay=%d", len(first.Handoffs), len(replay.Handoffs))
+	}
+	for i := range first.Handoffs {
+		if replay.Handoffs[i].ID != first.Handoffs[i].ID {
+			t.Fatalf("handoff %d: expected %s, got %s", i, first.Handoffs[i].ID, replay.Handoffs[i].ID)
+		}
+	}
+}
+
+func TestApplyCollaborationTemplateIdempotencyRejectsConflict(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	input := validCollaborationTemplateApplyInput()
+	input.IdempotencyKey = "template-apply-key-conflict"
+
+	if _, err := svc.ApplyCollaborationTemplate(ctx, input); err != nil {
+		t.Fatalf("ApplyCollaborationTemplate first: %v", err)
+	}
+
+	input.Intent += " changed"
+	_, err := svc.ApplyCollaborationTemplate(ctx, input)
+	if !errors.Is(err, ErrIdempotencyConflict) {
+		t.Fatalf("expected ErrIdempotencyConflict, got %v", err)
+	}
+}
+
+func TestApplyCollaborationTemplateWithoutIdempotencyCreatesDistinctWorkflows(t *testing.T) {
+	svc := newTestService(t)
+	ctx := context.Background()
+	input := validCollaborationTemplateApplyInput()
+
+	first, err := svc.ApplyCollaborationTemplate(ctx, input)
+	if err != nil {
+		t.Fatalf("ApplyCollaborationTemplate first: %v", err)
+	}
+	second, err := svc.ApplyCollaborationTemplate(ctx, input)
+	if err != nil {
+		t.Fatalf("ApplyCollaborationTemplate second: %v", err)
+	}
+	if first.Replayed || second.Replayed {
+		t.Fatalf("expected non-idempotent applies not replayed: first=%v second=%v", first.Replayed, second.Replayed)
+	}
+	if first.Workflow.ID == second.Workflow.ID {
+		t.Fatalf("expected distinct workflows without idempotency key, got %s", first.Workflow.ID)
 	}
 }
 

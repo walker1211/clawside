@@ -922,6 +922,17 @@ func TestCheckCollaborationTemplateCreatesChainAndProjection(t *testing.T) {
 				map[string]any{"id": "downstream-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"upstream-1"}},
 				map[string]any{"id": "reviewer-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"downstream-1"}},
 			},
+			"replayed": false,
+		}),
+		structuredSmokeResult(map[string]any{
+			"template_name": "upstream_downstream_review",
+			"workflow":      map[string]any{"id": "workflow-1"},
+			"handoffs": []any{
+				map[string]any{"id": "upstream-1", "workflow_id": "workflow-1"},
+				map[string]any{"id": "downstream-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"upstream-1"}},
+				map[string]any{"id": "reviewer-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"downstream-1"}},
+			},
+			"replayed": true,
 		}),
 		structuredSmokeResult(map[string]any{"items": []any{
 			map[string]any{"handoff": map[string]any{"id": "upstream-1"}},
@@ -971,7 +982,7 @@ func TestCheckCollaborationTemplateCreatesChainAndProjection(t *testing.T) {
 		t.Fatalf("unexpected collaboration template result: %+v", report.CollaborationTemplateResult)
 	}
 	wantNames := []string{
-		"collaboration_template_list", "collaboration_template_apply", "next_work", "blocked_work",
+		"collaboration_template_list", "collaboration_template_apply", "collaboration_template_apply", "next_work", "blocked_work",
 		"handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
 		"next_work", "handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
 		"next_work",
@@ -988,11 +999,26 @@ func TestCheckCollaborationTemplateCreatesChainAndProjection(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected template apply args map, got %+v", client.calls[1].Params.Arguments)
 	}
-	if applyArgs["template_name"] != "upstream_downstream_review" || applyArgs["intent"] != "coordinate template" {
+	key, ok := applyArgs["idempotency_key"].(string)
+	if !ok || !strings.HasPrefix(key, "openclaw-smoke-collaboration-template-") || applyArgs["template_name"] != "upstream_downstream_review" || applyArgs["intent"] != "coordinate template" {
 		t.Fatalf("unexpected template apply args: %+v", applyArgs)
 	}
-	if _, ok := applyArgs["command"]; ok {
-		t.Fatalf("collaboration template smoke must not pass caller command: %+v", applyArgs)
+	for _, forbidden := range []string{"command", "args", "path", "cwd", "prompt", "session_id", "token", "secret", "sender_job", "delivery_job"} {
+		if _, ok := applyArgs[forbidden]; ok {
+			t.Fatalf("collaboration template smoke must not pass execution field %q: %+v", forbidden, applyArgs)
+		}
+	}
+	replayApplyArgs, ok := client.calls[2].Params.Arguments.(map[string]any)
+	if !ok {
+		t.Fatalf("expected replay template apply args map, got %+v", client.calls[2].Params.Arguments)
+	}
+	if replayApplyArgs["idempotency_key"] != applyArgs["idempotency_key"] || replayApplyArgs["template_name"] != applyArgs["template_name"] || replayApplyArgs["intent"] != applyArgs["intent"] {
+		t.Fatalf("unexpected replay template apply args: first=%+v replay=%+v", applyArgs, replayApplyArgs)
+	}
+	for _, forbidden := range []string{"command", "args", "path", "cwd", "prompt", "session_id", "token", "secret", "sender_job", "delivery_job"} {
+		if _, ok := replayApplyArgs[forbidden]; ok {
+			t.Fatalf("collaboration template replay smoke must not pass execution field %q: %+v", forbidden, replayApplyArgs)
+		}
 	}
 }
 
@@ -1118,6 +1144,17 @@ func collaborationTemplateSmokeResults(catalog map[string]any) []*mcp.CallToolRe
 				map[string]any{"id": "downstream-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"upstream-1"}},
 				map[string]any{"id": "reviewer-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"downstream-1"}},
 			},
+			"replayed": false,
+		}),
+		structuredSmokeResult(map[string]any{
+			"template_name": "upstream_downstream_review",
+			"workflow":      map[string]any{"id": "workflow-1"},
+			"handoffs": []any{
+				map[string]any{"id": "upstream-1", "workflow_id": "workflow-1"},
+				map[string]any{"id": "downstream-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"upstream-1"}},
+				map[string]any{"id": "reviewer-1", "workflow_id": "workflow-1", "depends_on_handoff_ids": []any{"downstream-1"}},
+			},
+			"replayed": true,
 		}),
 		structuredSmokeResult(map[string]any{"items": []any{
 			map[string]any{"handoff": map[string]any{"id": "upstream-1"}},

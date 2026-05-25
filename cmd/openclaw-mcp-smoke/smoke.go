@@ -10,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
@@ -839,13 +840,16 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 		return failedCheck("collaboration_template", failure)
 	}
 
-	applied, err := callStructuredTool(ctx, client, "collaboration_template_apply", map[string]any{
-		"template_name": "upstream_downstream_review",
-		"intent":        message,
-		"upstream":      map[string]any{"receiver_id": "upstream", "project_ref": "project://smoke/template/upstream"},
-		"downstream":    map[string]any{"receiver_id": "downstream", "project_ref": "project://smoke/template/downstream"},
-		"reviewer":      map[string]any{"receiver_id": "reviewer", "project_ref": "project://smoke/template/review"},
-	}, opts)
+	idempotencyKey := fmt.Sprintf("openclaw-smoke-collaboration-template-%d", time.Now().UTC().UnixNano())
+	applyArgs := map[string]any{
+		"template_name":   "upstream_downstream_review",
+		"intent":          message,
+		"upstream":        map[string]any{"receiver_id": "upstream", "project_ref": "project://smoke/template/upstream"},
+		"downstream":      map[string]any{"receiver_id": "downstream", "project_ref": "project://smoke/template/downstream"},
+		"reviewer":        map[string]any{"receiver_id": "reviewer", "project_ref": "project://smoke/template/review"},
+		"idempotency_key": idempotencyKey,
+	}
+	applied, err := callStructuredTool(ctx, client, "collaboration_template_apply", applyArgs, opts)
 	if err != nil {
 		return failedCheck("collaboration_template", err.Error())
 	}
@@ -865,6 +869,19 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 	}
 	if !collaborationTemplateHandoffDependsOn(applied, 1, upstreamID) || !collaborationTemplateHandoffDependsOn(applied, 2, downstreamID) {
 		return failedCheck("collaboration_template", "template handoff dependencies were not upstream -> downstream -> reviewer")
+	}
+	if replayed, ok := applied["replayed"].(bool); ok && replayed {
+		return failedCheck("collaboration_template", "first collaboration_template_apply unexpectedly replayed")
+	}
+	replayed, err := callStructuredTool(ctx, client, "collaboration_template_apply", applyArgs, opts)
+	if err != nil {
+		return failedCheck("collaboration_template", err.Error())
+	}
+	if replayedValue, ok := replayed["replayed"].(bool); !ok || !replayedValue {
+		return failedCheck("collaboration_template", "second collaboration_template_apply did not replay")
+	}
+	if nestedString(replayed, "workflow", "id") != workflowID || collaborationTemplateHandoffID(replayed, 0) != upstreamID || collaborationTemplateHandoffID(replayed, 1) != downstreamID || collaborationTemplateHandoffID(replayed, 2) != reviewerID {
+		return failedCheck("collaboration_template", "replayed collaboration_template_apply did not return original workflow and handoffs")
 	}
 
 	upstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "upstream", "workflow_id": workflowID}, opts)

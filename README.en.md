@@ -325,7 +325,7 @@ Recommended reading:
 - `next_work`: lists executable handoffs and includes non-blocking liveness / lease warnings plus suggestions.
 - `blocked_work`: lists handoffs with deterministic dependency, watch, reviewer, liveness, and lease reasons plus suggestions.
 - `collaboration_template_list`: lists built-in truth-plane templates (`upstream_downstream_review`, `review_gate`, `fanout_review`) with graph pattern, roles, dependencies, acceptance criteria, and safety boundaries; `fanout_review` models `upstream -> {downstream, reviewer}`.
-- `collaboration_template_apply`: applies a built-in template by creating durable workflow / handoff / dependency / watch records only.
+- `collaboration_template_apply`: applies a built-in template by creating durable workflow / handoff / dependency / watch records only. It accepts an optional `idempotency_key`; retrying with the same normalized payload returns the original workflow / handoffs with `replayed: true`, while reusing the key with a changed payload is rejected.
 - `watch_list`: lists watches attached to a handoff.
 - `watch_run`: runs due watch checks at a provided RFC3339 timestamp.
 - `watch_update`: updates a watch deadline, status, or escalation policy.

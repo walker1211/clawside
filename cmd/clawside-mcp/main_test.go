@@ -301,7 +301,7 @@ func TestServerCollaborationTemplateApplySchemaListsOnlyTemplateFields(t *testin
 	if properties == nil {
 		t.Fatalf("expected collaboration_template_apply properties")
 	}
-	want := []string{"template_name", "workflow_kind", "intent", "upstream", "downstream", "reviewer"}
+	want := []string{"template_name", "workflow_kind", "intent", "upstream", "downstream", "reviewer", "idempotency_key"}
 	for _, field := range want {
 		if _, ok := properties[field]; !ok {
 			t.Fatalf("expected collaboration_template_apply field %q in %+v", field, properties)
@@ -455,20 +455,7 @@ func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
 		t.Fatalf("expected collaboration template catalog metadata, got %+v", catalog.Templates)
 	}
 
-	applied, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "collaboration_template_apply", Arguments: map[string]any{
-		"template_name": "upstream_downstream_review",
-		"intent":        "Coordinate upstream API change through downstream implementation and review",
-		"upstream":      map[string]any{"receiver_id": "upstream", "project_ref": "project://upstream"},
-		"downstream":    map[string]any{"receiver_id": "downstream", "project_ref": "project://downstream"},
-		"reviewer":      map[string]any{"receiver_id": "reviewer", "project_ref": "project://review"},
-	}}})
-	if err != nil {
-		t.Fatalf("CallTool(collaboration_template_apply): %v", err)
-	}
-	if applied.IsError {
-		t.Fatalf("expected collaboration_template_apply success")
-	}
-	var payload struct {
+	type templateApplyPayload struct {
 		TemplateName string `json:"template_name"`
 		Workflow     struct {
 			ID string `json:"id"`
@@ -478,8 +465,29 @@ func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
 			WorkflowID          string   `json:"workflow_id"`
 			DependsOnHandoffIDs []string `json:"depends_on_handoff_ids"`
 		} `json:"handoffs"`
+		Replayed bool `json:"replayed"`
 	}
+
+	applyArgs := map[string]any{
+		"template_name":   "upstream_downstream_review",
+		"intent":          "Coordinate upstream API change through downstream implementation and review",
+		"upstream":        map[string]any{"receiver_id": "upstream", "project_ref": "project://upstream"},
+		"downstream":      map[string]any{"receiver_id": "downstream", "project_ref": "project://downstream"},
+		"reviewer":        map[string]any{"receiver_id": "reviewer", "project_ref": "project://review"},
+		"idempotency_key": "mcp-template-apply-1",
+	}
+	applied, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "collaboration_template_apply", Arguments: applyArgs}})
+	if err != nil {
+		t.Fatalf("CallTool(collaboration_template_apply): %v", err)
+	}
+	if applied.IsError {
+		t.Fatalf("expected collaboration_template_apply success")
+	}
+	var payload templateApplyPayload
 	decodeStructuredContent(t, applied, &payload)
+	if payload.Replayed {
+		t.Fatalf("expected first collaboration_template_apply not replayed")
+	}
 	if payload.TemplateName != "upstream_downstream_review" {
 		t.Fatalf("expected template name, got %q", payload.TemplateName)
 	}
@@ -501,6 +509,30 @@ func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
 		t.Fatalf("expected reviewer dependency on downstream, got %+v", payload.Handoffs[2].DependsOnHandoffIDs)
 	}
 
+	replayed, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "collaboration_template_apply", Arguments: applyArgs}})
+	if err != nil {
+		t.Fatalf("CallTool(collaboration_template_apply replay): %v", err)
+	}
+	if replayed.IsError {
+		t.Fatalf("expected replay collaboration_template_apply success")
+	}
+	var replayPayload templateApplyPayload
+	decodeStructuredContent(t, replayed, &replayPayload)
+	if !replayPayload.Replayed {
+		t.Fatalf("expected replayed collaboration_template_apply result")
+	}
+	if replayPayload.Workflow.ID != payload.Workflow.ID {
+		t.Fatalf("expected replay workflow %s, got %s", payload.Workflow.ID, replayPayload.Workflow.ID)
+	}
+	if len(replayPayload.Handoffs) != len(payload.Handoffs) {
+		t.Fatalf("expected replay handoff count %d, got %d", len(payload.Handoffs), len(replayPayload.Handoffs))
+	}
+	for i := range payload.Handoffs {
+		if replayPayload.Handoffs[i].ID != payload.Handoffs[i].ID {
+			t.Fatalf("handoff %d: expected replay id %s, got %s", i, payload.Handoffs[i].ID, replayPayload.Handoffs[i].ID)
+		}
+	}
+
 	reviewGate, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "collaboration_template_apply", Arguments: map[string]any{
 		"template_name": "review_gate",
 		"intent":        "Gate downstream implementation on upstream review",
@@ -514,17 +546,7 @@ func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
 	if reviewGate.IsError {
 		t.Fatalf("expected review_gate collaboration_template_apply success")
 	}
-	payload = struct {
-		TemplateName string `json:"template_name"`
-		Workflow     struct {
-			ID string `json:"id"`
-		} `json:"workflow"`
-		Handoffs []struct {
-			ID                  string   `json:"id"`
-			WorkflowID          string   `json:"workflow_id"`
-			DependsOnHandoffIDs []string `json:"depends_on_handoff_ids"`
-		} `json:"handoffs"`
-	}{}
+	payload = templateApplyPayload{}
 	decodeStructuredContent(t, reviewGate, &payload)
 	if payload.TemplateName != "review_gate" {
 		t.Fatalf("expected review_gate template name, got %q", payload.TemplateName)
@@ -552,17 +574,7 @@ func TestServerCallCollaborationTemplateToolsSucceeds(t *testing.T) {
 	if fanoutReview.IsError {
 		t.Fatalf("expected fanout_review collaboration_template_apply success")
 	}
-	payload = struct {
-		TemplateName string `json:"template_name"`
-		Workflow     struct {
-			ID string `json:"id"`
-		} `json:"workflow"`
-		Handoffs []struct {
-			ID                  string   `json:"id"`
-			WorkflowID          string   `json:"workflow_id"`
-			DependsOnHandoffIDs []string `json:"depends_on_handoff_ids"`
-		} `json:"handoffs"`
-	}{}
+	payload = templateApplyPayload{}
 	decodeStructuredContent(t, fanoutReview, &payload)
 	if payload.TemplateName != "fanout_review" {
 		t.Fatalf("expected fanout_review template name, got %q", payload.TemplateName)

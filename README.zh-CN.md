@@ -325,7 +325,7 @@ go run ./cmd/clawside-mcp \
 - `next_work`：列出可执行 handoffs，并包含非阻断的 liveness / lease warnings 和 suggestions
 - `blocked_work`：列出带有 dependency、watch、reviewer、liveness、lease 原因与建议的 handoffs
 - `collaboration_template_list`：列出 built-in truth-plane 模板（`upstream_downstream_review`、`review_gate`、`fanout_review`），并返回 graph pattern、roles、dependencies、acceptance criteria 和 safety boundaries；其中 `fanout_review` 表示 `upstream -> {downstream, reviewer}`
-- `collaboration_template_apply`：应用 built-in 模板，只创建 durable workflow / handoff / dependency / watch 记录
+- `collaboration_template_apply`：应用 built-in 模板，只创建 durable workflow / handoff / dependency / watch 记录。它接受可选 `idempotency_key`；同一 normalized payload 重试会返回原 workflow / handoffs，并带 `replayed: true`；同 key 但 payload 变化会被拒绝
 - `watch_list`：列出单个 handoff 当前挂载的 watches
 - `watch_run`：按给定 RFC3339 时间运行 due watch 检查
 - `watch_update`：更新单个 watch 的 deadline、status 或 escalation policy
