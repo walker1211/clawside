@@ -1512,7 +1512,20 @@ func rpcErrorContractForTest(t *testing.T, name string, recorder *httptest.Respo
 
 func unsupportedMethodContractsForTest(t *testing.T, handler http.Handler, card AgentCard) []a2aContractUnsupportedMethod {
 	t.Helper()
-	methods := []string{"message/send", "message/stream", "tasks.cancel", "tasks/pushNotification/set", "tasks/pushNotification/get", "handoff_create"}
+	methods := []string{
+		"message/send",
+		"message/stream",
+		"tasks.cancel",
+		"tasks/pushNotification/set",
+		"tasks/pushNotification/get",
+		"handoff_create",
+		"runtime/session/start",
+		"runtime/session/create",
+		"sandbox/launch",
+		"worker/launch",
+		"sender/deliver",
+		"telegram/send",
+	}
 	contracts := make([]a2aContractUnsupportedMethod, 0, len(methods))
 	for _, method := range methods {
 		contracts = append(contracts, a2aContractUnsupportedMethod{

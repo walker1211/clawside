@@ -94,6 +94,20 @@ func TestCheckOpenClawA2AContractResultsValidationFailures(t *testing.T) {
 			want: "unsupported A2A method advertised",
 		},
 		{
+			name: "unsupported stream method advertised",
+			mutate: func(value map[string]any) {
+				value["method_matrix"] = append(value["method_matrix"].([]any), map[string]any{"id": "message/stream", "transport": "json-rpc", "mode": "write", "endpoint": "/a2a/rpc"})
+			},
+			want: "unsupported A2A method advertised",
+		},
+		{
+			name: "unsupported runtime method advertised",
+			mutate: func(value map[string]any) {
+				value["method_matrix"] = append(value["method_matrix"].([]any), map[string]any{"id": "runtime/session/start", "transport": "json-rpc", "mode": "write", "endpoint": "/a2a/rpc"})
+			},
+			want: "unsupported A2A method advertised",
+		},
+		{
 			name: "missing not found error",
 			mutate: func(value map[string]any) {
 				jsonRPC := value["json_rpc"].(map[string]any)
@@ -110,6 +124,13 @@ func TestCheckOpenClawA2AContractResultsValidationFailures(t *testing.T) {
 				first["advertised"] = true
 			},
 			want: "unsupported A2A method marked advertised",
+		},
+		{
+			name: "missing runtime unsupported method",
+			mutate: func(value map[string]any) {
+				removeA2AContractUnsupportedMethodForTest(value, "runtime/session/start")
+			},
+			want: "missing unsupported A2A method runtime/session/start",
 		},
 		{
 			name: "create task wrong state",
@@ -137,6 +158,39 @@ func TestCheckOpenClawA2AContractResultsValidationFailures(t *testing.T) {
 				create["command"] = "rm -rf /"
 			},
 			want: "A2A contract contains forbidden field command",
+		},
+		{
+			name: "forbidden auth key field",
+			mutate: func(value map[string]any) {
+				jsonRPC := value["json_rpc"].(map[string]any)
+				jsonRPC["auth_key"] = "secret"
+			},
+			want: "A2A contract contains forbidden field auth_key",
+		},
+		{
+			name: "forbidden request body field",
+			mutate: func(value map[string]any) {
+				sse := value["sse"].(map[string]any)
+				sse["request_body"] = map[string]any{"prompt": "private"}
+			},
+			want: "A2A contract contains forbidden field request_body",
+		},
+		{
+			name: "forbidden private path field",
+			mutate: func(value map[string]any) {
+				tasks := value["tasks"].(map[string]any)
+				get := tasks["get"].(map[string]any)
+				get["private_path"] = "/tmp/private"
+			},
+			want: "A2A contract contains forbidden field private_path",
+		},
+		{
+			name: "forbidden sandbox field",
+			mutate: func(value map[string]any) {
+				safety := value["safety"].(map[string]any)
+				safety["sandbox"] = map[string]any{"enabled": true}
+			},
+			want: "A2A contract contains forbidden field sandbox",
 		},
 	}
 
@@ -172,6 +226,19 @@ func validA2AContractResultsValueForTest(t *testing.T) map[string]any {
 		t.Fatalf("decode bundled A2A contract fixture: %v", err)
 	}
 	return value
+}
+
+func removeA2AContractUnsupportedMethodForTest(value map[string]any, method string) {
+	jsonRPC := value["json_rpc"].(map[string]any)
+	unsupported := jsonRPC["unsupported_methods"].([]any)
+	kept := make([]any, 0, len(unsupported))
+	for _, item := range unsupported {
+		entry := item.(map[string]any)
+		if entry["method"] != method {
+			kept = append(kept, item)
+		}
+	}
+	jsonRPC["unsupported_methods"] = kept
 }
 
 func writeA2AContractResultsTestJSON(t *testing.T, path string, value any) {

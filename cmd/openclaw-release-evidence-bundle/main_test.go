@@ -176,6 +176,11 @@ func TestBuildPlanOutputFilesMatchReleaseEvidence(t *testing.T) {
 			t.Fatalf("output file[%d] = %q, want %q", i, got[i], want[i])
 		}
 	}
+	for _, outputFile := range got {
+		if outputFile == "a2a-contract-results.json" {
+			t.Fatalf("default release evidence bundle must not include %s", outputFile)
+		}
+	}
 }
 
 func TestBuildPlanParsesVerify(t *testing.T) {
@@ -545,7 +550,16 @@ func TestRunBundleWritesReadOnlyVerifyScript(t *testing.T) {
 			t.Fatalf("verify script missing portable copied %s evidence:\n%s", spec.Name, script)
 		}
 	}
-	for _, forbidden := range []string{"SENDER_AUTH_KEY", "--chat-id", "--deliver-main"} {
+	for _, forbidden := range []string{
+		"SENDER_AUTH_KEY",
+		"--chat-id",
+		"--deliver-main",
+		"--openclaw-a2a-contract-results",
+		"verify_clawside_a2a.sh",
+		"message/send",
+		"message/stream",
+		"telegram",
+	} {
 		if strings.Contains(script, forbidden) {
 			t.Fatalf("verify script must not contain %q", forbidden)
 		}

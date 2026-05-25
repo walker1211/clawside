@@ -191,6 +191,66 @@
           "message": "method not found",
           "data_code": "method_not_found"
         }
+      },
+      {
+        "method": "runtime/session/start",
+        "advertised": false,
+        "error": {
+          "name": "runtime/session/start",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      },
+      {
+        "method": "runtime/session/create",
+        "advertised": false,
+        "error": {
+          "name": "runtime/session/create",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      },
+      {
+        "method": "sandbox/launch",
+        "advertised": false,
+        "error": {
+          "name": "sandbox/launch",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      },
+      {
+        "method": "worker/launch",
+        "advertised": false,
+        "error": {
+          "name": "worker/launch",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      },
+      {
+        "method": "sender/deliver",
+        "advertised": false,
+        "error": {
+          "name": "sender/deliver",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
+      },
+      {
+        "method": "telegram/send",
+        "advertised": false,
+        "error": {
+          "name": "telegram/send",
+          "code": -32601,
+          "message": "method not found",
+          "data_code": "method_not_found"
+        }
       }
     ]
   },

@@ -169,13 +169,28 @@ func TestVerifyClawsideA2AScriptRunsExternalExampleClient(t *testing.T) {
 		"./cmd/clawside-a2a-example",
 		"Running A2A external example client...",
 		"CLAWSIDE_A2A_AUTH_KEY=\"$AUTH_KEY\"",
+		"env -u SENDER_AUTH_KEY -u SENDER_BASE_URL -u CLAWSIDE_SENDER_BASE_URL",
+		"sanitize_log_tail",
+		"<redacted>",
+		"rm -rf \"$TMP_DIR\"",
 	} {
 		if !strings.Contains(content, want) {
 			t.Fatalf("expected verify_clawside_a2a.sh to contain %q", want)
 		}
 	}
-	if strings.Contains(content, "--auth-key") {
-		t.Fatalf("verify_clawside_a2a.sh must not pass A2A auth through argv")
+	for _, forbidden := range []string{
+		"--auth-key",
+		"--sender-auth-key",
+		"--deliver-main",
+		"--chat-id",
+		"telegram",
+		"openclaw-dispatch",
+		"message/send",
+		"message/stream",
+	} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("verify_clawside_a2a.sh must not contain %q", forbidden)
+		}
 	}
 }
 
@@ -1009,11 +1024,15 @@ func TestReadmeStage11DocumentsReleaseEvidenceGate(t *testing.T) {
 			"trajectory",
 			"scripts/ci-local.sh clean",
 			"scripts/verify_openclaw_mcp.sh",
+			"./scripts/verify_clawside_a2a.sh",
+			"testdata/openclaw-smoke/stage0-5/a2a-contract-results.json",
+			"--openclaw-a2a-contract-results",
+			"coordination-evidence-summary.json",
 		}
 		if tc.path == "README.zh-CN.md" {
-			wantTokens = append(wantTokens, "只读", "真实投递", "显式授权", "发布级 evidence", "默认被 git 忽略")
+			wantTokens = append(wantTokens, "只读", "真实投递", "显式授权", "发布级 evidence", "默认被 git 忽略", "A2A compatibility evidence 与默认 release evidence bundle 分开验证")
 		} else {
-			wantTokens = append(wantTokens, "read-only", "real delivery", "explicit authorization", "release-grade evidence", "ignored by git by default")
+			wantTokens = append(wantTokens, "read-only", "real delivery", "explicit authorization", "release-grade evidence", "ignored by git by default", "A2A compatibility evidence is validated separately from the default release evidence bundle")
 		}
 		for _, want := range wantTokens {
 			if !strings.Contains(section, want) {

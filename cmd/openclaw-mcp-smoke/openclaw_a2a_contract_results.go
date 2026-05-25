@@ -40,6 +40,12 @@ var unsupportedA2AContractMethods = []string{
 	"tasks/pushNotification/set",
 	"tasks/pushNotification/get",
 	"handoff_create",
+	"runtime/session/start",
+	"runtime/session/create",
+	"sandbox/launch",
+	"worker/launch",
+	"sender/deliver",
+	"telegram/send",
 }
 
 func checkOpenClawA2AContractResults(opts Options) CheckResult {
@@ -339,6 +345,14 @@ func findForbiddenA2AContractField(value any) (string, bool) {
 		"cwd":             {},
 		"local_path":      {},
 		"localPath":       {},
+		"private_path":    {},
+		"privatePath":     {},
+		"request_body":    {},
+		"requestBody":     {},
+		"auth_key":        {},
+		"authKey":         {},
+		"bearer":          {},
+		"authorization":   {},
 		"session_id":      {},
 		"sessionId":       {},
 		"prompt":          {},
@@ -356,6 +370,11 @@ func findForbiddenA2AContractField(value any) (string, bool) {
 		"deliveryJob":     {},
 		"delivery_job_id": {},
 		"deliveryJobId":   {},
+		"telegram":        {},
+		"chat_id":         {},
+		"chatId":          {},
+		"worker":          {},
+		"sandbox":         {},
 	}
 	switch typed := value.(type) {
 	case map[string]any:

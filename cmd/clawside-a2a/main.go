@@ -463,7 +463,20 @@ func validateSelfTestAgentCard(card a2aserver.AgentCard) error {
 			return fmt.Errorf("agent card check: missing method %s", method)
 		}
 	}
-	for _, method := range []string{"message/send", "message/stream", "tasks.cancel", "tasks/pushNotification/set", "tasks/pushNotification/get", "handoff_create"} {
+	for _, method := range []string{
+		"message/send",
+		"message/stream",
+		"tasks.cancel",
+		"tasks/pushNotification/set",
+		"tasks/pushNotification/get",
+		"handoff_create",
+		"runtime/session/start",
+		"runtime/session/create",
+		"sandbox/launch",
+		"worker/launch",
+		"sender/deliver",
+		"telegram/send",
+	} {
 		if skills[method] {
 			return fmt.Errorf("agent card check: advertised unsupported method %s", method)
 		}

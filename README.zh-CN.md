@@ -391,6 +391,8 @@ CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
 
 该脚本会构建临时 A2A binaries，创建临时 sqlite DB 和 A2A auth key，启动 localhost server，运行 `self-test`，再运行外部 example client，最后清理临时文件和进程。它只使用本地 truth-plane endpoint，不会启动 runtime session、worker、sender delivery 或 Telegram delivery。对外部 client 接入而言，该脚本就是本地 compatibility readiness 的可复验路径；更完整的 release readiness 仍使用已有 OpenClaw MCP smoke 和 release evidence profiles。
 
+如果需要 release 前的 contract evidence，可以用 `scripts/verify_openclaw_mcp.sh --openclaw-a2a-contract-results <sanitized-a2a-contract-results.json>` 验证 `testdata/openclaw-smoke/stage0-5/a2a-contract-results.json` 这份 sanitized fixture。该路径验证 Agent Card、JSON-RPC method matrix、task projections、SSE contract 和安全边界，但不会把 A2A contract output 加入默认 release evidence bundle。
+
 如果需要一个可运行的外部 client 形态 Go 示例，可以让 `clawside-a2a-example` 连接到运行中的 endpoint：
 
 ```bash
@@ -1125,6 +1127,8 @@ go run ./cmd/orchestrator workflow evidence \
 ```
 
 bundle 命令会为 9 个 trajectory-derived result 文件调用已有 extractor，并复制预生成的 `coordination-evidence-summary.json`；bundle 阶段不会打开 orchestrator DB。它会写出 `manifest.json`、10 个 evidence artifacts 和 `verify-release-evidence.sh`。`--verify` 运行只读发布级复验，保持只读，不包含 `--deliver-main`、`--chat-id`，也不直接调用 Telegram API。`verify-release-evidence.sh` 会用脚本自身目录定位 evidence artifacts，先通过 `openclaw-release-evidence-bundle verify-manifest` 校验 manifest 中各 evidence 文件的存在性、元数据和 SHA256，再用当前仓库的 `scripts/verify_openclaw_mcp.sh --profile release-evidence` 携带全部 evidence path 复验，其中包括 `--coordination-evidence-summary`；因此 bundle 可以在同一仓库内移动后继续复验。`release-evidence/openclaw-vX.Y.Z` 是本地生成目录，默认被 git 忽略。
+
+A2A compatibility evidence 与默认 release evidence bundle 分开验证：运行 `./scripts/verify_clawside_a2a.sh` 可以复验本地 endpoint readiness；也可以用 `scripts/verify_openclaw_mcp.sh --openclaw-a2a-contract-results <sanitized-a2a-contract-results.json>` 验证 `testdata/openclaw-smoke/stage0-5/a2a-contract-results.json` 这份 sanitized contract fixture。默认 release bundle 不包含 `a2a-contract-results.json`，仍只包含 release evidence artifacts、`coordination-evidence-summary.json` 和 `verify-release-evidence.sh`。这项 A2A check 不是 runtime/session/sandbox/worker 或 sender delivery evidence，也不表示支持 `message/send`、`message/stream` 或 push notifications。
 
 如需拆成两步，也可以手工运行生成的验证脚本：
 

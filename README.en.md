@@ -391,6 +391,8 @@ For a repeatable local or CI readiness gate, run the wrapper script instead:
 
 The wrapper builds temporary A2A binaries, creates a temporary sqlite DB and A2A auth key, starts a localhost server, runs `self-test`, runs the external example client, and cleans up. It uses only the local truth-plane endpoint and does not launch runtime sessions, workers, sender delivery, or Telegram delivery. For external client adoption evidence, this wrapper is the local compatibility readiness path; broader release readiness still uses the existing OpenClaw MCP smoke and release evidence profiles.
 
+For release-before contract evidence, validate the sanitized fixture at `testdata/openclaw-smoke/stage0-5/a2a-contract-results.json` with `scripts/verify_openclaw_mcp.sh --openclaw-a2a-contract-results <sanitized-a2a-contract-results.json>`. That path validates the Agent Card, JSON-RPC method matrix, task projections, SSE contract, and safety boundaries without adding A2A contract output to the default release evidence bundle.
+
 For a runnable external-client-shaped Go example, use `clawside-a2a-example` against a running endpoint:
 
 ```bash
@@ -1125,6 +1127,8 @@ The recommended bundle-first path builds a local evidence bundle from real traje
 ```
 
 The bundle command invokes existing extractors for the nine trajectory-derived result files and copies the pre-generated `coordination-evidence-summary.json`; it does not open the orchestrator DB while bundling. It writes `manifest.json`, ten evidence artifacts, and `verify-release-evidence.sh`. `--verify` runs the read-only release-grade verification path, does not include `--deliver-main` or `--chat-id`, and never calls the Telegram API directly. `verify-release-evidence.sh` locates the evidence artifacts from the script directory, first runs `openclaw-release-evidence-bundle verify-manifest` to verify the existence, metadata, and SHA256 values in `manifest.json`, then re-runs `scripts/verify_openclaw_mcp.sh --profile release-evidence` with all evidence paths, including `--coordination-evidence-summary`. The bundle can therefore be moved within the same repository and verified again. `release-evidence/openclaw-vX.Y.Z` is a local generated directory and is ignored by git by default.
+
+A2A compatibility evidence is validated separately from the default release evidence bundle: run `./scripts/verify_clawside_a2a.sh` for the local endpoint readiness path, or validate the sanitized contract fixture at `testdata/openclaw-smoke/stage0-5/a2a-contract-results.json` with `scripts/verify_openclaw_mcp.sh --openclaw-a2a-contract-results <sanitized-a2a-contract-results.json>`. The default release bundle does not include `a2a-contract-results.json`; it stays limited to the release evidence artifacts plus `coordination-evidence-summary.json` and `verify-release-evidence.sh`. This A2A check is not runtime/session/sandbox/worker or sender delivery evidence and does not imply support for `message/send`, `message/stream`, or push notifications.
 
 For a two-step flow, you can also run the generated verifier script manually:
 
