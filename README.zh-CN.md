@@ -389,7 +389,7 @@ CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
 ./scripts/verify_clawside_a2a.sh
 ```
 
-该脚本会构建临时 A2A binaries，创建临时 sqlite DB 和 A2A auth key，启动 localhost server，运行 `self-test`，再运行外部 example client，最后清理临时文件和进程。它只使用本地 truth-plane endpoint，不会启动 runtime session、worker、sender delivery 或 Telegram delivery。
+该脚本会构建临时 A2A binaries，创建临时 sqlite DB 和 A2A auth key，启动 localhost server，运行 `self-test`，再运行外部 example client，最后清理临时文件和进程。它只使用本地 truth-plane endpoint，不会启动 runtime session、worker、sender delivery 或 Telegram delivery。对外部 client 接入而言，该脚本就是本地 compatibility readiness 的可复验路径；更完整的 release readiness 仍使用已有 OpenClaw MCP smoke 和 release evidence profiles。
 
 如果需要一个可运行的外部 client 形态 Go 示例，可以让 `clawside-a2a-example` 连接到运行中的 endpoint：
 
@@ -399,6 +399,27 @@ CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
 ```
 
 该示例只使用 Agent Card discovery、`/a2a/rpc`、`tasks/get`、path-based SSE 和 `tasks/cancel`。它会创建一条受控 truth-plane handoff，并默认 cancel 收尾；不会启动 worker、session、sender delivery、Telegram delivery 或本地 command。
+
+外部 client 最小接入清单：
+
+- 先读取 `/.well-known/agent-card.json`，确认 endpoint hints 后再调用 RPC。
+- 通过 `CLAWSIDE_A2A_AUTH_KEY` 或等价 secret store 携带 bearer auth；不要把 A2A auth key 放到 argv。
+- 只把 `/a2a/rpc` 当作 JSON-RPC endpoint，只把 `/a2a/tasks/{handoffID}/events` 当作 SSE endpoint。
+- 只实现 Agent Card 声明的 method matrix。不要调用 `message/send`、`message/stream`、push-notification methods、raw `handoff_create`、runtime/session/sandbox/worker API、sender delivery 或 Telegram delivery。
+- SSE 重连时先调用 `tasks/get` 刷新当前状态，再重新订阅；不要依赖 `Last-Event-ID` 历史回放。
+- 日志必须脱敏：不要记录 auth key、原始请求 body、command/args/本地路径、private prompt/token、stdout/stderr、sender job 或 delivery job。
+
+外部 client 排障指引：
+
+| Diagnostic prefix | 可能原因 | 安全处理方式 |
+| --- | --- | --- |
+| `auth check: CLAWSIDE_A2A_AUTH_KEY is required` | client 进程环境中没有 A2A bearer key。 | 从 secret store 设置环境变量；不要新增 argv auth flag。 |
+| `auth check: server rejected bearer auth` | key 不属于该 endpoint、server 未配置同一 key，或请求打到了其他服务。 | 校验 server key 和 base URL，但不要打印 key。 |
+| `base_url check` | base URL 不是合法的 `http` 或 `https` URL。 | 修正 scheme/host，并移除 query/fragment。 |
+| `base_url/connectivity check` | endpoint 未启动、端口/路径错误、DNS/proxy 问题或超时。 | 检查 `/healthz`，本地重新运行 `./scripts/verify_clawside_a2a.sh`。 |
+| `agent_card check: unsupported metadata` | endpoint 不是预期的 Clawside A2A compatibility surface，或声明了不支持的方法。 | 对照下方 method matrix 检查 Agent Card。 |
+| `rpc check` | JSON-RPC transport 成功，但 method 返回 HTTP/RPC/结果解析失败。 | 只使用安全的 `error.data.code` 和 method 名排障；不要记录请求 body。 |
+| `sse check` | task event stream 返回错误状态/content-type、超时或 malformed data。 | 先用 `tasks/get` 刷新，再重新订阅 path-based SSE endpoint。 |
 
 外部 client 建议按这个顺序接入：
 

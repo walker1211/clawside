@@ -389,7 +389,7 @@ For a repeatable local or CI readiness gate, run the wrapper script instead:
 ./scripts/verify_clawside_a2a.sh
 ```
 
-The wrapper builds temporary A2A binaries, creates a temporary sqlite DB and A2A auth key, starts a localhost server, runs `self-test`, runs the external example client, and cleans up. It uses only the local truth-plane endpoint and does not launch runtime sessions, workers, sender delivery, or Telegram delivery.
+The wrapper builds temporary A2A binaries, creates a temporary sqlite DB and A2A auth key, starts a localhost server, runs `self-test`, runs the external example client, and cleans up. It uses only the local truth-plane endpoint and does not launch runtime sessions, workers, sender delivery, or Telegram delivery. For external client adoption evidence, this wrapper is the local compatibility readiness path; broader release readiness still uses the existing OpenClaw MCP smoke and release evidence profiles.
 
 For a runnable external-client-shaped Go example, use `clawside-a2a-example` against a running endpoint:
 
@@ -399,6 +399,27 @@ CLAWSIDE_A2A_AUTH_KEY=<local-a2a-key> \
 ```
 
 The example uses only Agent Card discovery, `/a2a/rpc`, `tasks/get`, path-based SSE, and `tasks/cancel`. It creates one controlled truth-plane handoff and cancels it by default; it does not launch workers, sessions, sender delivery, Telegram delivery, or local commands.
+
+External client minimum checklist:
+
+- Read `/.well-known/agent-card.json` first and require the advertised endpoint hints before calling RPC.
+- Use bearer auth from `CLAWSIDE_A2A_AUTH_KEY` or an equivalent secret store; do not pass A2A auth keys on argv.
+- Treat `/a2a/rpc` as the only JSON-RPC endpoint and `/a2a/tasks/{handoffID}/events` as the only SSE endpoint.
+- Implement only the advertised method matrix. Do not call `message/send`, `message/stream`, push-notification methods, raw `handoff_create`, runtime/session/sandbox/worker APIs, sender delivery, or Telegram delivery.
+- On SSE reconnect, call `tasks/get` first, then resubscribe; do not depend on historical replay from `Last-Event-ID`.
+- Keep logs sanitized: do not log auth keys, raw request bodies, command/args/local paths, private prompts/tokens, stdout/stderr, sender jobs, or delivery jobs.
+
+External client troubleshooting:
+
+| Diagnostic prefix | Likely cause | Safe next step |
+| --- | --- | --- |
+| `auth check: CLAWSIDE_A2A_AUTH_KEY is required` | Client process has no A2A bearer key in env. | Set the env var from a secret store; do not add an argv flag. |
+| `auth check: server rejected bearer auth` | Key is wrong for this endpoint, missing on the server, or hitting a different service. | Verify the server key and base URL without printing the key. |
+| `base_url check` | Base URL is not a valid `http` or `https` URL. | Fix scheme/host and remove query/fragment. |
+| `base_url/connectivity check` | Endpoint is down, wrong port/path, DNS/proxy issue, or timeout. | Check `/healthz` and rerun `./scripts/verify_clawside_a2a.sh` locally. |
+| `agent_card check: unsupported metadata` | The endpoint is not the expected Clawside A2A compatibility surface or advertises unsupported methods. | Compare the Agent Card with the method matrix below. |
+| `rpc check` | JSON-RPC transport succeeded but the method returned HTTP/RPC/malformed-result failure. | Use the safe `error.data.code` and method name; do not log request bodies. |
+| `sse check` | Task event stream returned bad status/content-type, timed out, or emitted malformed data. | Refresh with `tasks/get`, then resubscribe to the path-based SSE endpoint. |
 
 External client sequence:
 
