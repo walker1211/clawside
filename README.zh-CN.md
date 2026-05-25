@@ -1061,6 +1061,15 @@ Stage 9 在 Stage 8 本地发布保护之上增加 GitHub Actions 远端 CI 和 
 
 Release workflow 只在 `v*` tag 上运行，构建 linux amd64/arm64、darwin amd64/arm64、windows amd64 五个平台产物，生成 checksums，并创建或更新 GitHub Release。每个 release 归档包含二进制、`LICENSE`、根 README、多语言 README、`.example.env` 和 `configs/config.example.toml`，不包含 `.env`、`configs/config.toml`、数据库、日志或 `.openclaw/trajectory-exports`。
 
+仓库切 public 前，先运行只读 GitHub readiness verifier。它会报告 Secret scanning / push protection、Private vulnerability reporting、main branch protection 或 ruleset required status checks，以及 CodeQL/code scanning 状态；脚本不会修改 GitHub 设置：
+
+```bash
+./scripts/github-readiness.sh
+./scripts/github-readiness.sh <owner>/<repo>
+```
+
+如果仓库仍是 private，或账号套餐暂不暴露这些设置，verifier 可能会给出可操作的失败信息。手动补齐 GitHub 设置后，再重复运行脚本直到通过。
+
 推荐发布路径是在明确发布授权后执行：
 
 ```bash

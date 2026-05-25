@@ -1061,6 +1061,15 @@ Remote CI runs on `push` and `pull_request`:
 
 The release workflow runs only on `v*` tags, builds linux amd64/arm64, darwin amd64/arm64, and windows amd64 artifacts, generates checksums, and creates or updates the GitHub Release. Each release archive includes the binary, `LICENSE`, root README, multilingual READMEs, `.example.env`, and `configs/config.example.toml`; it excludes `.env`, `configs/config.toml`, databases, logs, and `.openclaw/trajectory-exports`.
 
+Before making the repository public, run the read-only GitHub readiness verifier. It reports Secret scanning / push protection, Private vulnerability reporting, main branch protection or ruleset required status checks, and CodeQL/code scanning status; it does not change GitHub settings:
+
+```bash
+./scripts/github-readiness.sh
+./scripts/github-readiness.sh <owner>/<repo>
+```
+
+If the repository is still private or the account plan does not expose these settings, the verifier may fail with actionable messages. Make the GitHub settings change manually, then rerun the script until it passes.
+
 Recommended release path after explicit release authorization:
 
 ```bash

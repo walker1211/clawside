@@ -230,6 +230,49 @@ func TestSecretScanScriptEntrypoint(t *testing.T) {
 	}
 }
 
+func TestGitHubReadinessScriptEntrypoint(t *testing.T) {
+	path := "scripts/github-readiness.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, want := range []string{
+		"help|--help|-h",
+		"gh repo view",
+		"gh api",
+		"security_and_analysis",
+		"secret_scanning",
+		"secret_scanning_push_protection",
+		"private-vulnerability-reporting",
+		"/branches/",
+		"/protection",
+		"rulesets?includes_parents=true",
+		"code-scanning/alerts?state=open&per_page=1",
+		"PASS ",
+		"FAIL ",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	for _, forbidden := range []string{"gh repo edit", "-X PATCH", "-X PUT", "-X POST", "-X DELETE", "Authorization:", "GITHUB_TOKEN", "/Users/"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("expected %s not to contain %q", path, forbidden)
+		}
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") {
+		t.Fatalf("%s should avoid Bash arrays for Bash 3.2 with set -u", path)
+	}
+	if strings.Contains(content, "BASH_SOURCE") {
+		t.Fatalf("%s should use $0 instead of BASH_SOURCE for Bash 3.2 compatibility", path)
+	}
+}
+
 func TestCILocalScriptEntrypoint(t *testing.T) {
 	path := "scripts/ci-local.sh"
 	info, err := os.Stat(path)

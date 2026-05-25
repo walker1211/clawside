@@ -201,6 +201,116 @@ func assertOrderLog(t *testing.T, env []string, want string, stdout string, stde
 	}
 }
 
+func TestGitHubReadinessPassesWithRequiredSettings(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/github-readiness.sh")
+	env := fakeGitHubReadinessEnv(t, "pass")
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/github-readiness.sh", env, "example/clawside")
+	if err != nil {
+		t.Fatalf("expected github-readiness.sh to pass: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	output := stdout + stderr
+	for _, want := range []string{
+		"PASS secret scanning is enabled",
+		"PASS push protection is enabled",
+		"PASS private vulnerability reporting is enabled",
+		"PASS branch protection requires status checks",
+		"PASS code scanning is enabled",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected readiness output to contain %q, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestGitHubReadinessFailsSafelyForPrivateUnavailableSettings(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/github-readiness.sh")
+	env := fakeGitHubReadinessEnv(t, "private-unavailable")
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/github-readiness.sh", env, "example/clawside")
+	if err == nil {
+		t.Fatalf("expected github-readiness.sh to fail for unavailable private-repo settings")
+	}
+	output := stdout + stderr
+	for _, want := range []string{
+		"FAIL secret scanning is unavailable or disabled",
+		"FAIL push protection is unavailable or disabled",
+		"FAIL private vulnerability reporting is unavailable or disabled",
+		"FAIL branch protection or ruleset does not require status checks",
+		"FAIL code scanning is unavailable or disabled",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected readiness output to contain %q, got:\n%s", want, output)
+		}
+	}
+	for _, leaked := range []string{"ghp_private_secret_1234567890", "/Users/example/private"} {
+		if strings.Contains(output, leaked) {
+			t.Fatalf("readiness output leaked %q:\n%s", leaked, output)
+		}
+	}
+}
+
+func fakeGitHubReadinessEnv(t *testing.T, mode string) []string {
+	t.Helper()
+	binDir := t.TempDir()
+	writeFile(t, filepath.Join(binDir, "gh"), `#!/usr/bin/env bash
+set -euo pipefail
+mode="${FAKE_GH_MODE:-pass}"
+args="$*"
+if [[ "$args" == repo\ view* ]]; then
+  if [[ "$mode" == "pass" ]]; then
+    printf 'example/clawside\tmain\tpublic\n'
+  else
+    printf 'example/clawside\tmain\tprivate\n'
+  fi
+  exit 0
+fi
+if [[ "$args" == *security_and_analysis.secret_scanning_push_protection.status* ]]; then
+  if [[ "$mode" == "pass" ]]; then printf 'enabled\n'; else printf 'unavailable\n'; fi
+  exit 0
+fi
+if [[ "$args" == *security_and_analysis.secret_scanning.status* ]]; then
+  if [[ "$mode" == "pass" ]]; then printf 'enabled\n'; else printf 'unavailable\n'; fi
+  exit 0
+fi
+if [[ "$args" == *private-vulnerability-reporting* ]]; then
+  if [[ "$mode" == "pass" ]]; then
+    printf 'true\n'
+  else
+    printf 'ghp_private_secret_1234567890 /Users/example/private\n' >&2
+    exit 1
+  fi
+  exit 0
+fi
+if [[ "$args" == *'/branches/main/protection'* ]]; then
+  if [[ "$mode" == "pass" ]]; then
+    printf 'Test\n'
+  else
+    printf 'ghp_private_secret_1234567890 /Users/example/private\n' >&2
+    exit 1
+  fi
+  exit 0
+fi
+if [[ "$args" == *'rulesets?includes_parents=true'* ]]; then
+  if [[ "$mode" == "pass" ]]; then printf 'Test\n'; else printf 'ghp_private_secret_1234567890 /Users/example/private\n' >&2; exit 1; fi
+  exit 0
+fi
+if [[ "$args" == *'code-scanning/alerts?state=open&per_page=1'* ]]; then
+  if [[ "$mode" == "pass" ]]; then printf '0\n'; else printf 'ghp_private_secret_1234567890 /Users/example/private\n' >&2; exit 1; fi
+  exit 0
+fi
+printf 'unexpected gh call: %s\n' "$args" >&2
+exit 1
+`)
+	if err := os.Chmod(filepath.Join(binDir, "gh"), 0o755); err != nil {
+		t.Fatalf("chmod fake gh: %v", err)
+	}
+	return []string{
+		"FAKE_GH_MODE=" + mode,
+		"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH"),
+	}
+}
+
 func newTempGitRepoWithTagRelease(t *testing.T, ciLocalScript string) string {
 	t.Helper()
 	repo := newTempGitRepoWithScript(t, "scripts/tag-release.sh")

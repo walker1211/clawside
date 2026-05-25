@@ -37,6 +37,7 @@ func TestGitHubReadinessFiles(t *testing.T) {
 		{path: ".github/ISSUE_TEMPLATE/bug_report.yml", want: []string{"name: Bug report", "Do not include secrets", "configs/config.example.toml"}},
 		{path: ".github/ISSUE_TEMPLATE/feature_request.yml", want: []string{"name: Feature request", "Problem", "Proposed solution"}},
 		{path: ".github/PULL_REQUEST_TEMPLATE.md", want: []string{"## Summary", "## Test plan", "scripts/ci-local.sh clean"}},
+		{path: "scripts/github-readiness.sh", want: []string{"secret_scanning", "secret_scanning_push_protection", "private-vulnerability-reporting", "code-scanning/alerts"}},
 		{path: ".gitignore", want: []string{"# Binary", "# Secrets", "# Local config", "# Data", "# Build artifacts", "# IDE", "# Logs", "# OS", "# Worktrees", "# Local/private project assets"}},
 	}
 
