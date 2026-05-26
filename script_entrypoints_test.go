@@ -1173,6 +1173,107 @@ func TestReadmeDocumentsOpenClawTruthPlaneContinuityValidation(t *testing.T) {
 	}
 }
 
+func TestReadmeDocumentsPrivateDogfoodRehearsal(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		content := readTextFile(t, path)
+		wantTokens := []string{
+			"P20",
+			"private dogfood",
+			"./scripts/ci-local.sh clean",
+			"./scripts/verify_clawside_a2a.sh",
+			"./scripts/verify_openclaw_mcp.sh --sender-base-url \"\" --collaboration-template-smoke --json",
+			"./scripts/github-readiness.sh <owner>/<repo>",
+			"local clean CI",
+			"A2A readiness",
+			"MCP collaboration-template rehearsal",
+			"GitHub readiness",
+			"expected red",
+		}
+		if path == "README.zh-CN.md" {
+			wantTokens = append(wantTokens, "不启动 model worker、runtime session 或 sandbox")
+		} else {
+			wantTokens = append(wantTokens, "does not launch model workers, runtime sessions, or sandboxes")
+		}
+		for _, want := range wantTokens {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", path, want)
+			}
+		}
+	}
+}
+
+func TestReadmeDocumentsExternalSwarmRuntimeIntegrationGuide(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		content := readTextFile(t, path)
+		wantTokens := []string{
+			"P21",
+			"external swarm/runtime integration",
+			"coordination sidecar",
+			"agent_register",
+			"collaboration_template_apply",
+			"handoff_create",
+			"next_work",
+			"blocked_work",
+			"handoff_progress action=receive",
+			"handoff_progress action=claim",
+			"handoff_progress action=start",
+			"handoff_progress action=checkpoint",
+			"handoff_progress action=complete",
+			"submit",
+			"review",
+			"approve",
+			"handoff_get",
+			"workflow_status",
+			"coordination_evidence_summary",
+			"<repo-root>",
+			"<owner>/<repo>",
+			"<workflow-id>",
+			"<handoff-id>",
+		}
+		for _, want := range wantTokens {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", path, want)
+			}
+		}
+	}
+}
+
+func TestReadmeKeepsReleaseDeferredAndPublicDocsSanitized(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		content := readTextFile(t, path)
+		wantTokens := []string{"P22", "./scripts/github-readiness.sh <owner>/<repo>"}
+		if path == "README.zh-CN.md" {
+			wantTokens = append(wantTokens,
+				"P22 release 继续暂缓",
+				"不要把仓库设为 public",
+				"不要修改 GitHub 设置",
+				"不要创建 release",
+				"不要创建或推送 tag",
+				"明确授权",
+			)
+		} else {
+			wantTokens = append(wantTokens,
+				"P22 release remains deferred",
+				"do not make the repository public",
+				"do not change GitHub settings",
+				"do not create a release",
+				"do not create or push a tag",
+				"explicit authorization",
+			)
+		}
+		for _, want := range wantTokens {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", path, want)
+			}
+		}
+		for _, forbidden := range []string{"/Users/", "walker1211/clawside", "zhangyoujun", "gh repo edit"} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("expected %s not to contain %q", path, forbidden)
+			}
+		}
+	}
+}
+
 func TestGitignoreIgnoresReleaseEvidenceBundles(t *testing.T) {
 	content := readTextFile(t, ".gitignore")
 	if !strings.Contains(content, "/release-evidence/") {

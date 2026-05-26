@@ -47,6 +47,89 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 | Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
 | 仓库切 public 前的 GitHub readiness | `./scripts/github-readiness.sh <owner>/<repo>` |
 
+### P20-P22 当前集成状态
+
+- **P20 private dogfood rehearsal**：当前 private dogfood 路径已记录为可重复的本地演练。它是 Clawside truth-plane / MCP sidecar 的私有操作证据，不是公开 release evidence。
+- **P21 external swarm/runtime integration guide**：本文档补齐外部 runtime 如何自己启动 worker，并把 Clawside 当作 coordination sidecar 使用的顺序。
+- **P22 release 继续暂缓**：除非获得明确授权，不要把仓库设为 public，不要修改 GitHub 设置，不要创建 release，也不要创建或推送 tag。public-readiness 检查保持只读：`./scripts/github-readiness.sh <owner>/<repo>`。
+
+### P20 private dogfood rehearsal sequence
+
+这条路径用于在不发布 release evidence 的前提下演练私有 runtime 接入。Clawside 记录 durable truth-plane state；Clawside 不启动 model worker、runtime session 或 sandbox。
+
+```bash
+./scripts/ci-local.sh clean
+./scripts/verify_clawside_a2a.sh
+./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --json
+./scripts/github-readiness.sh <owner>/<repo>
+```
+
+仓库仍为 private 时的预期结果：
+
+- `./scripts/ci-local.sh clean`：local clean CI 应该为 green。
+- `./scripts/verify_clawside_a2a.sh`：A2A readiness 应该为 green。
+- `./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --json`：MCP collaboration-template rehearsal 应该为 green。
+- `./scripts/github-readiness.sh <owner>/<repo>`：仓库仍为 private 或 GitHub settings 未启用时，GitHub readiness 可以是 expected red；除非该脚本 exit 0，否则不要宣称仓库 public-ready。
+
+这条 rehearsal 覆盖当前 truth-plane bridge 行为：agent registry、symbolic `project://...` refs、`next_work`、`blocked_work`、reviewer gates、dependency gates、`workflow_status` 和 `coordination_evidence_summary`。它不调用 `message/send` 或 `message/stream`，不触发 sender 或 Telegram delivery，也不接受 runtime launch fields。
+
+### P21 external swarm/runtime integration sequence
+
+External swarm/runtime integrator 应把 Clawside 当作 coordination sidecar。runtime 负责 model execution、worker/session/sandbox lifecycle、调度和实际任务执行。Clawside 只保存和投影 durable truth、workflow/handoff state、ownership、watch、repair、divergence、dependency gate、reviewer gate、evidence，以及 A2A-compatible read/query/cancel surface。
+
+推荐顺序：
+
+1. 在负责执行的 runtime 中注册 Clawside MCP server：
+
+```text
+command: <repo-root>/scripts/start_mcp.sh
+args: --db <repo-root>/sender.db
+env: SENDER_AUTH_KEY=<local-sender-key>
+```
+
+2. 用 symbolic project refs 注册 runtime-owned agents：
+
+```text
+agent_register actor=agent:planner project_refs=project://example/upstream capabilities=planning
+agent_register actor=agent:implementer project_refs=project://example/downstream capabilities=implementation
+agent_register actor=agent:reviewer project_refs=project://example/review capabilities=review
+```
+
+3. 使用 `collaboration_template_apply` 或 `handoff_create` 创建 durable work。Templates 和 handoffs 只创建 workflow truth；它们不得接受 `command`、`args`、本地路径、private prompt、token、session id、worker launch fields、sender delivery 或 Telegram delivery。
+
+4. 轮询 executable work 和 blocked work：
+
+```text
+next_work agent_id=agent:planner project_ref=project://example/upstream
+blocked_work project_ref=project://example/downstream
+```
+
+5. 由 runtime-owned worker 推进 handoff：
+
+```text
+handoff_progress action=receive handoff_id=<handoff-id>
+handoff_progress action=claim handoff_id=<handoff-id>
+handoff_progress action=start handoff_id=<handoff-id>
+handoff_progress action=checkpoint handoff_id=<handoff-id>
+handoff_progress action=complete handoff_id=<handoff-id>
+```
+
+有 reviewer gate 的 workflow 使用 `submit`、`review`、`request_revision` 和 `approve`。这里使用 protocol actions，不使用 `started` 或 `completed` 这类 projected state names。
+
+6. 读取最终 truth 和 evidence：
+
+```text
+handoff_get handoff_id=<handoff-id>
+workflow_status workflow_id=<workflow-id>
+coordination_evidence_summary workflow_id=<workflow-id> include_agents=true
+```
+
+在宣称 public-readiness 或 release 前，只运行只读检查：
+
+```bash
+./scripts/github-readiness.sh <owner>/<repo>
+```
+
 ## 最小使用路径
 
 1. 生成本地 sender 配置：
@@ -94,11 +177,13 @@ go run ./cmd/openclaw-release-evidence-bundle \
   --verify
 ```
 
-6. tag 前复验；准备发布时去掉 `--verify-only`，脚本会创建并推送 tag：
+6. 可选的 tag 前只读复验。P22 release 继续暂缓，因此除非获得明确授权，否则保留 `--verify-only`：
 
 ```bash
 ./scripts/tag-release.sh --verify-only --evidence-bundle <bundle-dir> vX.Y.Z
 ```
+
+没有明确授权时，不要去掉 `--verify-only`，不要创建 release，不要把仓库设为 public，不要修改 GitHub 设置，也不要创建或推送 tag。
 
 ## 组件概览
 

@@ -47,6 +47,89 @@ Which verifier should I run?
 | Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
 | GitHub public readiness before opening the repository | `./scripts/github-readiness.sh <owner>/<repo>` |
 
+### P20-P22 current integration status
+
+- **P20 private dogfood rehearsal:** the current private dogfood path is documented as a repeatable local rehearsal. Treat it as private operational evidence for Clawside's truth-plane / MCP sidecar behavior, not as public release evidence.
+- **P21 external swarm/runtime integration guide:** this README now documents how an external runtime launches its own workers and uses Clawside as a coordination sidecar.
+- **P22 release remains deferred:** until there is explicit authorization, do not make the repository public, do not change GitHub settings, do not create a release, and do not create or push a tag. Keep public-readiness checks read-only with `./scripts/github-readiness.sh <owner>/<repo>`.
+
+### P20 private dogfood rehearsal sequence
+
+Use this sequence to rehearse the private runtime path without publishing release evidence. Clawside records durable truth-plane state; it does not launch model workers, runtime sessions, or sandboxes.
+
+```bash
+./scripts/ci-local.sh clean
+./scripts/verify_clawside_a2a.sh
+./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --json
+./scripts/github-readiness.sh <owner>/<repo>
+```
+
+Expected results while the repository remains private:
+
+- `./scripts/ci-local.sh clean`: local clean CI should be green.
+- `./scripts/verify_clawside_a2a.sh`: A2A readiness should be green.
+- `./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --json`: MCP collaboration-template rehearsal should be green.
+- `./scripts/github-readiness.sh <owner>/<repo>`: GitHub readiness can be expected red while the repository is private or required GitHub settings are disabled; do not report the repository as public-ready until this script exits 0.
+
+The rehearsal covers the current truth-plane bridge behavior: agent registry, symbolic `project://...` references, `next_work`, `blocked_work`, reviewer gates, dependency gates, `workflow_status`, and `coordination_evidence_summary`. It does not call `message/send` or `message/stream`, does not trigger sender or Telegram delivery, and does not accept runtime launch fields.
+
+### P21 external swarm/runtime integration sequence
+
+An external swarm/runtime integrator should treat Clawside as a coordination sidecar. The runtime owns model execution, worker/session/sandbox lifecycle, scheduling, and task execution. Clawside owns durable truth, workflow/handoff state, ownership, watches, repair, divergence, dependency gates, reviewer gates, evidence, and A2A-compatible read/query/cancel surfaces.
+
+Recommended sequence:
+
+1. Register the Clawside MCP server in the runtime that owns execution:
+
+```text
+command: <repo-root>/scripts/start_mcp.sh
+args: --db <repo-root>/sender.db
+env: SENDER_AUTH_KEY=<local-sender-key>
+```
+
+2. Register runtime-owned agents with symbolic project references:
+
+```text
+agent_register actor=agent:planner project_refs=project://example/upstream capabilities=planning
+agent_register actor=agent:implementer project_refs=project://example/downstream capabilities=implementation
+agent_register actor=agent:reviewer project_refs=project://example/review capabilities=review
+```
+
+3. Create durable work with `collaboration_template_apply` or `handoff_create`. Templates and handoffs create workflow truth only; they must not accept `command`, `args`, local paths, private prompts, tokens, session ids, worker launch fields, sender delivery, or Telegram delivery.
+
+4. Poll executable and blocked work:
+
+```text
+next_work agent_id=agent:planner project_ref=project://example/upstream
+blocked_work project_ref=project://example/downstream
+```
+
+5. Let the runtime-owned worker progress the handoff:
+
+```text
+handoff_progress action=receive handoff_id=<handoff-id>
+handoff_progress action=claim handoff_id=<handoff-id>
+handoff_progress action=start handoff_id=<handoff-id>
+handoff_progress action=checkpoint handoff_id=<handoff-id>
+handoff_progress action=complete handoff_id=<handoff-id>
+```
+
+Use `submit`, `review`, `request_revision`, and `approve` for reviewer-gated workflows. Use protocol actions, not projected state names such as `started` or `completed`.
+
+6. Read final truth and evidence:
+
+```text
+handoff_get handoff_id=<handoff-id>
+workflow_status workflow_id=<workflow-id>
+coordination_evidence_summary workflow_id=<workflow-id> include_agents=true
+```
+
+Before making any public-readiness or release claim, keep verification read-only:
+
+```bash
+./scripts/github-readiness.sh <owner>/<repo>
+```
+
 ## Minimal usage path
 
 1. Generate the local sender config:
@@ -94,11 +177,13 @@ go run ./cmd/openclaw-release-evidence-bundle \
   --verify
 ```
 
-6. Re-verify before tagging. Remove `--verify-only` when you are ready to publish; the script will create and push the tag:
+6. Optional tag preflight only. P22 release remains deferred, so keep `--verify-only` unless there is explicit authorization:
 
 ```bash
 ./scripts/tag-release.sh --verify-only --evidence-bundle <bundle-dir> vX.Y.Z
 ```
+
+Do not remove `--verify-only`, create a release, make the repository public, change GitHub settings, or create/push a tag without explicit authorization.
 
 ## Components
 
