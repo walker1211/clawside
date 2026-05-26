@@ -310,6 +310,60 @@ func TestRunSmokeQuickProfileReportsProfileAndAllowsSkippedEvidence(t *testing.T
 	assertCheck(t, report, "a2a_main_delivery", checkStatusSkipped)
 }
 
+func TestRunHelpDocumentsPrivateCoordinationProfileWithoutConfig(t *testing.T) {
+	for _, arg := range []string{"help", "--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			stdout := new(bytes.Buffer)
+			stderr := new(bytes.Buffer)
+
+			err := run([]string{arg}, stdout, stderr)
+
+			if err != nil {
+				t.Fatalf("expected help to exit 0, got %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			}
+			help := stdout.String()
+			for _, want := range []string{
+				"private-coordination",
+				"truth-plane coordination rehearsal",
+				"-external-runtime-smoke",
+				"sender, MCP startup, registration, and truth-plane",
+			} {
+				if !strings.Contains(help, want) {
+					t.Fatalf("expected help to contain %q, got:\n%s", want, help)
+				}
+			}
+			if strings.Contains(help, "load config") {
+				t.Fatalf("help should not load local config, got:\n%s", help)
+			}
+			if stderr.String() != "" {
+				t.Fatalf("help should write stdout only, got stderr:\n%s", stderr.String())
+			}
+		})
+	}
+}
+
+func TestPrivateCoordinationProfileEnablesRuntimeOwnedRehearsals(t *testing.T) {
+	opts := applyProfileDefaults(Options{Profile: profilePrivateCoordination, SenderBaseURL: "http://127.0.0.1:8787"})
+
+	if opts.SenderBaseURL != "" {
+		t.Fatalf("expected private coordination profile to disable sender checks, got %q", opts.SenderBaseURL)
+	}
+	if !opts.MultiAgentCoordinationSmoke || !opts.CollaborationTemplateSmoke || !opts.ExternalRuntimeSmoke {
+		t.Fatalf("expected private coordination smokes enabled, got %+v", opts)
+	}
+	if opts.DeliverMain {
+		t.Fatalf("private coordination profile must not enable delivery")
+	}
+	if err := validateProfileOptions(opts); err != nil {
+		t.Fatalf("expected private coordination profile to validate: %v", err)
+	}
+
+	opts.DeliverMain = true
+	if err := validateProfileOptions(opts); err == nil || err.Error() != "profile private-coordination does not support --deliver-main; use --profile release" {
+		t.Fatalf("expected private coordination deliver-main rejection, got %v", err)
+	}
+}
+
 func TestRunSmokeQuickProfileRejectsDeliverMain(t *testing.T) {
 	_, err := RunSmoke(context.Background(), Options{Profile: profileQuick, DeliverMain: true, ChatID: 1})
 	if err == nil {
@@ -571,7 +625,7 @@ func TestRunSmokeRejectsUnknownProfile(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected unknown profile error")
 	}
-	if err.Error() != "unsupported profile nightly; supported profiles: quick, truth-plane-full, fixtures, release-evidence, release" {
+	if err.Error() != "unsupported profile nightly; supported profiles: quick, private-coordination, truth-plane-full, fixtures, release-evidence, release" {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1053,6 +1107,139 @@ func TestCheckCollaborationTemplateCreatesChainAndProjection(t *testing.T) {
 			t.Fatalf("unexpected work query args at call %d: %+v", tc.callIndex, args)
 		}
 		assertSmokeProjectRef(t, args, tc.projectRef)
+	}
+}
+
+func TestCheckExternalRuntimeRehearsalCoversRuntimeOwnedReviewLoop(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "upstream-runtime"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "reviewer-runtime"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "downstream-runtime"}}}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "upstream-1"},
+		}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "downstream-1"},
+		}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "upstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{
+				"handoff": map[string]any{"id": "downstream-1"},
+				"reasons": []any{map[string]any{"code": "dependency_incomplete", "dependency_handoff_id": "upstream-1"}},
+			},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-upstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "submitted"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "reviewed", "review_decision": "revision_required"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "submitted"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "reviewed", "review_decision": "approved"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "downstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-downstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"id": "upstream-1", "state": "completed"}}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1", "status": "completed"},
+			"handoffs": []any{
+				map[string]any{"id": "upstream-1", "state": "completed"},
+				map[string]any{"id": "downstream-1", "state": "completed"},
+			},
+		}),
+		structuredSmokeResult(map[string]any{
+			"summary": map[string]any{
+				"workflow_count": float64(1),
+				"handoff_count":  float64(2),
+				"agent_count":    float64(3),
+				"workflows": []any{
+					map[string]any{"id": "workflow-1", "status": "completed"},
+				},
+			},
+		}),
+	}}
+	report := Report{Status: reportStatusOK}
+
+	check := checkExternalRuntimeRehearsal(context.Background(), client, &report, Options{Text: "external runtime task"})
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected external runtime check ok, got %+v", check)
+	}
+	if report.ExternalRuntimeResult == nil {
+		t.Fatalf("expected report external runtime result")
+	}
+	if !report.ExternalRuntimeResult.UpstreamProjectReady || !report.ExternalRuntimeResult.DownstreamProjectBlocked || !report.ExternalRuntimeResult.DownstreamReady || !report.ExternalRuntimeResult.ReviewSubmitted || !report.ExternalRuntimeResult.ReviewApproved || !report.ExternalRuntimeResult.HandoffProjectionReady || !report.ExternalRuntimeResult.EvidenceSummaryReady {
+		t.Fatalf("unexpected external runtime result: %+v", report.ExternalRuntimeResult)
+	}
+	if report.ExternalRuntimeResult.WorkflowFinalStatus != "completed" || report.ExternalRuntimeResult.DependencyReason != "dependency_incomplete" {
+		t.Fatalf("unexpected external runtime status: %+v", report.ExternalRuntimeResult)
+	}
+	wantNames := []string{
+		"agent_register", "agent_register", "agent_register", "handoff_create", "handoff_create", "next_work", "blocked_work",
+		"handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
+		"next_work", "handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_get", "workflow_status", "coordination_evidence_summary",
+	}
+	if len(client.calls) != len(wantNames) {
+		t.Fatalf("expected calls %+v, got %+v", wantNames, client.calls)
+	}
+	for i, want := range wantNames {
+		if client.calls[i].Params.Name != want {
+			t.Fatalf("call %d: expected %q, got %+v", i, want, client.calls[i])
+		}
+		assertSmokeArgsDoNotContainExecutionFields(t, smokeCallArgsMap(t, client, i), "external runtime")
+	}
+	assertSmokeProjectRefs(t, smokeCallArgsMap(t, client, 0), "project://smoke/external-runtime/upstream")
+	assertSmokeProjectRefs(t, smokeCallArgsMap(t, client, 1), "project://smoke/external-runtime/review")
+	assertSmokeProjectRefs(t, smokeCallArgsMap(t, client, 2), "project://smoke/external-runtime/downstream")
+	upstreamCreateArgs := smokeCallArgsMap(t, client, 3)
+	if upstreamCreateArgs["needs_review"] != true || upstreamCreateArgs["payload_ref"] != "project://smoke/external-runtime/upstream" {
+		t.Fatalf("unexpected upstream create args: %+v", upstreamCreateArgs)
+	}
+	if _, ok := upstreamCreateArgs["reviewer"].(map[string]any); !ok {
+		t.Fatalf("expected reviewer actor in upstream create args: %+v", upstreamCreateArgs)
+	}
+	downstreamCreateArgs := smokeCallArgsMap(t, client, 4)
+	if downstreamCreateArgs["workflow_id"] != "workflow-1" || downstreamCreateArgs["payload_ref"] != "project://smoke/external-runtime/downstream" {
+		t.Fatalf("unexpected downstream create args: %+v", downstreamCreateArgs)
+	}
+	depends, ok := downstreamCreateArgs["depends_on_handoff_ids"].([]string)
+	if !ok || len(depends) != 1 || depends[0] != "upstream-1" {
+		t.Fatalf("unexpected downstream dependencies: %+v", downstreamCreateArgs["depends_on_handoff_ids"])
+	}
+	submitArgs := smokeCallArgsMap(t, client, 12)
+	if submitArgs["action"] != "submit" || submitArgs["artifact_count"] != 1 {
+		t.Fatalf("unexpected submit args: %+v", submitArgs)
+	}
+	reviewArgs := smokeCallArgsMap(t, client, 13)
+	if reviewArgs["action"] != "review" || reviewArgs["review_decision"] != "revision_required" {
+		t.Fatalf("unexpected review args: %+v", reviewArgs)
+	}
+	approveArgs := smokeCallArgsMap(t, client, 16)
+	if approveArgs["action"] != "approve" {
+		t.Fatalf("unexpected approve args: %+v", approveArgs)
+	}
+	evidenceArgs := smokeCallArgsMap(t, client, 27)
+	if evidenceArgs["workflow_id"] != "workflow-1" || evidenceArgs["include_agents"] != true {
+		t.Fatalf("unexpected evidence args: %+v", evidenceArgs)
 	}
 }
 

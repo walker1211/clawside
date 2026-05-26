@@ -4,19 +4,20 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 usage() {
-  printf 'usage: %s [--verify-only] --evidence-bundle DIR TAG\n' "$0"
-  printf '       CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=DIR %s [--verify-only] TAG\n' "$0"
+  printf 'usage: %s [--verify-only] [--authorize-tag-push] --evidence-bundle DIR TAG\n' "$0"
+  printf '       CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=DIR %s [--verify-only] [--authorize-tag-push] TAG\n' "$0"
   printf '\n'
-  printf 'Create and push a v* release tag after release evidence and scripts/ci-local.sh clean pass.\n'
+  printf 'Verify a v* release tag by default; create and push it only with explicit authorization.\n'
   printf '\n'
   printf 'Options:\n'
-  printf '  --verify-only           Run release evidence and clean CI checks without tagging or pushing.\n'
+  printf '  --verify-only           Run release evidence and clean CI checks without tagging or pushing (default).\n'
+  printf '  --authorize-tag-push    After all checks pass, create and push the tag; requires explicit release authorization.\n'
   printf '  --evidence-bundle DIR   Release evidence bundle directory to verify before tagging.\n'
   printf '  help, --help, -h        Show this help.\n'
 }
 
 TAG_NAME=""
-VERIFY_ONLY="0"
+VERIFY_ONLY="1"
 EVIDENCE_BUNDLE="${CLAWSIDE_RELEASE_EVIDENCE_BUNDLE:-}"
 
 while [[ $# -gt 0 ]]; do
@@ -27,6 +28,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --verify-only)
       VERIFY_ONLY="1"
+      shift
+      ;;
+    --authorize-tag-push)
+      VERIFY_ONLY="0"
       shift
       ;;
     --evidence-bundle)

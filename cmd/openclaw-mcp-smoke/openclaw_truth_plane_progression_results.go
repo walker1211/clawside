@@ -58,6 +58,10 @@ func checkOpenClawTruthPlaneProgressionResults(opts Options) CheckResult {
 }
 
 func validateOpenClawTruthPlaneProgressionResults(value any) (string, bool) {
+	if detail, ok := validateOpenClawSanitizedFixtureSafety(value); !ok {
+		return detail, false
+	}
+
 	root, ok := value.(map[string]any)
 	if !ok {
 		return "openclaw truth-plane progression results.truth_plane_progression must be an object", false

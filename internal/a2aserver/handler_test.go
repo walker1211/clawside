@@ -375,6 +375,63 @@ func TestRPCReadOnlyMethodsDispatch(t *testing.T) {
 	}
 }
 
+func TestRPCReadMethodsSanitizePrivateTruthFields(t *testing.T) {
+	handler, handlers := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
+	ctx := context.Background()
+
+	if _, err := handlers.HandleAgentRegister(ctx, toolserver.AgentRegisterInput{
+		Actor:             toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer", Address: "local/agent/socket"},
+		Capabilities:      []string{"writing"},
+		ProjectRefs:       []string{"project://private"},
+		TaskKinds:         []string{string(orchestrator.TaskGeneric)},
+		DeliveryTargetRef: "agent:writer/private-session",
+	}); err != nil {
+		t.Fatalf("HandleAgentRegister: %v", err)
+	}
+	created, err := handlers.HandleHandoffCreate(ctx, toolserver.HandoffCreateInput{
+		WorkflowKind:                  "multi_project",
+		Sender:                        toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner", Address: "local/planner/socket"},
+		Receiver:                      toolserver.ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer", Address: "local/writer/socket"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "private prompt with bearer redacted-token-123",
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    "https://sender.internal/task",
+		DeliveryTargetRef:             "agent:writer/private-session",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	for name, request := range map[string]struct {
+		method string
+		params map[string]any
+	}{
+		"workflow list":   {method: MethodWorkflowList, params: map[string]any{}},
+		"workflow status": {method: MethodWorkflowStatus, params: map[string]any{"workflow_id": created.Workflow.ID}},
+		"handoff get":     {method: MethodHandoffGet, params: map[string]any{"handoff_id": created.Handoff.ID}},
+		"agent list":      {method: MethodAgentList, params: map[string]any{"capability": "writing"}},
+		"next work":       {method: MethodNextWork, params: map[string]any{"agent_id": "writer"}},
+		"tasks get":       {method: MethodTasksGet, params: map[string]any{"id": created.Handoff.ID}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			result := rpcResult(t, postRPCJSON(t, handler, "rpc-secret", request.method, request.params))
+			body := string(result)
+			if !strings.Contains(body, created.Handoff.ID) && request.method != MethodAgentList {
+				t.Fatalf("expected sanitized response to keep public handoff id %s, got %s", created.Handoff.ID, body)
+			}
+			for _, forbidden := range []string{
+				`"intent"`, `"payload_ref"`, `"delivery_target_ref"`, `"address"`,
+				"private prompt", "redacted-token-123", "bearer ", "sender.internal",
+				"local/planner/socket", "local/writer/socket", "local/agent/socket", "agent:writer/private-session",
+			} {
+				if strings.Contains(body, forbidden) {
+					t.Fatalf("A2A read response leaked %q: %s", forbidden, body)
+				}
+			}
+		})
+	}
+}
+
 func TestTasksGetReturnsA2ATaskStatus(t *testing.T) {
 	handler, handlers := newTestA2AHandler(t, Config{AuthKey: "rpc-secret"})
 	ctx := context.Background()
@@ -943,8 +1000,17 @@ func TestTaskCreateRejectsUnsafeParams(t *testing.T) {
 		"cwd":                                {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "cwd": "/tmp/project"},
 		"session id":                         {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "session_id": "secret-session"},
 		"prompt":                             {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "prompt": "private prompt"},
+		"private prompt intent":              {"idempotency_key": "task-1", "intent": "private prompt: use local repo context", "receiver": map[string]any{"id": "writer"}},
+		"token intent":                       {"idempotency_key": "task-1", "intent": "review with bearer redacted-token-123", "receiver": map[string]any{"id": "writer"}},
+		"embedded absolute path intent":      {"idempotency_key": "task-1", "intent": "review local files under /Users/example/Projects/private-repo", "receiver": map[string]any{"id": "writer"}},
+		"comma absolute path intent":         {"idempotency_key": "task-1", "intent": "review,path,/Users/example/Projects/private-repo", "receiver": map[string]any{"id": "writer"}},
+		"semicolon absolute path intent":     {"idempotency_key": "task-1", "intent": "review;path;/Users/example/Projects/private-repo", "receiver": map[string]any{"id": "writer"}},
+		"backtick absolute path intent":      {"idempotency_key": "task-1", "intent": "review `/Users/example/Projects/private-repo`", "receiver": map[string]any{"id": "writer"}},
+		"embedded home path intent":          {"idempotency_key": "task-1", "intent": "review local files under ~/Projects/private-repo", "receiver": map[string]any{"id": "writer"}},
 		"file project ref":                   {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "file:///Users/example/project"},
 		"absolute project ref":               {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "/Users/example/project"},
+		"internal project ref":               {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "https://sender.internal/task"},
+		"private network project ref":        {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "http://10.0.0.1/task"},
 		"relative project ref":               {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "../secret"},
 		"bare relative project ref":          {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "secrets/config.yaml"},
 		"dot project ref":                    {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "."},
@@ -953,6 +1019,8 @@ func TestTaskCreateRejectsUnsafeParams(t *testing.T) {
 		"windows drive-relative project ref": {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "C:secret.txt"},
 		"home project ref":                   {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "project_ref": "~/project"},
 		"file artifact ref":                  {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "artifact_refs": []map[string]any{{"uri": "file:///tmp/evidence.txt"}}},
+		"internal artifact ref":              {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "artifact_refs": []map[string]any{{"uri": "https://sender.internal/evidence.txt"}}},
+		"private network artifact ref":       {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "artifact_refs": []map[string]any{{"uri": "http://192.168.1.12/evidence.txt"}}},
 		"bare relative artifact ref":         {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "artifact_refs": []map[string]any{{"uri": "evidence.txt"}}},
 		"backslash artifact ref":             {"idempotency_key": "task-1", "intent": "review", "receiver": map[string]any{"id": "writer"}, "artifact_refs": []map[string]any{{"uri": `.\evidence.txt`}}},
 	} {

@@ -13,17 +13,19 @@ type CoordinationEvidenceQuery struct {
 }
 
 type CoordinationEvidenceSummary struct {
-	GeneratedAt    time.Time                         `json:"generated_at"`
-	WorkflowCount  int                               `json:"workflow_count"`
-	HandoffCount   int                               `json:"handoff_count"`
-	WatchCount     int                               `json:"watch_count"`
-	BlockedCount   int                               `json:"blocked_count"`
-	NextWorkCount  int                               `json:"next_work_count"`
-	AgentCount     int                               `json:"agent_count,omitempty"`
-	Workflows      []CoordinationEvidenceWorkflow    `json:"workflows"`
-	BlockedReasons []CoordinationEvidenceBlockReason `json:"blocked_reasons,omitempty"`
-	Suggestions    []CoordinationEvidenceSuggestion  `json:"suggestions,omitempty"`
-	Agents         []CoordinationEvidenceAgent       `json:"agents,omitempty"`
+	GeneratedAt     time.Time                         `json:"generated_at"`
+	WorkflowCount   int                               `json:"workflow_count"`
+	HandoffCount    int                               `json:"handoff_count"`
+	WatchCount      int                               `json:"watch_count"`
+	RepairCount     int                               `json:"repair_count"`
+	DivergenceCount int                               `json:"divergence_count"`
+	BlockedCount    int                               `json:"blocked_count"`
+	NextWorkCount   int                               `json:"next_work_count"`
+	AgentCount      int                               `json:"agent_count,omitempty"`
+	Workflows       []CoordinationEvidenceWorkflow    `json:"workflows"`
+	BlockedReasons  []CoordinationEvidenceBlockReason `json:"blocked_reasons,omitempty"`
+	Suggestions     []CoordinationEvidenceSuggestion  `json:"suggestions,omitempty"`
+	Agents          []CoordinationEvidenceAgent       `json:"agents,omitempty"`
 }
 
 type CoordinationEvidenceWorkflow struct {
@@ -33,6 +35,8 @@ type CoordinationEvidenceWorkflow struct {
 	CurrentHandoffID string                        `json:"current_handoff_id,omitempty"`
 	HandoffCount     int                           `json:"handoff_count"`
 	WatchCount       int                           `json:"watch_count"`
+	RepairCount      int                           `json:"repair_count"`
+	DivergenceCount  int                           `json:"divergence_count"`
 	BlockedCount     int                           `json:"blocked_count"`
 	NextWorkCount    int                           `json:"next_work_count"`
 	Handoffs         []CoordinationEvidenceHandoff `json:"handoffs"`
@@ -48,6 +52,8 @@ type CoordinationEvidenceHandoff struct {
 	ReceiverID          string   `json:"receiver_id,omitempty"`
 	CurrentOwnerID      string   `json:"current_owner_id,omitempty"`
 	WatchCount          int      `json:"watch_count"`
+	RepairCount         int      `json:"repair_count"`
+	DivergenceCount     int      `json:"divergence_count"`
 }
 
 type CoordinationEvidenceBlockReason struct {
@@ -88,6 +94,8 @@ func (s *Service) CoordinationEvidenceSummary(ctx context.Context, query Coordin
 		summary.Workflows = append(summary.Workflows, workflowSummary)
 		summary.HandoffCount += workflowSummary.HandoffCount
 		summary.WatchCount += workflowSummary.WatchCount
+		summary.RepairCount += workflowSummary.RepairCount
+		summary.DivergenceCount += workflowSummary.DivergenceCount
 		summary.BlockedCount += workflowSummary.BlockedCount
 		summary.NextWorkCount += workflowSummary.NextWorkCount
 		summary.BlockedReasons = append(summary.BlockedReasons, blockedReasons...)
@@ -169,8 +177,20 @@ func (s *Service) coordinationEvidenceWorkflow(ctx context.Context, view Workflo
 		if err != nil {
 			return CoordinationEvidenceWorkflow{}, nil, nil, err
 		}
+		repairs, err := s.store.ListRepairs(ctx, handoff.ID)
+		if err != nil {
+			return CoordinationEvidenceWorkflow{}, nil, nil, err
+		}
+		divergences, err := s.store.ListDivergences(ctx, handoff.ID)
+		if err != nil {
+			return CoordinationEvidenceWorkflow{}, nil, nil, err
+		}
 		watchCount := len(watches)
+		repairCount := len(repairs)
+		divergenceCount := len(divergences)
 		workflowSummary.WatchCount += watchCount
+		workflowSummary.RepairCount += repairCount
+		workflowSummary.DivergenceCount += divergenceCount
 		workflowSummary.Handoffs = append(workflowSummary.Handoffs, CoordinationEvidenceHandoff{
 			ID:                  handoff.ID,
 			WorkflowID:          handoff.WorkflowID,
@@ -181,6 +201,8 @@ func (s *Service) coordinationEvidenceWorkflow(ctx context.Context, view Workflo
 			ReceiverID:          handoff.ReceiverActor.ID,
 			CurrentOwnerID:      handoff.CurrentOwner.ID,
 			WatchCount:          watchCount,
+			RepairCount:         repairCount,
+			DivergenceCount:     divergenceCount,
 		})
 	}
 	return workflowSummary, blockedReasons, suggestions, nil

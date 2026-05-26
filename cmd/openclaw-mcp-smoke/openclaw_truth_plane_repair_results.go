@@ -51,6 +51,10 @@ func checkOpenClawTruthPlaneRepairResults(opts Options) CheckResult {
 }
 
 func validateOpenClawTruthPlaneRepairResults(value any) (string, bool) {
+	if detail, ok := validateOpenClawSanitizedFixtureSafety(value); !ok {
+		return detail, false
+	}
+
 	root, ok := value.(map[string]any)
 	if !ok {
 		return "openclaw truth-plane repair results.truth_plane_repair must be an object", false

@@ -43,7 +43,7 @@ Which verifier should I run?
 | Day-to-day local development | `./scripts/ci-local.sh clean` |
 | A2A compatibility and external client readiness | `./scripts/verify_clawside_a2a.sh` |
 | MCP tool surface and OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
-| Multi-project upstream/downstream/reviewer rehearsal | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke` |
+| Multi-project upstream/downstream/reviewer rehearsal | `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json` |
 | Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
 | GitHub public readiness before opening the repository | `./scripts/github-readiness.sh <owner>/<repo>` |
 
@@ -60,7 +60,7 @@ Use this sequence to rehearse the private runtime path without publishing releas
 ```bash
 ./scripts/ci-local.sh clean
 ./scripts/verify_clawside_a2a.sh
-./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --json
+./scripts/verify_openclaw_mcp.sh --profile private-coordination --json
 ./scripts/github-readiness.sh <owner>/<repo>
 ```
 
@@ -68,10 +68,10 @@ Expected results while the repository remains private:
 
 - `./scripts/ci-local.sh clean`: local clean CI should be green.
 - `./scripts/verify_clawside_a2a.sh`: A2A readiness should be green.
-- `./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --json`: MCP collaboration-template rehearsal should be green.
+- `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`: MCP private coordination rehearsal should be green.
 - `./scripts/github-readiness.sh <owner>/<repo>`: GitHub readiness can be expected red while the repository is private or required GitHub settings are disabled; do not report the repository as public-ready until this script exits 0.
 
-The rehearsal covers the current truth-plane bridge behavior: agent registry, symbolic `project://...` references, `next_work`, `blocked_work`, reviewer gates, dependency gates, `workflow_status`, and `coordination_evidence_summary`. It does not call `message/send` or `message/stream`, does not trigger sender or Telegram delivery, and does not accept runtime launch fields.
+The rehearsal covers the current truth-plane bridge behavior: agent registry, symbolic `project://...` references, `next_work`, `blocked_work`, reviewer gates, dependency gates, `workflow_status`, and `coordination_evidence_summary`. The `private-coordination` profile expands to the truth-plane-only coordination checks behind `--multi-agent-coordination-smoke`, `--collaboration-template-smoke`, and `--external-runtime-smoke`, with sender checks and delivery disabled. It does not call `message/send` or `message/stream`, does not trigger sender or Telegram delivery, and does not accept runtime launch fields.
 
 ### P21 external swarm/runtime integration sequence
 
@@ -122,6 +122,12 @@ Use `submit`, `review`, `request_revision`, and `approve` for reviewer-gated wor
 handoff_get handoff_id=<handoff-id>
 workflow_status workflow_id=<workflow-id>
 coordination_evidence_summary workflow_id=<workflow-id> include_agents=true
+```
+
+To exercise the runtime-owned loop locally without launching workers, run:
+
+```bash
+./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --external-runtime-smoke --json
 ```
 
 Before making any public-readiness or release claim, keep verification read-only:
@@ -1147,13 +1153,13 @@ Install the pre-push hook:
 ./scripts/install-hooks.sh
 ```
 
-Create and push a release tag:
+Verify the local release tag gate without creating or pushing a tag:
 
 ```bash
 ./scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-v0.1.0 v0.1.0
 ```
 
-`tag-release.sh` requires a clean worktree, a tag name starting with `v`, a non-existing tag, and an explicit release evidence bundle through `--evidence-bundle DIR` or `CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=DIR`. The script first re-verifies the bundle manifest and `verify-release-evidence.sh` read-only, then runs `scripts/ci-local.sh clean`, then creates and pushes the tag automatically. Pushing the tag does not directly create a GitHub Release; Stage 8 does not add a GitHub Actions release workflow.
+`tag-release.sh` requires a clean worktree, a tag name starting with `v`, a non-existing tag, and an explicit release evidence bundle through `--evidence-bundle DIR` or `CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=DIR`. The script first re-verifies the bundle manifest and `verify-release-evidence.sh` read-only, then runs `scripts/ci-local.sh clean`. It defaults to verify-only and does not create or push a tag unless `--authorize-tag-push` is passed after explicit release authorization. Pushing the tag does not directly create a GitHub Release; Stage 8 does not add a GitHub Actions release workflow.
 
 ### Stage 9 remote CI and release workflow
 
@@ -1182,10 +1188,10 @@ Recommended release path after explicit release authorization:
 
 ```bash
 scripts/ci-local.sh clean
-scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
+scripts/tag-release.sh --authorize-tag-push --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
 ```
 
-`tag-release.sh` first read-only re-verifies the provided release evidence bundle, then runs the local clean CI gate, then creates and pushes the `v*` tag to GitHub. The GitHub Actions release workflow then builds artifacts remotely and creates or updates the GitHub Release. Stage 9 implementation and local verification do not run push, tag, or release; those shared-state operations still require explicit authorization.
+`tag-release.sh` first read-only re-verifies the provided release evidence bundle, then runs the local clean CI gate. With `--authorize-tag-push`, it then creates and pushes the `v*` tag to GitHub. The GitHub Actions release workflow then builds artifacts remotely and creates or updates the GitHub Release. Stage 9 implementation and local verification do not run push, tag, or release; those shared-state operations still require explicit authorization.
 
 To read-only check a local MCP registration config, pass the JSON config path explicitly. The check only reads the file and compares it with the current registration guidance; it never writes or patches config:
 

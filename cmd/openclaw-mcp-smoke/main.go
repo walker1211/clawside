@@ -34,7 +34,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	var jsonOnly bool
 	fs := flag.NewFlagSet("openclaw-mcp-smoke", flag.ContinueOnError)
 	fs.SetOutput(stderr)
-	fs.StringVar(&defaults.Profile, "profile", defaults.Profile, "smoke profile: quick, truth-plane-full, fixtures, release-evidence, release")
+	fs.StringVar(&defaults.Profile, "profile", defaults.Profile, "smoke profile: "+supportedProfileValues+"; private-coordination runs truth-plane coordination rehearsal without sender delivery")
 	fs.StringVar(&defaults.ConfigPath, "config", defaults.ConfigPath, "path to clawside config TOML")
 	fs.StringVar(&defaults.DBPath, "db", defaults.DBPath, "path to sender SQLite database")
 	fs.StringVar(&defaults.SenderBaseURL, "sender-base-url", defaults.SenderBaseURL, "sender service base URL")
@@ -47,6 +47,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&defaults.MultiProjectHandoffSmoke, "multi-project-handoff-smoke", false, "run a multi-project upstream/downstream handoff dependency smoke through MCP")
 	fs.BoolVar(&defaults.MultiAgentCoordinationSmoke, "multi-agent-coordination-smoke", false, "run agent registry, next_work, blocked_work, and watch suggestion smoke through MCP")
 	fs.BoolVar(&defaults.CollaborationTemplateSmoke, "collaboration-template-smoke", false, "run a durable collaboration template smoke through MCP")
+	fs.BoolVar(&defaults.ExternalRuntimeSmoke, "external-runtime-smoke", false, "run an external runtime-owned coordination loop through MCP without launching workers")
 	fs.StringVar(&defaults.OpenClawCommand, "openclaw-command", defaults.OpenClawCommand, "server-authorized OpenClaw dispatch command passed to clawside-mcp")
 	fs.Var(&openClawArgs, "openclaw-arg", "argument for the configured OpenClaw dispatch command; repeat for multiple args")
 	fs.StringVar(&defaults.OpenClawTarget, "openclaw-target", defaults.OpenClawTarget, "OpenClaw dispatch target for --openclaw-dispatch-smoke; accepts agent:<id> or <id>")
@@ -65,9 +66,17 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&defaults.DeliverMain, "deliver-main", false, "attempt a main bot delivery smoke check")
 	fs.Int64Var(&defaults.ChatID, "chat-id", 0, "Telegram chat ID for --deliver-main")
 	fs.StringVar(&defaults.Text, "text", "OpenClaw MCP smoke test", "text to send for --deliver-main")
-	fs.BoolVar(&jsonOnly, "json", false, "print JSON report only")
+	fs.BoolVar(&jsonOnly, "json", false, "print JSON report only; check names identify sender, MCP startup, registration, and truth-plane failures")
 
+	if openClawSmokeHelpRequested(args) {
+		fs.SetOutput(stdout)
+		fs.Usage()
+		return nil
+	}
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
 		return err
 	}
 	if len(mcpArgs) > 0 {
@@ -142,6 +151,18 @@ func defaultOptions(cwd string) (Options, error) {
 		OpenClawFixtureDir: fixtureDir,
 		Text:               "OpenClaw MCP smoke test",
 	}, nil
+}
+
+func openClawSmokeHelpRequested(args []string) bool {
+	if len(args) != 1 {
+		return false
+	}
+	switch args[0] {
+	case "help", "--help", "-h":
+		return true
+	default:
+		return false
+	}
 }
 
 type repeatedStringFlag []string

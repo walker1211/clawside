@@ -58,6 +58,10 @@ func checkOpenClawTruthPlaneContinuityResults(opts Options) CheckResult {
 }
 
 func validateOpenClawTruthPlaneContinuityResults(value any) (string, bool) {
+	if detail, ok := validateOpenClawSanitizedFixtureSafety(value); !ok {
+		return detail, false
+	}
+
 	root, ok := value.(map[string]any)
 	if !ok {
 		return "openclaw truth-plane continuity results.truth_plane_continuity must be an object", false

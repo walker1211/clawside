@@ -52,6 +52,10 @@ func checkOpenClawTruthPlaneDivergenceResults(opts Options) CheckResult {
 }
 
 func validateOpenClawTruthPlaneDivergenceResults(value any) (string, bool) {
+	if detail, ok := validateOpenClawSanitizedFixtureSafety(value); !ok {
+		return detail, false
+	}
+
 	root, ok := value.(map[string]any)
 	if !ok {
 		return "openclaw truth-plane divergence results.truth_plane_divergence must be an object", false

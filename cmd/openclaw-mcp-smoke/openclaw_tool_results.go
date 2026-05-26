@@ -93,6 +93,9 @@ func validateOpenClawToolResults(value any) (string, bool) {
 			return detail, false
 		}
 	}
+	if detail, ok := validateOpenClawSanitizedFixtureSafety(value); !ok {
+		return detail, false
+	}
 	return "", true
 }
 

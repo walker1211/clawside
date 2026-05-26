@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,13 +28,14 @@ const (
 	reportStatusOK     = "ok"
 	reportStatusFailed = "failed"
 
-	profileQuick           = "quick"
-	profileTruthPlaneFull  = "truth-plane-full"
-	profileFixtures        = "fixtures"
-	profileReleaseEvidence = "release-evidence"
-	profileRelease         = "release"
+	profileQuick               = "quick"
+	profilePrivateCoordination = "private-coordination"
+	profileTruthPlaneFull      = "truth-plane-full"
+	profileFixtures            = "fixtures"
+	profileReleaseEvidence     = "release-evidence"
+	profileRelease             = "release"
 
-	supportedProfileValues = "quick, truth-plane-full, fixtures, release-evidence, release"
+	supportedProfileValues = "quick, private-coordination, truth-plane-full, fixtures, release-evidence, release"
 	defaultFixtureDir      = "testdata/openclaw-smoke/stage0-5"
 )
 
@@ -51,6 +53,7 @@ type Options struct {
 	MultiProjectHandoffSmoke                 bool
 	MultiAgentCoordinationSmoke              bool
 	CollaborationTemplateSmoke               bool
+	ExternalRuntimeSmoke                     bool
 	OpenClawCommand                          string
 	OpenClawArgs                             []string
 	OpenClawTarget                           string
@@ -116,6 +119,7 @@ type Report struct {
 	MultiProjectHandoffResult    *MultiProjectHandoffSmokeResult    `json:"multi_project_handoff_result,omitempty"`
 	MultiAgentCoordinationResult *MultiAgentCoordinationSmokeResult `json:"multi_agent_coordination_result,omitempty"`
 	CollaborationTemplateResult  *CollaborationTemplateSmokeResult  `json:"collaboration_template_result,omitempty"`
+	ExternalRuntimeResult        *ExternalRuntimeSmokeResult        `json:"external_runtime_result,omitempty"`
 	OpenClawToolCallChecklist    []OpenClawToolCallChecklistEntry   `json:"openclaw_tool_call_checklist,omitempty"`
 	Registration                 RegistrationGuidance               `json:"registration"`
 }
@@ -174,6 +178,23 @@ type CollaborationTemplateSmokeResult struct {
 	DownstreamFinalState     string `json:"downstream_final_state"`
 }
 
+type ExternalRuntimeSmokeResult struct {
+	WorkflowID               string `json:"workflow_id"`
+	UpstreamHandoffID        string `json:"upstream_handoff_id"`
+	DownstreamHandoffID      string `json:"downstream_handoff_id"`
+	DependencyReason         string `json:"dependency_reason"`
+	UpstreamProjectReady     bool   `json:"upstream_project_ready"`
+	DownstreamProjectBlocked bool   `json:"downstream_project_blocked"`
+	DownstreamReady          bool   `json:"downstream_ready"`
+	ReviewSubmitted          bool   `json:"review_submitted"`
+	ReviewApproved           bool   `json:"review_approved"`
+	HandoffProjectionReady   bool   `json:"handoff_projection_ready"`
+	EvidenceSummaryReady     bool   `json:"evidence_summary_ready"`
+	UpstreamFinalState       string `json:"upstream_final_state"`
+	DownstreamFinalState     string `json:"downstream_final_state"`
+	WorkflowFinalStatus      string `json:"workflow_final_status"`
+}
+
 func (r *Report) addCheck(check CheckResult) {
 	r.Checks = append(r.Checks, check)
 	if check.Status == checkStatusFailed {
@@ -202,7 +223,7 @@ type requiredProfilePath struct {
 func normalizedProfile(profile string) (string, error) {
 	profile = strings.TrimSpace(profile)
 	switch profile {
-	case "", profileQuick, profileTruthPlaneFull, profileFixtures, profileReleaseEvidence, profileRelease:
+	case "", profileQuick, profilePrivateCoordination, profileTruthPlaneFull, profileFixtures, profileReleaseEvidence, profileRelease:
 		return profile, nil
 	default:
 		return "", fmt.Errorf("unsupported profile %s; supported profiles: %s", profile, supportedProfileValues)
@@ -210,10 +231,22 @@ func normalizedProfile(profile string) (string, error) {
 }
 
 func applyProfileDefaults(opts Options) Options {
-	if opts.Profile != profileFixtures {
+	switch opts.Profile {
+	case profileFixtures:
+		return applyFixturesProfileDefaults(opts)
+	case profilePrivateCoordination:
+		return applyPrivateCoordinationProfileDefaults(opts)
+	default:
 		return opts
 	}
-	return applyFixturesProfileDefaults(opts)
+}
+
+func applyPrivateCoordinationProfileDefaults(opts Options) Options {
+	opts.SenderBaseURL = ""
+	opts.MultiAgentCoordinationSmoke = true
+	opts.CollaborationTemplateSmoke = true
+	opts.ExternalRuntimeSmoke = true
+	return opts
 }
 
 func applyFixturesProfileDefaults(opts Options) Options {
@@ -257,6 +290,11 @@ func validateProfileOptions(opts Options) error {
 	case profileQuick:
 		if opts.DeliverMain {
 			return errors.New("profile quick does not support --deliver-main; use --profile release")
+		}
+		return nil
+	case profilePrivateCoordination:
+		if opts.DeliverMain {
+			return errors.New("profile private-coordination does not support --deliver-main; use --profile release")
 		}
 		return nil
 	case profileTruthPlaneFull:
@@ -391,6 +429,9 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	}
 	if opts.CollaborationTemplateSmoke {
 		report.addCheck(checkCollaborationTemplate(ctx, mcpClient, &report, opts))
+	}
+	if opts.ExternalRuntimeSmoke {
+		report.addCheck(checkExternalRuntimeRehearsal(ctx, mcpClient, &report, opts))
 	}
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
@@ -976,6 +1017,277 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 		DownstreamFinalState:     downstreamFinal,
 	}
 	return CheckResult{Name: "collaboration_template", Status: checkStatusOK, Detail: fmt.Sprintf("workflow_id=%s reviewer_ready=%t", workflowID, reviewerReady)}
+}
+
+func checkExternalRuntimeRehearsal(ctx context.Context, client smokeMCPClient, report *Report, opts Options) CheckResult {
+	if client == nil {
+		return failedCheck("external_runtime", "mcp client is not initialized; configure --mcp-command before using --external-runtime-smoke")
+	}
+	message := strings.TrimSpace(opts.Text)
+	if message == "" {
+		message = "External runtime smoke test"
+	}
+	agents := []struct {
+		id         string
+		projectRef string
+	}{
+		{id: "upstream-runtime", projectRef: "project://smoke/external-runtime/upstream"},
+		{id: "reviewer-runtime", projectRef: "project://smoke/external-runtime/review"},
+		{id: "downstream-runtime", projectRef: "project://smoke/external-runtime/downstream"},
+	}
+	for _, agent := range agents {
+		if err := registerSmokeAgent(ctx, client, opts, agent.id, []string{agent.projectRef}); err != nil {
+			return failedCheck("external_runtime", err.Error())
+		}
+	}
+
+	upstream, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_kind":                    "external_runtime_rehearsal",
+		"sender":                           map[string]any{"type": "system", "id": "openclaw-mcp-smoke"},
+		"receiver":                         map[string]any{"type": "agent", "id": "upstream-runtime"},
+		"reviewer":                         map[string]any{"type": "agent", "id": "reviewer-runtime"},
+		"task_kind":                        "generic_task",
+		"intent":                           message + ": upstream implementation",
+		"required_for_workflow_completion": true,
+		"needs_review":                     true,
+		"payload_ref":                      "project://smoke/external-runtime/upstream",
+		"delivery_target_ref":              "agent:upstream-runtime",
+	}, opts)
+	if err != nil {
+		return failedCheck("external_runtime", err.Error())
+	}
+	workflowID := nestedString(upstream, "workflow", "id")
+	upstreamID := nestedString(upstream, "handoff", "id")
+	if workflowID == "" || upstreamID == "" {
+		return failedCheck("external_runtime", "upstream handoff_create did not return workflow.id and handoff.id")
+	}
+	downstream, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_id":                      workflowID,
+		"workflow_kind":                    "external_runtime_rehearsal",
+		"sender":                           map[string]any{"type": "agent", "id": "upstream-runtime"},
+		"receiver":                         map[string]any{"type": "agent", "id": "downstream-runtime"},
+		"task_kind":                        "generic_task",
+		"intent":                           message + ": downstream integration",
+		"parent_handoff_id":                upstreamID,
+		"depends_on_handoff_ids":           []string{upstreamID},
+		"required_for_workflow_completion": true,
+		"payload_ref":                      "project://smoke/external-runtime/downstream",
+		"delivery_target_ref":              "agent:downstream-runtime",
+	}, opts)
+	if err != nil {
+		return failedCheck("external_runtime", err.Error())
+	}
+	downstreamID := nestedString(downstream, "handoff", "id")
+	if nestedString(downstream, "workflow", "id") != workflowID || downstreamID == "" {
+		return failedCheck("external_runtime", "downstream handoff_create did not append to upstream workflow")
+	}
+
+	upstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "upstream-runtime", "project_ref": "project://smoke/external-runtime/upstream", "workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("external_runtime", err.Error())
+	}
+	upstreamProjectReady := workItemsContainHandoff(upstreamNext, upstreamID)
+	if !upstreamProjectReady {
+		return failedCheck("external_runtime", "next_work did not return the upstream runtime handoff")
+	}
+	blocked, err := callStructuredTool(ctx, client, "blocked_work", map[string]any{"agent_id": "downstream-runtime", "project_ref": "project://smoke/external-runtime/downstream", "workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("external_runtime", err.Error())
+	}
+	dependencyReason := blockedWorkReasonCode(blocked, downstreamID, "dependency_incomplete", upstreamID)
+	downstreamProjectBlocked := dependencyReason != ""
+	if !downstreamProjectBlocked {
+		return failedCheck("external_runtime", "blocked_work did not report downstream dependency_incomplete")
+	}
+
+	upstreamFinal, reviewSubmitted, reviewApproved, err := dispatchReviewAndCompleteSmokeHandoff(ctx, client, opts, workflowID, upstreamID, "upstream-runtime", "reviewer-runtime", message)
+	if err != nil {
+		return failedCheck("external_runtime", err.Error())
+	}
+	downstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "downstream-runtime", "project_ref": "project://smoke/external-runtime/downstream", "workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("external_runtime", err.Error())
+	}
+	downstreamReady := workItemsContainHandoff(downstreamNext, downstreamID)
+	if !downstreamReady {
+		return failedCheck("external_runtime", "next_work did not return downstream after upstream review completion")
+	}
+	downstreamFinal, err := dispatchAndCompleteSmokeHandoff(ctx, client, opts, workflowID, downstreamID, "downstream-runtime", message)
+	if err != nil {
+		return failedCheck("external_runtime", err.Error())
+	}
+
+	handoffProjection, err := callStructuredTool(ctx, client, "handoff_get", map[string]any{"handoff_id": upstreamID}, opts)
+	if err != nil {
+		return failedCheck("external_runtime", err.Error())
+	}
+	handoffProjectionReady := nestedString(handoffProjection, "handoff", "state") == "completed"
+	if !handoffProjectionReady {
+		return failedCheck("external_runtime", "handoff_get did not project completed upstream handoff")
+	}
+	workflowProjection, err := callStructuredTool(ctx, client, "workflow_status", map[string]any{"workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("external_runtime", err.Error())
+	}
+	workflowFinalStatus := nestedString(workflowProjection, "workflow", "status")
+	if workflowFinalStatus != "completed" {
+		return failedCheck("external_runtime", fmt.Sprintf("expected completed workflow, got status=%s", workflowFinalStatus))
+	}
+	if !workflowContainsHandoffs(workflowProjection, upstreamID, downstreamID) {
+		return failedCheck("external_runtime", "workflow_status did not return upstream and downstream runtime handoffs")
+	}
+	evidence, err := callStructuredTool(ctx, client, "coordination_evidence_summary", map[string]any{"workflow_id": workflowID, "include_agents": true}, opts)
+	if err != nil {
+		return failedCheck("external_runtime", err.Error())
+	}
+	evidenceSummaryReady := evidenceSummaryContainsWorkflow(evidence, workflowID)
+	if !evidenceSummaryReady {
+		return failedCheck("external_runtime", "coordination_evidence_summary did not include the runtime workflow")
+	}
+
+	report.ExternalRuntimeResult = &ExternalRuntimeSmokeResult{
+		WorkflowID:               workflowID,
+		UpstreamHandoffID:        upstreamID,
+		DownstreamHandoffID:      downstreamID,
+		DependencyReason:         dependencyReason,
+		UpstreamProjectReady:     upstreamProjectReady,
+		DownstreamProjectBlocked: downstreamProjectBlocked,
+		DownstreamReady:          downstreamReady,
+		ReviewSubmitted:          reviewSubmitted,
+		ReviewApproved:           reviewApproved,
+		HandoffProjectionReady:   handoffProjectionReady,
+		EvidenceSummaryReady:     evidenceSummaryReady,
+		UpstreamFinalState:       upstreamFinal,
+		DownstreamFinalState:     downstreamFinal,
+		WorkflowFinalStatus:      workflowFinalStatus,
+	}
+	return CheckResult{Name: "external_runtime", Status: checkStatusOK, Detail: fmt.Sprintf("workflow_id=%s review_approved=%t downstream_ready=%t", workflowID, reviewApproved, downstreamReady)}
+}
+
+func dispatchReviewAndCompleteSmokeHandoff(ctx context.Context, client smokeMCPClient, opts Options, workflowID, handoffID, actorID, reviewerID, message string) (string, bool, bool, error) {
+	dispatch, err := callStructuredTool(ctx, client, "handoff_dispatch", map[string]any{
+		"handoff_id": handoffID,
+		"adapter":    "manual",
+		"target":     "agent:" + actorID,
+		"message":    message,
+	}, opts)
+	if err != nil {
+		return "", false, false, err
+	}
+	if nestedString(dispatch, "attempt", "id") == "" {
+		return "", false, false, errors.New("handoff_dispatch did not return attempt.id")
+	}
+	if !containsEventType(dispatch["events"], "transport_requested") {
+		return "", false, false, errors.New("handoff_dispatch did not include transport_requested event")
+	}
+	finalState := ""
+	for _, step := range []struct {
+		action string
+		state  string
+	}{
+		{action: "receive", state: "received"},
+		{action: "claim", state: "claimed"},
+		{action: "start", state: "started"},
+		{action: "checkpoint", state: "checkpointed"},
+	} {
+		progress, err := progressSmokeHandoff(ctx, client, opts, workflowID, handoffID, actorID, step.action, nil)
+		if err != nil {
+			return "", false, false, err
+		}
+		finalState = nestedString(progress, "handoff", "state")
+		if finalState != step.state {
+			return "", false, false, fmt.Errorf("handoff_progress %s expected state=%s, got state=%s", step.action, step.state, finalState)
+		}
+	}
+	submitted, err := progressSmokeHandoff(ctx, client, opts, workflowID, handoffID, actorID, "submit", map[string]any{"artifact_count": 1})
+	if err != nil {
+		return "", false, false, err
+	}
+	reviewSubmitted := nestedString(submitted, "handoff", "state") == "submitted"
+	if !reviewSubmitted {
+		return "", false, false, fmt.Errorf("handoff_progress submit expected state=submitted, got state=%s", nestedString(submitted, "handoff", "state"))
+	}
+	reviewed, err := progressSmokeHandoff(ctx, client, opts, workflowID, handoffID, reviewerID, "review", map[string]any{"review_decision": "revision_required"})
+	if err != nil {
+		return "", false, false, err
+	}
+	if nestedString(reviewed, "handoff", "state") != "reviewed" {
+		return "", false, false, fmt.Errorf("handoff_progress review expected state=reviewed, got state=%s", nestedString(reviewed, "handoff", "state"))
+	}
+	for _, step := range []struct {
+		action string
+		state  string
+	}{
+		{action: "checkpoint", state: "checkpointed"},
+		{action: "submit", state: "submitted"},
+	} {
+		extra := map[string]any(nil)
+		if step.action == "submit" {
+			extra = map[string]any{"artifact_count": 1}
+		}
+		progress, err := progressSmokeHandoff(ctx, client, opts, workflowID, handoffID, actorID, step.action, extra)
+		if err != nil {
+			return "", false, false, err
+		}
+		finalState = nestedString(progress, "handoff", "state")
+		if finalState != step.state {
+			return "", false, false, fmt.Errorf("handoff_progress %s expected state=%s, got state=%s", step.action, step.state, finalState)
+		}
+	}
+	approved, err := progressSmokeHandoff(ctx, client, opts, workflowID, handoffID, reviewerID, "approve", nil)
+	if err != nil {
+		return "", false, false, err
+	}
+	reviewApproved := nestedString(approved, "handoff", "state") == "reviewed"
+	if !reviewApproved {
+		return "", false, false, fmt.Errorf("handoff_progress approve expected state=reviewed, got state=%s", nestedString(approved, "handoff", "state"))
+	}
+	completed, err := progressSmokeHandoff(ctx, client, opts, workflowID, handoffID, actorID, "complete", nil)
+	if err != nil {
+		return "", false, false, err
+	}
+	finalState = nestedString(completed, "handoff", "state")
+	if finalState != "completed" {
+		return "", false, false, fmt.Errorf("handoff_progress complete expected state=completed, got state=%s", finalState)
+	}
+	return finalState, reviewSubmitted, reviewApproved, nil
+}
+
+func progressSmokeHandoff(ctx context.Context, client smokeMCPClient, opts Options, workflowID, handoffID, actorID, action string, extra map[string]any) (map[string]any, error) {
+	arguments := map[string]any{
+		"action":      action,
+		"workflow_id": workflowID,
+		"handoff_id":  handoffID,
+		"actor":       map[string]any{"type": "agent", "id": actorID},
+	}
+	maps.Copy(arguments, extra)
+	return callStructuredTool(ctx, client, "handoff_progress", arguments, opts)
+}
+
+func evidenceSummaryContainsWorkflow(value map[string]any, workflowID string) bool {
+	rawSummary, ok := structuredValue(value, "summary")
+	if !ok {
+		return false
+	}
+	summary, ok := rawSummary.(map[string]any)
+	if !ok {
+		return false
+	}
+	rawWorkflows, ok := structuredValue(summary, "workflows")
+	if !ok {
+		return false
+	}
+	workflows, ok := rawWorkflows.([]any)
+	if !ok {
+		return false
+	}
+	for _, workflow := range workflows {
+		workflowMap, ok := workflow.(map[string]any)
+		if ok && nestedString(workflowMap, "id") == workflowID {
+			return true
+		}
+	}
+	return false
 }
 
 func registerSmokeAgent(ctx context.Context, client smokeMCPClient, opts Options, agentID string, projectRefs []string) error {

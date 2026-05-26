@@ -353,8 +353,11 @@ func TestTagReleaseScriptEntrypoint(t *testing.T) {
 		"v*)",
 		"git rev-parse -q --verify \"refs/tags/$TAG_NAME\"",
 		"git ls-remote --exit-code --tags origin \"refs/tags/$TAG_NAME\"",
-		"scripts/ci-local.sh clean",
+		"\"$ROOT_DIR/scripts/ci-local.sh\" clean",
 		"--verify-only",
+		"--authorize-tag-push",
+		"TAG_NAME=\"\"\nVERIFY_ONLY=\"1\"\nEVIDENCE_BUNDLE=",
+		"VERIFY_ONLY=\"0\"",
 		"--evidence-bundle",
 		"CLAWSIDE_RELEASE_EVIDENCE_BUNDLE",
 		"verify-manifest",
@@ -368,7 +371,7 @@ func TestTagReleaseScriptEntrypoint(t *testing.T) {
 	}
 	for _, unwanted := range []string{"[--push]", "--push)", "PUSH_TAG"} {
 		if strings.Contains(content, unwanted) {
-			t.Fatalf("expected %s to push by default without %q", path, unwanted)
+			t.Fatalf("expected %s not to contain %q", path, unwanted)
 		}
 	}
 	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") || strings.Contains(content, "BASH_SOURCE") {
@@ -920,9 +923,9 @@ func TestReadmeStage8DocumentsLocalReleaseGuard(t *testing.T) {
 			"release",
 		}
 		if tc.path == "README.zh-CN.md" {
-			wantTokens = append(wantTokens, "本地发布保护", "会自动 push", "不会直接创建 GitHub Release")
+			wantTokens = append(wantTokens, "本地发布保护", "默认只做 verify-only", "--authorize-tag-push", "不会直接创建 GitHub Release")
 		} else {
-			wantTokens = append(wantTokens, "local release guard", "pushes the tag automatically", "does not directly create a GitHub Release")
+			wantTokens = append(wantTokens, "local release guard", "defaults to verify-only", "--authorize-tag-push", "does not directly create a GitHub Release")
 		}
 		for _, want := range wantTokens {
 			if !strings.Contains(section, want) {
@@ -949,7 +952,7 @@ func TestReadmeStage9DocumentsRemoteCIRelease(t *testing.T) {
 			"pull_request",
 			"v*",
 			"scripts/ci-local.sh clean",
-			"scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z",
+			"scripts/tag-release.sh --authorize-tag-push --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z",
 			"GitHub Release",
 			"LICENSE",
 			"go test -count=1 ./...",
@@ -1181,13 +1184,14 @@ func TestReadmeDocumentsPrivateDogfoodRehearsal(t *testing.T) {
 			"private dogfood",
 			"./scripts/ci-local.sh clean",
 			"./scripts/verify_clawside_a2a.sh",
-			"./scripts/verify_openclaw_mcp.sh --sender-base-url \"\" --collaboration-template-smoke --json",
+			"./scripts/verify_openclaw_mcp.sh --profile private-coordination --json",
 			"./scripts/github-readiness.sh <owner>/<repo>",
 			"local clean CI",
 			"A2A readiness",
-			"MCP collaboration-template rehearsal",
+			"MCP private coordination rehearsal",
 			"GitHub readiness",
 			"expected red",
+			"private-coordination",
 		}
 		if path == "README.zh-CN.md" {
 			wantTokens = append(wantTokens, "不启动 model worker、runtime session 或 sandbox")
@@ -1225,6 +1229,7 @@ func TestReadmeDocumentsExternalSwarmRuntimeIntegrationGuide(t *testing.T) {
 			"handoff_get",
 			"workflow_status",
 			"coordination_evidence_summary",
+			"--external-runtime-smoke",
 			"<repo-root>",
 			"<owner>/<repo>",
 			"<workflow-id>",
@@ -1531,6 +1536,30 @@ func TestVerifyOpenClawMCPScriptSupportsCollaborationTemplateSmoke(t *testing.T)
 	}
 }
 
+func TestVerifyOpenClawMCPScriptSupportsExternalRuntimeSmoke(t *testing.T) {
+	path := "scripts/verify_openclaw_mcp.sh"
+	content := readTextFile(t, path)
+
+	for _, want := range []string{
+		"--external-runtime-smoke",
+		"EXTERNAL_RUNTIME_SMOKE=\"false\"",
+		"--external-runtime-smoke)",
+		"EXTERNAL_RUNTIME_SMOKE=\"true\"",
+		"if [[ \"$EXTERNAL_RUNTIME_SMOKE\" == \"true\" ]]; then",
+		"set -- \"$@\" --external-runtime-smoke",
+		"external runtime-owned coordination loop",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	for _, forbidden := range []string{"EXTERNAL_RUNTIME_ARGS=()", "${EXTERNAL_RUNTIME_ARGS[@]}", "--sender-auth-key \"$"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("expected %s not to contain %q", path, forbidden)
+		}
+	}
+}
+
 func TestVerifyOpenClawMCPScriptSupportsDivergenceResultPath(t *testing.T) {
 	path := "scripts/verify_openclaw_mcp.sh"
 	content := readTextFile(t, path)
@@ -1574,7 +1603,7 @@ func TestVerifyOpenClawMCPScriptSupportsProfiles(t *testing.T) {
 	for _, want := range []string{
 		"PROFILE=\"\"",
 		"--profile PROFILE",
-		"quick, truth-plane-full, fixtures, release-evidence, release",
+		"quick, private-coordination, truth-plane-full, fixtures, release-evidence, release",
 		"--profile)",
 		"PROFILE=\"$2\"",
 		"set -- \"$@\" --profile \"$PROFILE\"",

@@ -53,6 +53,10 @@ func checkOpenClawTruthPlaneDeliveryResults(opts Options) CheckResult {
 }
 
 func validateOpenClawTruthPlaneDeliveryResults(value any) (string, bool) {
+	if detail, ok := validateOpenClawSanitizedFixtureSafety(value); !ok {
+		return detail, false
+	}
+
 	root, ok := value.(map[string]any)
 	if !ok {
 		return "openclaw truth-plane delivery results.truth_plane_delivery must be an object", false

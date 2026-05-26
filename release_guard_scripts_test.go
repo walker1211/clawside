@@ -129,19 +129,25 @@ func TestTagReleaseRequiresEvidenceBundleBeforeTagging(t *testing.T) {
 	}
 }
 
-func TestTagReleaseRunsEvidenceGateBeforeCleanCI(t *testing.T) {
+func TestTagReleaseDefaultsToVerifyOnlyAfterEvidenceAndCleanCI(t *testing.T) {
 	repo := newTempGitRepoWithTagRelease(t, "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'ci-local\\n' >> \"$TAG_RELEASE_ORDER_LOG\"\n")
 	bundleDir, env := newStubReleaseEvidenceBundle(t)
 
 	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/tag-release.sh", env, "--evidence-bundle", bundleDir, "v1.2.3")
-	if err == nil {
-		t.Fatalf("expected push to fail without origin while still exercising gates")
+	if err != nil {
+		t.Fatalf("default verify-only tag-release.sh failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	output := stdout + stderr
 	if strings.Contains(output, "release evidence bundle is required") {
 		t.Fatalf("tag-release.sh ignored --evidence-bundle:\n%s", output)
 	}
 	assertOrderLog(t, env, "verify-manifest\nverify-release-evidence\nci-local\n", stdout, stderr)
+	if tagExists(t, repo, "v1.2.3") {
+		t.Fatalf("default tag-release.sh created tag without explicit authorization")
+	}
+	if !strings.Contains(output, "Verify-only release checks passed") {
+		t.Fatalf("expected default verify-only success message, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
 }
 
 func TestTagReleaseVerifyOnlyRunsGatesWithoutTagging(t *testing.T) {
@@ -158,6 +164,24 @@ func TestTagReleaseVerifyOnlyRunsGatesWithoutTagging(t *testing.T) {
 	}
 	if !strings.Contains(stdout+stderr, "Verify-only release checks passed") {
 		t.Fatalf("expected verify-only success message, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+func TestTagReleaseAuthorizeTagPushRunsGatesBeforeTagging(t *testing.T) {
+	repo := newTempGitRepoWithTagRelease(t, "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'ci-local\\n' >> \"$TAG_RELEASE_ORDER_LOG\"\n")
+	bundleDir, env := newStubReleaseEvidenceBundle(t)
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/tag-release.sh", env, "--authorize-tag-push", "--evidence-bundle", bundleDir, "v1.2.3")
+	if err == nil {
+		t.Fatalf("expected authorized tag push to fail without origin while still exercising gated tag path")
+	}
+	output := stdout + stderr
+	if strings.Contains(output, "Verify-only release checks passed") {
+		t.Fatalf("authorized tag path should not stop at verify-only:\n%s", output)
+	}
+	assertOrderLog(t, env, "verify-manifest\nverify-release-evidence\nci-local\n", stdout, stderr)
+	if !tagExists(t, repo, "v1.2.3") {
+		t.Fatalf("authorized tag-release.sh did not create local tag before push")
 	}
 }
 

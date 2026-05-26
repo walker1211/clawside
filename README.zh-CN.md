@@ -43,7 +43,7 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 | 日常本地开发 | `./scripts/ci-local.sh clean` |
 | A2A compatibility 和外部 client readiness | `./scripts/verify_clawside_a2a.sh` |
 | MCP tool surface 和 OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
-| 多项目 upstream/downstream/reviewer rehearsal | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke` |
+| 多项目 upstream/downstream/reviewer rehearsal | `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json` |
 | Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
 | 仓库切 public 前的 GitHub readiness | `./scripts/github-readiness.sh <owner>/<repo>` |
 
@@ -60,7 +60,7 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 ```bash
 ./scripts/ci-local.sh clean
 ./scripts/verify_clawside_a2a.sh
-./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --json
+./scripts/verify_openclaw_mcp.sh --profile private-coordination --json
 ./scripts/github-readiness.sh <owner>/<repo>
 ```
 
@@ -68,10 +68,10 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 
 - `./scripts/ci-local.sh clean`：local clean CI 应该为 green。
 - `./scripts/verify_clawside_a2a.sh`：A2A readiness 应该为 green。
-- `./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --json`：MCP collaboration-template rehearsal 应该为 green。
+- `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`：MCP private coordination rehearsal 应该为 green。
 - `./scripts/github-readiness.sh <owner>/<repo>`：仓库仍为 private 或 GitHub settings 未启用时，GitHub readiness 可以是 expected red；除非该脚本 exit 0，否则不要宣称仓库 public-ready。
 
-这条 rehearsal 覆盖当前 truth-plane bridge 行为：agent registry、symbolic `project://...` refs、`next_work`、`blocked_work`、reviewer gates、dependency gates、`workflow_status` 和 `coordination_evidence_summary`。它不调用 `message/send` 或 `message/stream`，不触发 sender 或 Telegram delivery，也不接受 runtime launch fields。
+这条 rehearsal 覆盖当前 truth-plane bridge 行为：agent registry、symbolic `project://...` refs、`next_work`、`blocked_work`、reviewer gates、dependency gates、`workflow_status` 和 `coordination_evidence_summary`。`private-coordination` profile 会展开为 `--multi-agent-coordination-smoke`、`--collaboration-template-smoke` 和 `--external-runtime-smoke` 背后的 truth-plane-only coordination checks，并禁用 sender checks 和 delivery。它不调用 `message/send` 或 `message/stream`，不触发 sender 或 Telegram delivery，也不接受 runtime launch fields。
 
 ### P21 external swarm/runtime integration sequence
 
@@ -122,6 +122,12 @@ handoff_progress action=complete handoff_id=<handoff-id>
 handoff_get handoff_id=<handoff-id>
 workflow_status workflow_id=<workflow-id>
 coordination_evidence_summary workflow_id=<workflow-id> include_agents=true
+```
+
+如需在本地演练 runtime-owned loop 且不启动 worker，运行：
+
+```bash
+./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --external-runtime-smoke --json
 ```
 
 在宣称 public-readiness 或 release 前，只运行只读检查：
@@ -1147,13 +1153,13 @@ Stage 8 增加本地 release guard，用于在打 tag 和 push 前重复执行�
 ./scripts/install-hooks.sh
 ```
 
-创建并推送 release tag：
+只验证本地 release tag gate，不创建或推送 tag：
 
 ```bash
 ./scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-v0.1.0 v0.1.0
 ```
 
-`tag-release.sh` 要求工作树干净、tag 名以 `v` 开头、tag 不存在，并且必须通过 `--evidence-bundle DIR` 或 `CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=DIR` 显式提供 release evidence bundle。脚本会先只读复验 bundle manifest 和 `verify-release-evidence.sh`，再运行 `scripts/ci-local.sh clean`，最后创建 tag 并会自动 push tag；push tag 本身不会直接创建 GitHub Release，Stage 8 不新增 GitHub Actions release workflow。
+`tag-release.sh` 要求工作树干净、tag 名以 `v` 开头、tag 不存在，并且必须通过 `--evidence-bundle DIR` 或 `CLAWSIDE_RELEASE_EVIDENCE_BUNDLE=DIR` 显式提供 release evidence bundle。脚本会先只读复验 bundle manifest 和 `verify-release-evidence.sh`，再运行 `scripts/ci-local.sh clean`。它默认只做 verify-only，不会创建或 push tag；只有获得明确 release 授权后传入 `--authorize-tag-push`，才会创建并推送 tag。push tag 本身不会直接创建 GitHub Release，Stage 8 不新增 GitHub Actions release workflow。
 
 ### Stage 9 / 阶段 9 远端 CI 与 Release workflow
 
@@ -1182,10 +1188,10 @@ Release workflow 只在 `v*` tag 上运行，构建 linux amd64/arm64、darwin a
 
 ```bash
 scripts/ci-local.sh clean
-scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
+scripts/tag-release.sh --authorize-tag-push --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z
 ```
 
-`tag-release.sh` 会先只读复验传入的 release evidence bundle，再运行本地 clean CI，之后创建并 push `v*` tag 到 GitHub，然后由 GitHub Actions release workflow 远端构建并创建或更新 GitHub Release。Stage 9 的实现和本地验收不执行 push、tag 或 release；这些共享状态操作仍需要显式授权。
+`tag-release.sh` 会先只读复验传入的 release evidence bundle，再运行本地 clean CI。带 `--authorize-tag-push` 时，它之后才会创建并 push `v*` tag 到 GitHub，然后由 GitHub Actions release workflow 远端构建并创建或更新 GitHub Release。Stage 9 的实现和本地验收不执行 push、tag 或 release；这些共享状态操作仍需要显式授权。
 
 如需只读校验本机 MCP 注册配置，可显式传入 JSON 配置路径；该检查只读取文件并对照当前 registration guidance，不会写入或修补配置：
 

@@ -33,6 +33,32 @@ const (
 
 var errInvalidTasksCancel = errors.New("invalid tasks/cancel")
 
+var a2aReadSensitiveKeys = map[string]struct{}{
+	"address":             {},
+	"args":                {},
+	"command":             {},
+	"cwd":                 {},
+	"deliveryTargetRef":   {},
+	"delivery_job":        {},
+	"delivery_job_id":     {},
+	"delivery_target_ref": {},
+	"idempotency_key":     {},
+	"intent":              {},
+	"local_path":          {},
+	"path":                {},
+	"payload":             {},
+	"payloadRef":          {},
+	"payload_ref":         {},
+	"prompt":              {},
+	"secret":              {},
+	"sender_job":          {},
+	"sender_job_id":       {},
+	"session_id":          {},
+	"stderr":              {},
+	"stdout":              {},
+	"token":               {},
+}
+
 type Handler struct {
 	handlers *toolserver.Handlers
 	cfg      Config
@@ -173,7 +199,7 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 		if err != nil {
 			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
 		}
-		return toolserver.WorkflowListOutput{Workflows: workflows}, nil
+		return sanitizeA2AReadResult(toolserver.WorkflowListOutput{Workflows: workflows}), nil
 	case MethodWorkflowStatus:
 		var input toolserver.WorkflowStatusInput
 		if err := decodeRPCParams(params, &input); err != nil {
@@ -183,7 +209,7 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 		if err != nil {
 			return nil, rpcErrorFromLookup(err)
 		}
-		return result, nil
+		return sanitizeA2AReadResult(result), nil
 	case MethodHandoffGet:
 		var input toolserver.HandoffGetInput
 		if err := decodeRPCParams(params, &input); err != nil {
@@ -193,7 +219,7 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 		if err != nil {
 			return nil, rpcErrorFromLookup(err)
 		}
-		return result, nil
+		return sanitizeA2AReadResult(result), nil
 	case MethodAgentList:
 		var input toolserver.AgentListInput
 		if err := decodeRPCParams(params, &input); err != nil {
@@ -203,7 +229,7 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 		if err != nil {
 			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
 		}
-		return result, nil
+		return sanitizeA2AReadResult(result), nil
 	case MethodNextWork:
 		var input toolserver.WorkQueryInput
 		if err := decodeRPCParams(params, &input); err != nil {
@@ -213,7 +239,7 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 		if err != nil {
 			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
 		}
-		return result, nil
+		return sanitizeA2AReadResult(result), nil
 	case MethodBlockedWork:
 		var input toolserver.WorkQueryInput
 		if err := decodeRPCParams(params, &input); err != nil {
@@ -223,7 +249,7 @@ func (h *Handler) dispatchRPC(r *http.Request, method string, params json.RawMes
 		if err != nil {
 			return nil, &RPCError{Code: rpcInternalError, Message: "internal error"}
 		}
-		return result, nil
+		return sanitizeA2AReadResult(result), nil
 	case MethodTaskCreate:
 		var input TaskCreateInput
 		if err := decodeRPCParams(params, &input); err != nil {
@@ -547,7 +573,7 @@ func normalizeTaskCreateInput(input TaskCreateInput) (TaskCreateInput, bool) {
 	if !validRequiredTaskCreateString(input.IdempotencyKey, maxTaskCreateIDLength) {
 		return TaskCreateInput{}, false
 	}
-	if !validRequiredTaskCreateString(input.Intent, maxTaskCreateIntentLength) {
+	if !validRequiredTaskCreateString(input.Intent, maxTaskCreateIntentLength) || !safeTaskCreateText(input.Intent) {
 		return TaskCreateInput{}, false
 	}
 	if !validRequiredTaskCreateString(input.Receiver.ID, maxTaskCreateIDLength) {
@@ -610,11 +636,125 @@ func safeTaskCreateExternalRef(ref string) bool {
 		return true
 	}
 	lower := strings.ToLower(ref)
+	if unsafeTaskCreateString(lower) {
+		return false
+	}
 	return strings.HasPrefix(lower, "project://") || strings.HasPrefix(lower, "https://") || strings.HasPrefix(lower, "http://")
+}
+
+func safeTaskCreateText(value string) bool {
+	return !unsafeTaskCreateString(strings.ToLower(value))
+}
+
+func localPathLikeTaskCreateString(lower string) bool {
+	if strings.Contains(lower, "file:///users/") || strings.Contains(lower, `:\users\`) || strings.Contains(lower, `\users\`) {
+		return true
+	}
+	for _, marker := range []string{"/users/", "~/projects/"} {
+		if strings.HasPrefix(lower, marker) {
+			return true
+		}
+		for _, prefix := range []string{" ", "\t", "\n", "\"", "'", "`", "(", "[", "{", ":", "=", ",", ";"} {
+			if strings.Contains(lower, prefix+marker) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func unsafeTaskCreateString(lower string) bool {
+	if localPathLikeTaskCreateString(lower) {
+		return true
+	}
+	for _, marker := range []string{
+		"private prompt",
+		"sk-ant-",
+		"bearer ",
+		"secret_token",
+		"begin private key",
+		".internal",
+		"://localhost",
+		"://127.",
+		"://10.",
+		"://192.168.",
+		"://172.16.",
+		"://172.17.",
+		"://172.18.",
+		"://172.19.",
+		"://172.20.",
+		"://172.21.",
+		"://172.22.",
+		"://172.23.",
+		"://172.24.",
+		"://172.25.",
+		"://172.26.",
+		"://172.27.",
+		"://172.28.",
+		"://172.29.",
+		"://172.30.",
+		"://172.31.",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func sanitizeA2AReadResult(value any) any {
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return value
+	}
+	var decoded any
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		return value
+	}
+	return sanitizeA2AJSONValue(decoded)
+}
+
+func sanitizeA2AJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if _, ok := a2aReadSensitiveKeys[key]; ok {
+				delete(typed, key)
+				continue
+			}
+			typed[key] = sanitizeA2AJSONValue(child)
+		}
+		return typed
+	case []any:
+		for i, child := range typed {
+			typed[i] = sanitizeA2AJSONValue(child)
+		}
+		return typed
+	case string:
+		if unsafeTaskCreateString(strings.ToLower(typed)) {
+			return ""
+		}
+		return typed
+	default:
+		return value
+	}
 }
 
 func toA2ATask(result toolserver.HandoffGetOutput, historyLength *int) A2ATask {
 	handoff := result.Handoff
+	metadata := map[string]any{
+		"workflowId":    handoff.WorkflowID,
+		"workflowKind":  handoff.WorkflowKind,
+		"internalState": string(handoff.State),
+		"taskKind":      string(handoff.TaskKind),
+		"receiver":      a2aActorMetadata(handoff.ReceiverActor),
+		"currentOwner":  a2aActorMetadata(handoff.CurrentOwner),
+		"needsReview":   handoff.NeedsReview,
+		"artifactCount": handoff.ArtifactCount,
+	}
+	if safeTaskCreateText(handoff.Intent) {
+		metadata["intent"] = handoff.Intent
+	}
 	return A2ATask{
 		ID:        handoff.ID,
 		ContextID: handoff.WorkflowID,
@@ -622,19 +762,13 @@ func toA2ATask(result toolserver.HandoffGetOutput, historyLength *int) A2ATask {
 			State:     toA2ATaskState(handoff.State),
 			Timestamp: handoff.UpdatedAt.UTC().Format(time.RFC3339Nano),
 		},
-		History: toA2ATaskHistory(result.Timeline, historyLength),
-		Metadata: map[string]any{
-			"workflowId":    handoff.WorkflowID,
-			"workflowKind":  handoff.WorkflowKind,
-			"internalState": string(handoff.State),
-			"taskKind":      string(handoff.TaskKind),
-			"intent":        handoff.Intent,
-			"receiver":      handoff.ReceiverActor,
-			"currentOwner":  handoff.CurrentOwner,
-			"needsReview":   handoff.NeedsReview,
-			"artifactCount": handoff.ArtifactCount,
-		},
+		History:  toA2ATaskHistory(result.Timeline, historyLength),
+		Metadata: metadata,
 	}
+}
+
+func a2aActorMetadata(actor orchestrator.ActorRef) map[string]string {
+	return map[string]string{"type": string(actor.Type), "id": actor.ID}
 }
 
 func toA2ATaskHistory(events []orchestrator.EventRecord, historyLength *int) []A2ATaskEvent {

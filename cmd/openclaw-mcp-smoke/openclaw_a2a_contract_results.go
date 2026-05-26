@@ -97,6 +97,9 @@ func validateOpenClawA2AContractResults(value any) (string, bool) {
 	if field, ok := findForbiddenA2AContractField(root); ok {
 		return "A2A contract contains forbidden field " + field, false
 	}
+	if detail, ok := validateOpenClawSanitizedFixtureSafety(value); !ok {
+		return detail, false
+	}
 	if version, ok := root["version"].(string); !ok || version != "p12.3-a2a-contract-v1" {
 		return "A2A contract version is invalid", false
 	}
