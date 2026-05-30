@@ -5,6 +5,7 @@ worker_poll_interval = "1s"
 send_timeout = "15s"
 sender_auth_key = "replace-with-local-sender-auth-key"
 
+# Telegram operator reuses these bot and allowlist fields, but does not use sender_auth_key.
 [telegram]
 global_allow_user_ids = ["123456789"]
 

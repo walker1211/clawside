@@ -40,6 +40,109 @@ func TestRootCLIHelpDoesNotRequireLocalConfig(t *testing.T) {
 	}
 }
 
+func TestTelegramOperatorEntrypointHelp(t *testing.T) {
+	binaryPath := filepath.Join(t.TempDir(), "clawside-telegram-operator")
+	buildCmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/clawside-telegram-operator")
+	var buildOutput bytes.Buffer
+	buildCmd.Stdout = &buildOutput
+	buildCmd.Stderr = &buildOutput
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("build Telegram operator binary: %v\n%s", err, buildOutput.String())
+	}
+
+	for _, arg := range []string{"help", "--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			cmd := exec.Command(binaryPath, arg)
+			cmd.Dir = t.TempDir()
+			cmd.Env = append(os.Environ(), "SENDER_AUTH_KEY=sender-secret")
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("expected %s to exit 0 without local config: %v\nstdout:\n%s\nstderr:\n%s", arg, err, stdout.String(), stderr.String())
+			}
+
+			out := stdout.String()
+			for _, want := range []string{
+				"usage: clawside-telegram-operator",
+				"--config",
+				"--db",
+				"--bot",
+				"--telegram-base-url",
+				"/health",
+				"/status <workflow_id>",
+				"/next <agent_id>",
+				"/blocked <agent_id>",
+				"/approve <handoff_id>",
+			} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("expected %s help output to contain %q, got:\n%s", arg, want, out)
+				}
+			}
+			for _, forbidden := range []string{"SENDER_AUTH_KEY", "--auth-key"} {
+				if strings.Contains(out, forbidden) || strings.Contains(stderr.String(), forbidden) {
+					t.Fatalf("Telegram operator help must not mention %q\nstdout:\n%s\nstderr:\n%s", forbidden, out, stderr.String())
+				}
+			}
+			if stderr.String() != "" {
+				t.Fatalf("expected %s help to avoid stderr, got:\n%s", arg, stderr.String())
+			}
+		})
+	}
+}
+
+func TestTelegramOperatorDocsAndExamples(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		content := readTextFile(t, path)
+		for _, want := range []string{
+			"cmd/clawside-telegram-operator",
+			"go run ./cmd/clawside-telegram-operator help",
+			"CLAWSIDE_TELEGRAM_OPERATOR_BOT",
+			"CLAWSIDE_TELEGRAM_OPERATOR_DB_PATH",
+			"CLAWSIDE_TELEGRAM_OPERATOR_BASE_URL",
+			"/health",
+			"/status <workflow_id>",
+			"/next <agent_id>",
+			"/blocked <agent_id>",
+			"/approve <handoff_id>",
+			"private chat",
+			"allowlist",
+			"SENDER_AUTH_KEY",
+			"message/send",
+			"message/stream",
+		} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", path, want)
+			}
+		}
+	}
+
+	envExample := readTextFile(t, ".example.env")
+	for _, want := range []string{
+		"CLAWSIDE_TELEGRAM_OPERATOR_BOT=guardian",
+		"CLAWSIDE_TELEGRAM_OPERATOR_DB_PATH=./sender.db",
+		"CLAWSIDE_TELEGRAM_OPERATOR_BASE_URL=https://api.telegram.org",
+	} {
+		if !strings.Contains(envExample, want) {
+			t.Fatalf("expected .example.env to contain %q", want)
+		}
+	}
+
+	configExample := readTextFile(t, "configs/config.example.toml")
+	for _, want := range []string{
+		"Telegram operator",
+		"global_allow_user_ids",
+		"telegram.bots.guardian",
+		"allow_user_ids",
+		"does not use sender_auth_key",
+	} {
+		if !strings.Contains(configExample, want) {
+			t.Fatalf("expected configs/config.example.toml to contain %q", want)
+		}
+	}
+}
+
 func TestRootLifecycleScriptsAreProductEntrypoints(t *testing.T) {
 	for _, path := range []string{"build.sh", "start.sh", "stop.sh", "restart.sh"} {
 		info, err := os.Stat(path)

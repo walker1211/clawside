@@ -136,6 +136,37 @@ Before making any public-readiness or release claim, keep verification read-only
 ./scripts/github-readiness.sh <owner>/<repo>
 ```
 
+### P29 private Telegram operator entrypoint
+
+`cmd/clawside-telegram-operator` is a separate inbound long-polling operator for private dogfood. It opens the same truth-plane SQLite DB, reads the configured Telegram bot token and allowlist, accepts only allowlisted Telegram users in a private chat, and replies with bounded hand-written summaries.
+
+Help is available without config, DB, network, or sender auth:
+
+```bash
+go run ./cmd/clawside-telegram-operator help
+```
+
+Start the operator with an already generated `configs/config.toml`:
+
+```bash
+CLAWSIDE_TELEGRAM_OPERATOR_BOT=guardian \
+CLAWSIDE_TELEGRAM_OPERATOR_DB_PATH=./sender.db \
+CLAWSIDE_TELEGRAM_OPERATOR_BASE_URL=https://api.telegram.org \
+go run ./cmd/clawside-telegram-operator --config configs/config.toml
+```
+
+Supported Telegram slash commands:
+
+```text
+/health
+/status <workflow_id>
+/next <agent_id>
+/blocked <agent_id>
+/approve <handoff_id>
+```
+
+Safety boundaries: this operator does not use `SENDER_AUTH_KEY`, does not call `message/send` or `message/stream`, does not start model workers, runtime sessions, or sandboxes, and does not accept arbitrary `command`, `args`, `cwd`, local paths, private prompts, tokens, sessions, stdout, stderr, sender delivery fields, or Telegram delivery fields. `/approve` records a protocol approval as `user:telegram:<user_id>`.
+
 ## Minimal usage path
 
 1. Generate the local sender config:
@@ -197,6 +228,7 @@ Do not remove `--verify-only`, create a release, make the repository public, cha
 - `cmd/orchestrator/`: low-level orchestrator debug / operation entrypoint.
 - `cmd/clawside-mcp/`: stdio MCP server entrypoint.
 - `cmd/clawside-a2a/`: experimental A2A compatibility HTTP endpoint for controlled queries, inbound task creation, and read-only task events.
+- `cmd/clawside-telegram-operator/`: private inbound Telegram operator for fixed truth-plane slash commands.
 - `cmd/openclaw-mcp-smoke/`: local smoke verifier for OpenClaw consuming the clawside MCP v1 surface.
 - `cmd/openclaw-dispatch/`: local helper that adapts `handoff_dispatch adapter=openclaw` requests to an OpenClaw-compatible CLI command.
 - `cmd/openclaw-tool-results-extract/`: local read-only CLI for extracting clawside tool structured results from OpenClaw trajectory.

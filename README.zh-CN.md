@@ -136,6 +136,37 @@ coordination_evidence_summary workflow_id=<workflow-id> include_agents=true
 ./scripts/github-readiness.sh <owner>/<repo>
 ```
 
+### P29 private Telegram operator entrypoint
+
+`cmd/clawside-telegram-operator` 是独立的 inbound 长轮询 operator，用于 private dogfood。它打开同一个 truth-plane SQLite DB，读取已配置的 Telegram bot token 和 allowlist，只接受 allowlist 中 Telegram 用户的 private chat，并返回有界的手写摘要。
+
+help 不需要 config、DB、网络或 sender auth：
+
+```bash
+go run ./cmd/clawside-telegram-operator help
+```
+
+已有 `configs/config.toml` 后，用下面方式启动 operator：
+
+```bash
+CLAWSIDE_TELEGRAM_OPERATOR_BOT=guardian \
+CLAWSIDE_TELEGRAM_OPERATOR_DB_PATH=./sender.db \
+CLAWSIDE_TELEGRAM_OPERATOR_BASE_URL=https://api.telegram.org \
+go run ./cmd/clawside-telegram-operator --config configs/config.toml
+```
+
+支持的 Telegram slash commands：
+
+```text
+/health
+/status <workflow_id>
+/next <agent_id>
+/blocked <agent_id>
+/approve <handoff_id>
+```
+
+安全边界：该 operator 不使用 `SENDER_AUTH_KEY`，不调用 `message/send` 或 `message/stream`，不启动 model worker、runtime session 或 sandbox，也不接受任意 `command`、`args`、`cwd`、本地路径、private prompt、token、session、stdout、stderr、sender delivery 字段或 Telegram delivery 字段。`/approve` 会以 `user:telegram:<user_id>` 记录 protocol approval。
+
 ## 最小使用路径
 
 1. 生成本地 sender 配置：
@@ -197,6 +228,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `cmd/orchestrator/`：低层 orchestrator 调试 / 操作入口
 - `cmd/clawside-mcp/`：stdio MCP server 入口
 - `cmd/clawside-a2a/`：实验性的 A2A compatibility HTTP endpoint，支持受控查询、inbound task creation 和只读 task events
+- `cmd/clawside-telegram-operator/`：私有 inbound Telegram operator，支持固定 truth-plane slash commands
 - `cmd/openclaw-mcp-smoke/`：OpenClaw 消费 clawside MCP v1 surface 的本地 smoke verifier
 - `cmd/openclaw-dispatch/`：把 `handoff_dispatch adapter=openclaw` 请求适配到 OpenClaw-compatible CLI command 的本地 helper
 - `cmd/openclaw-tool-results-extract/`：从 OpenClaw trajectory 提取 clawside tool structured result 的本地只读 CLI
