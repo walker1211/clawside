@@ -1,0 +1,360 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"os"
+	"slices"
+	"strings"
+
+	"github.com/walker1211/clawside/internal/openclawtrajectory"
+)
+
+const clawsideServerName = "clawside"
+
+type externalRuntimeEvidenceOutput struct {
+	ExternalRuntimeEvidence externalRuntimeEvidence `json:"external_runtime_evidence"`
+}
+
+type externalRuntimeEvidence struct {
+	WorkflowID                string   `json:"workflow_id"`
+	UpstreamHandoffID         string   `json:"upstream_handoff_id"`
+	DownstreamHandoffID       string   `json:"downstream_handoff_id"`
+	Tools                     []string `json:"tools"`
+	DependencyGateVerified    bool     `json:"dependency_gate_verified"`
+	ReviewGateVerified        bool     `json:"review_gate_verified"`
+	DownstreamReady           bool     `json:"downstream_ready"`
+	WorkflowFinalStatus       string   `json:"workflow_final_status"`
+	EvidenceSummaryReady      bool     `json:"evidence_summary_ready"`
+	NoSenderDelivery          bool     `json:"no_sender_delivery"`
+	NoRuntimeLaunchByClawside bool     `json:"no_runtime_launch_by_clawside"`
+}
+
+type extractionState struct {
+	toolsSeen                  map[string]struct{}
+	workflowID                 string
+	upstreamHandoffID          string
+	downstreamHandoffID        string
+	downstreamWorkflowMismatch bool
+	dependencyGateVerified     bool
+	reviewGateVerified         bool
+	downstreamReady            bool
+	upstreamCompleted          bool
+	downstreamCompleted        bool
+	workflowFinalStatus        string
+	evidenceSummaryReady       bool
+}
+
+var requiredExternalRuntimeEvidenceTools = []string{
+	"agent_register",
+	"handoff_create",
+	"next_work",
+	"blocked_work",
+	"handoff_progress",
+	"workflow_status",
+	"coordination_evidence_summary",
+}
+
+func main() {
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string, stdout, _ io.Writer) error {
+	if helpRequested(args) {
+		writeUsage(stdout)
+		return nil
+	}
+
+	var eventsPath string
+	var outputPath string
+	fs := flag.NewFlagSet("openclaw-external-runtime-evidence-extract", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&eventsPath, "events", "", "OpenClaw trajectory events JSONL path")
+	fs.StringVar(&outputPath, "output", "", "output JSON path")
+	if err := fs.Parse(args); err != nil {
+		return errors.New("unsupported option")
+	}
+	if fs.NArg() != 0 {
+		return errors.New("unsupported argument")
+	}
+	if strings.TrimSpace(eventsPath) == "" {
+		return errors.New("events path is required")
+	}
+
+	output, err := extractExternalRuntimeEvidence(strings.TrimSpace(eventsPath))
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal external runtime evidence: %w", err)
+	}
+	data = append(data, '\n')
+	if strings.TrimSpace(outputPath) == "" {
+		_, err = stdout.Write(data)
+		return err
+	}
+	return os.WriteFile(strings.TrimSpace(outputPath), data, 0o600)
+}
+
+func helpRequested(args []string) bool {
+	if len(args) != 1 {
+		return false
+	}
+	switch args[0] {
+	case "help", "--help", "-h":
+		return true
+	default:
+		return false
+	}
+}
+
+func writeUsage(w io.Writer) {
+	_, _ = fmt.Fprintln(w, "Usage: openclaw-external-runtime-evidence-extract --events PATH [--output PATH]")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "Extract bounded, sanitized external runtime evidence from OpenClaw trajectory events.")
+	_, _ = fmt.Fprintln(w)
+	_, _ = fmt.Fprintln(w, "Options:")
+	_, _ = fmt.Fprintln(w, "  --events PATH   OpenClaw trajectory events JSONL path")
+	_, _ = fmt.Fprintln(w, "  --output PATH   optional output JSON path")
+}
+
+func extractExternalRuntimeEvidence(eventsPath string) (externalRuntimeEvidenceOutput, error) {
+	file, err := os.Open(eventsPath)
+	if err != nil {
+		return externalRuntimeEvidenceOutput{}, fmt.Errorf("read events: %w", err)
+	}
+	defer file.Close()
+
+	state := extractionState{toolsSeen: map[string]struct{}{}}
+	scanner := bufio.NewScanner(file)
+	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for scanner.Scan() {
+		line := bytes.TrimSpace(scanner.Bytes())
+		if len(line) == 0 {
+			continue
+		}
+		result, ok, err := openclawtrajectory.ExtractToolResult(line, clawsideServerName)
+		if err != nil {
+			return externalRuntimeEvidenceOutput{}, fmt.Errorf("parse OpenClaw trajectory events: %w", err)
+		}
+		if !ok {
+			continue
+		}
+		state.observe(result.Tool, result.StructuredContent)
+	}
+	if err := scanner.Err(); err != nil {
+		return externalRuntimeEvidenceOutput{}, fmt.Errorf("scan events: %w", err)
+	}
+
+	output, err := state.output()
+	if err != nil {
+		return externalRuntimeEvidenceOutput{}, err
+	}
+	return externalRuntimeEvidenceOutput{ExternalRuntimeEvidence: output}, nil
+}
+
+func (state *extractionState) observe(tool string, content map[string]any) {
+	if tool == "" || content == nil {
+		return
+	}
+	state.toolsSeen[tool] = struct{}{}
+	switch tool {
+	case "handoff_create":
+		state.observeHandoffCreate(content)
+	case "blocked_work":
+		state.observeBlockedWork(content)
+	case "handoff_progress":
+		state.observeHandoffProgress(content)
+	case "next_work":
+		state.observeNextWork(content)
+	case "workflow_status":
+		state.observeWorkflowStatus(content)
+	case "coordination_evidence_summary":
+		state.observeEvidenceSummary(content)
+	}
+}
+
+func (state *extractionState) observeHandoffCreate(content map[string]any) {
+	workflowID := nestedString(content, "workflow", "id")
+	handoff, _ := content["handoff"].(map[string]any)
+	handoffID := stringValue(handoff, "id")
+	if workflowID == "" || handoffID == "" {
+		return
+	}
+	dependsOnUpstream := containsString(arrayValue(handoff, "depends_on_handoff_ids"), state.upstreamHandoffID)
+	if state.workflowID == "" {
+		state.workflowID = workflowID
+	} else if workflowID != state.workflowID {
+		if dependsOnUpstream {
+			state.downstreamWorkflowMismatch = true
+		}
+		return
+	}
+	if boolValue(handoff, "needs_review") {
+		state.upstreamHandoffID = handoffID
+		return
+	}
+	if dependsOnUpstream {
+		state.downstreamHandoffID = handoffID
+	}
+}
+
+func (state *extractionState) observeBlockedWork(content map[string]any) {
+	if state.upstreamHandoffID == "" || state.downstreamHandoffID == "" {
+		return
+	}
+	for _, item := range arrayValue(content, "items") {
+		itemMap, _ := item.(map[string]any)
+		if nestedString(itemMap, "handoff", "id") != state.downstreamHandoffID {
+			continue
+		}
+		for _, rawReason := range arrayValue(itemMap, "reasons") {
+			reason, _ := rawReason.(map[string]any)
+			if stringValue(reason, "code") == "dependency_incomplete" && stringValue(reason, "dependency_handoff_id") == state.upstreamHandoffID {
+				state.dependencyGateVerified = true
+			}
+		}
+	}
+}
+
+func (state *extractionState) observeHandoffProgress(content map[string]any) {
+	handoff, _ := content["handoff"].(map[string]any)
+	handoffID := stringValue(handoff, "id")
+	switch handoffID {
+	case state.upstreamHandoffID:
+		if stringValue(handoff, "state") == "reviewed" && stringValue(handoff, "review_decision") == "approved" {
+			state.reviewGateVerified = true
+		}
+		if stringValue(handoff, "state") == "completed" {
+			state.upstreamCompleted = true
+		}
+	case state.downstreamHandoffID:
+		if stringValue(handoff, "state") == "completed" {
+			state.downstreamCompleted = true
+		}
+	}
+}
+
+func (state *extractionState) observeNextWork(content map[string]any) {
+	if state.downstreamHandoffID == "" || !state.upstreamCompleted {
+		return
+	}
+	for _, item := range arrayValue(content, "items") {
+		itemMap, _ := item.(map[string]any)
+		if nestedString(itemMap, "handoff", "id") == state.downstreamHandoffID {
+			state.downstreamReady = true
+		}
+	}
+}
+
+func (state *extractionState) observeWorkflowStatus(content map[string]any) {
+	if nestedString(content, "workflow", "id") != state.workflowID {
+		return
+	}
+	state.workflowFinalStatus = nestedString(content, "workflow", "status")
+	for _, rawHandoff := range arrayValue(content, "handoffs") {
+		handoff, _ := rawHandoff.(map[string]any)
+		switch stringValue(handoff, "id") {
+		case state.upstreamHandoffID:
+			if stringValue(handoff, "state") == "completed" {
+				state.upstreamCompleted = true
+			}
+		case state.downstreamHandoffID:
+			if stringValue(handoff, "state") == "completed" {
+				state.downstreamCompleted = true
+			}
+		}
+	}
+}
+
+func (state *extractionState) observeEvidenceSummary(content map[string]any) {
+	summary, _ := content["summary"].(map[string]any)
+	for _, rawWorkflow := range arrayValue(summary, "workflows") {
+		workflow, _ := rawWorkflow.(map[string]any)
+		if stringValue(workflow, "id") == state.workflowID {
+			state.evidenceSummaryReady = true
+		}
+	}
+}
+
+func (state extractionState) output() (externalRuntimeEvidence, error) {
+	for _, required := range requiredExternalRuntimeEvidenceTools {
+		if _, ok := state.toolsSeen[required]; !ok {
+			return externalRuntimeEvidence{}, errors.New("missing tool " + required + " in OpenClaw trajectory events")
+		}
+	}
+	if state.downstreamWorkflowMismatch {
+		return externalRuntimeEvidence{}, errors.New("downstream handoff_create workflow id does not match upstream")
+	}
+	if state.workflowID == "" || state.upstreamHandoffID == "" || state.downstreamHandoffID == "" {
+		return externalRuntimeEvidence{}, errors.New("OpenClaw trajectory events did not identify workflow and handoff ids")
+	}
+	if !state.dependencyGateVerified {
+		return externalRuntimeEvidence{}, errors.New("blocked_work did not verify downstream dependency_incomplete")
+	}
+	if !state.reviewGateVerified {
+		return externalRuntimeEvidence{}, errors.New("handoff_progress did not verify upstream review approval")
+	}
+	if !state.downstreamReady {
+		return externalRuntimeEvidence{}, errors.New("next_work did not verify downstream readiness")
+	}
+	if state.workflowFinalStatus != "completed" || !state.upstreamCompleted || !state.downstreamCompleted {
+		return externalRuntimeEvidence{}, errors.New("workflow_status did not verify completed workflow")
+	}
+	if !state.evidenceSummaryReady {
+		return externalRuntimeEvidence{}, errors.New("coordination_evidence_summary did not verify workflow evidence")
+	}
+	tools := append([]string(nil), requiredExternalRuntimeEvidenceTools...)
+	return externalRuntimeEvidence{
+		WorkflowID:                state.workflowID,
+		UpstreamHandoffID:         state.upstreamHandoffID,
+		DownstreamHandoffID:       state.downstreamHandoffID,
+		Tools:                     tools,
+		DependencyGateVerified:    true,
+		ReviewGateVerified:        true,
+		DownstreamReady:           true,
+		WorkflowFinalStatus:       "completed",
+		EvidenceSummaryReady:      true,
+		NoSenderDelivery:          true,
+		NoRuntimeLaunchByClawside: true,
+	}, nil
+}
+
+func nestedString(value map[string]any, objectKey, stringKey string) string {
+	nested, _ := value[objectKey].(map[string]any)
+	return stringValue(nested, stringKey)
+}
+
+func stringValue(value map[string]any, key string) string {
+	text, _ := value[key].(string)
+	return strings.TrimSpace(text)
+}
+
+func boolValue(value map[string]any, key string) bool {
+	result, _ := value[key].(bool)
+	return result
+}
+
+func arrayValue(value map[string]any, key string) []any {
+	items, _ := value[key].([]any)
+	return items
+}
+
+func containsString(values []any, want string) bool {
+	if strings.TrimSpace(want) == "" {
+		return false
+	}
+	return slices.ContainsFunc(values, func(value any) bool {
+		text, _ := value.(string)
+		return strings.TrimSpace(text) == want
+	})
+}

@@ -44,6 +44,7 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 | A2A compatibility 和外部 client readiness | `./scripts/verify_clawside_a2a.sh` |
 | MCP tool surface 和 OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
 | 多项目 upstream/downstream/reviewer rehearsal | `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json` |
+| 外部 runtime trajectory evidence dogfood | `./scripts/verify_openclaw_mcp.sh --profile external-runtime-evidence --sender-base-url "" --mcp-command "" --openclaw-external-runtime-evidence ./external-runtime-evidence.json --json` |
 | Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
 | 仓库切 public 前的 GitHub readiness | `./scripts/github-readiness.sh <owner>/<repo>` |
 
@@ -139,6 +140,34 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
 ```
 
 安全边界：the sample does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender or Telegram delivery, and does not accept arbitrary command/args/cwd/local path/private prompt/token/session/worker launch fields.
+
+#### P36 external runtime evidence dogfood
+
+当外部 runtime 已在 Clawside 之外运行，并导出 OpenClaw trajectory `events.jsonl` 时，使用这条路径复验真实接入 evidence。`cmd/openclaw-external-runtime-evidence-extract/` 只读取 trajectory 中的 Clawside MCP tool results，并输出有界 evidence；它不 replay payload，也不启动任何 runtime。
+
+推荐顺序：
+
+1. 在 Clawside 之外运行 external runtime。runtime 负责 workers、sessions、sandboxes、调度、model execution 和实际任务执行。
+2. 在该 runtime 中注册并使用 Clawside MCP tools，例如 `agent_register`、`handoff_create`、`next_work`、`blocked_work`、`handoff_progress`、`workflow_status` 和 `coordination_evidence_summary`。
+3. 从 OpenClaw 导出 trajectory events 为 `events.jsonl`。
+4. 提取有界 evidence JSON：
+
+```bash
+./scripts/extract_openclaw_external_runtime_evidence.sh --events <events-jsonl> --output ./external-runtime-evidence.json
+```
+
+5. 用只读 profile 验证 evidence：
+
+```bash
+./scripts/verify_openclaw_mcp.sh \
+  --profile external-runtime-evidence \
+  --sender-base-url "" \
+  --mcp-command "" \
+  --openclaw-external-runtime-evidence ./external-runtime-evidence.json \
+  --json
+```
+
+该 evidence contract 只记录 IDs、required tool set、`no_sender_delivery=true` 和 `no_runtime_launch_by_clawside=true`；同时要求 dependency、reviewer、downstream-ready、completed-workflow 和 `coordination_evidence_summary` gates。此流程不启动 model worker，不启动 runtime session，不启动 sandbox，不触发 sender delivery，不触发 Telegram delivery，也不接受 arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/worker launch fields。
 
 在宣称 public-readiness 或 release 前，只运行只读检查：
 

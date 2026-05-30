@@ -1,0 +1,23 @@
+{
+  "external_runtime_evidence": {
+    "workflow_id": "wf-123",
+    "upstream_handoff_id": "hf-upstream",
+    "downstream_handoff_id": "hf-downstream",
+    "tools": [
+      "agent_register",
+      "handoff_create",
+      "next_work",
+      "blocked_work",
+      "handoff_progress",
+      "workflow_status",
+      "coordination_evidence_summary"
+    ],
+    "dependency_gate_verified": true,
+    "review_gate_verified": true,
+    "downstream_ready": true,
+    "workflow_final_status": "completed",
+    "evidence_summary_ready": true,
+    "no_sender_delivery": true,
+    "no_runtime_launch_by_clawside": true
+  }
+}

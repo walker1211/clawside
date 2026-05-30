@@ -663,6 +663,53 @@ func TestOpenClawToolResultsExtractScriptEntrypoint(t *testing.T) {
 	}
 }
 
+func TestOpenClawExternalRuntimeEvidenceExtractScriptEntrypoint(t *testing.T) {
+	path := "scripts/extract_openclaw_external_runtime_evidence.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	if !strings.Contains(content, "go run -C \"$ROOT_DIR\" ./cmd/openclaw-external-runtime-evidence-extract") {
+		t.Fatalf("expected %s to invoke openclaw-external-runtime-evidence-extract with go run -C", path)
+	}
+	for _, helpToken := range []string{"help", "--help", "-h"} {
+		if !strings.Contains(content, helpToken) {
+			t.Fatalf("expected %s to support help token %q", path, helpToken)
+		}
+	}
+	if !strings.Contains(content, "EVENTS_PATH=\"\"") {
+		t.Fatalf("expected %s to default events path to empty", path)
+	}
+	if !strings.Contains(content, "--events PATH") {
+		t.Fatalf("expected %s help to list --events", path)
+	}
+	if !strings.Contains(content, "--events)") || !strings.Contains(content, "EVENTS_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --events PATH", path)
+	}
+	if !strings.Contains(content, "OUTPUT_PATH=\"\"") {
+		t.Fatalf("expected %s to default output path to empty", path)
+	}
+	if !strings.Contains(content, "--output)") || !strings.Contains(content, "OUTPUT_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --output PATH", path)
+	}
+	if !strings.Contains(content, "if [[ -n \"$OUTPUT_PATH\" ]]; then") || !strings.Contains(content, "set -- \"$@\" --output \"$OUTPUT_PATH\"") {
+		t.Fatalf("expected %s to forward --output only when set", path)
+	}
+	for _, forbidden := range []string{"--command", "--args", "--cwd", "--path", "--prompt", "--token", "--session", "--worker", "--sender-base-url", "--chat-id", "--telegram"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("%s must not accept unsafe flag %q", path, forbidden)
+		}
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") {
+		t.Fatalf("%s should avoid Bash arrays for Bash 3.2 with set -u", path)
+	}
+}
+
 func TestOpenClawTruthPlaneExtractScriptEntrypoint(t *testing.T) {
 	path := "scripts/extract_openclaw_truth_plane_results.sh"
 	info, err := os.Stat(path)
@@ -1496,6 +1543,52 @@ func TestReadmeDocumentsExternalSwarmRuntimeIntegrationGuide(t *testing.T) {
 	}
 }
 
+func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		content := readTextFile(t, path)
+		wantTokens := []string{
+			"P36",
+			"external runtime evidence dogfood",
+			"cmd/openclaw-external-runtime-evidence-extract/",
+			"scripts/extract_openclaw_external_runtime_evidence.sh",
+			"--events <events-jsonl>",
+			"--output ./external-runtime-evidence.json",
+			"--profile external-runtime-evidence",
+			"--openclaw-external-runtime-evidence ./external-runtime-evidence.json",
+			"events.jsonl",
+			"agent_register",
+			"blocked_work",
+			"coordination_evidence_summary",
+			"no_sender_delivery",
+			"no_runtime_launch_by_clawside",
+		}
+		if path == "README.zh-CN.md" {
+			wantTokens = append(wantTokens,
+				"不启动 model worker",
+				"不启动 runtime session",
+				"不启动 sandbox",
+				"不触发 sender delivery",
+				"不触发 Telegram delivery",
+				"不接受 arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/worker launch fields",
+			)
+		} else {
+			wantTokens = append(wantTokens,
+				"does not launch model workers",
+				"does not start runtime sessions",
+				"does not start sandboxes",
+				"does not trigger sender delivery",
+				"does not trigger Telegram delivery",
+				"does not accept arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/worker launch fields",
+			)
+		}
+		for _, want := range wantTokens {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", path, want)
+			}
+		}
+	}
+}
+
 func TestReadmeKeepsReleaseDeferredAndPublicDocsSanitized(t *testing.T) {
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
@@ -1881,7 +1974,7 @@ func TestVerifyOpenClawMCPScriptSupportsProfiles(t *testing.T) {
 	for _, want := range []string{
 		"PROFILE=\"\"",
 		"--profile PROFILE",
-		"quick, private-coordination, truth-plane-full, fixtures, release-evidence, release",
+		"quick, private-coordination, truth-plane-full, fixtures, release-evidence, external-runtime-evidence, release",
 		"--profile)",
 		"PROFILE=\"$2\"",
 		"set -- \"$@\" --profile \"$PROFILE\"",
@@ -1899,6 +1992,25 @@ func TestVerifyOpenClawMCPScriptSupportsProfiles(t *testing.T) {
 	}
 	if strings.Contains(content, "PROFILE_ARGS=()") || strings.Contains(content, "${PROFILE_ARGS[@]}") {
 		t.Fatalf("%s should avoid Bash arrays for Bash 3.2 with set -u", path)
+	}
+}
+
+func TestVerifyOpenClawMCPScriptSupportsExternalRuntimeEvidencePath(t *testing.T) {
+	path := "scripts/verify_openclaw_mcp.sh"
+	content := readTextFile(t, path)
+
+	for _, want := range []string{
+		"external-runtime-evidence",
+		"--openclaw-external-runtime-evidence PATH",
+		"OPENCLAW_EXTERNAL_RUNTIME_EVIDENCE_PATH=\"\"",
+		"--openclaw-external-runtime-evidence)",
+		"OPENCLAW_EXTERNAL_RUNTIME_EVIDENCE_PATH=\"$2\"",
+		"if [[ -n \"$OPENCLAW_EXTERNAL_RUNTIME_EVIDENCE_PATH\" ]]; then",
+		"set -- \"$@\" --openclaw-external-runtime-evidence \"$OPENCLAW_EXTERNAL_RUNTIME_EVIDENCE_PATH\"",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
 	}
 }
 

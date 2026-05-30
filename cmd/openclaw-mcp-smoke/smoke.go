@@ -28,14 +28,15 @@ const (
 	reportStatusOK     = "ok"
 	reportStatusFailed = "failed"
 
-	profileQuick               = "quick"
-	profilePrivateCoordination = "private-coordination"
-	profileTruthPlaneFull      = "truth-plane-full"
-	profileFixtures            = "fixtures"
-	profileReleaseEvidence     = "release-evidence"
-	profileRelease             = "release"
+	profileQuick                   = "quick"
+	profilePrivateCoordination     = "private-coordination"
+	profileTruthPlaneFull          = "truth-plane-full"
+	profileFixtures                = "fixtures"
+	profileReleaseEvidence         = "release-evidence"
+	profileExternalRuntimeEvidence = "external-runtime-evidence"
+	profileRelease                 = "release"
 
-	supportedProfileValues = "quick, private-coordination, truth-plane-full, fixtures, release-evidence, release"
+	supportedProfileValues = "quick, private-coordination, truth-plane-full, fixtures, release-evidence, external-runtime-evidence, release"
 	defaultFixtureDir      = "testdata/openclaw-smoke/stage0-5"
 )
 
@@ -71,6 +72,7 @@ type Options struct {
 	OpenClawTruthPlaneDivergenceResultsPath  string
 	OpenClawTruthPlaneDeliveryResultsPath    string
 	OpenClawA2AContractResultsPath           string
+	OpenClawExternalRuntimeEvidencePath      string
 	CoordinationEvidenceSummaryPath          string
 	ChatID                                   int64
 	Text                                     string
@@ -122,6 +124,7 @@ type Report struct {
 	CollaborationTemplateResult      *CollaborationTemplateSmokeResult      `json:"collaboration_template_result,omitempty"`
 	ExternalRuntimeResult            *ExternalRuntimeSmokeResult            `json:"external_runtime_result,omitempty"`
 	PrivateMultiProjectDogfoodResult *PrivateMultiProjectDogfoodSmokeResult `json:"private_multi_project_dogfood_result,omitempty"`
+	ExternalRuntimeEvidence          *OpenClawExternalRuntimeEvidenceResult `json:"external_runtime_evidence,omitempty"`
 	OpenClawToolCallChecklist        []OpenClawToolCallChecklistEntry       `json:"openclaw_tool_call_checklist,omitempty"`
 	Registration                     RegistrationGuidance                   `json:"registration"`
 }
@@ -237,7 +240,7 @@ type requiredProfilePath struct {
 func normalizedProfile(profile string) (string, error) {
 	profile = strings.TrimSpace(profile)
 	switch profile {
-	case "", profileQuick, profilePrivateCoordination, profileTruthPlaneFull, profileFixtures, profileReleaseEvidence, profileRelease:
+	case "", profileQuick, profilePrivateCoordination, profileTruthPlaneFull, profileFixtures, profileReleaseEvidence, profileExternalRuntimeEvidence, profileRelease:
 		return profile, nil
 	default:
 		return "", fmt.Errorf("unsupported profile %s; supported profiles: %s", profile, supportedProfileValues)
@@ -250,6 +253,8 @@ func applyProfileDefaults(opts Options) Options {
 		return applyFixturesProfileDefaults(opts)
 	case profilePrivateCoordination:
 		return applyPrivateCoordinationProfileDefaults(opts)
+	case profileExternalRuntimeEvidence:
+		return applyExternalRuntimeEvidenceProfileDefaults(opts)
 	default:
 		return opts
 	}
@@ -261,6 +266,14 @@ func applyPrivateCoordinationProfileDefaults(opts Options) Options {
 	opts.CollaborationTemplateSmoke = true
 	opts.ExternalRuntimeSmoke = true
 	opts.PrivateMultiProjectDogfoodSmoke = true
+	return opts
+}
+
+func applyExternalRuntimeEvidenceProfileDefaults(opts Options) Options {
+	opts.SenderBaseURL = ""
+	opts.MCPCommand = ""
+	opts.MCPArgs = nil
+	opts.SkipRegistrationCheck = true
 	return opts
 }
 
@@ -279,6 +292,7 @@ func applyFixturesProfileDefaults(opts Options) Options {
 	opts.OpenClawTruthPlaneDivergenceResultsPath = filepath.Join(fixtureDir, "divergence-results.json")
 	opts.OpenClawTruthPlaneDeliveryResultsPath = filepath.Join(fixtureDir, "delivery-results.json")
 	opts.OpenClawA2AContractResultsPath = filepath.Join(fixtureDir, "a2a-contract-results.json")
+	opts.OpenClawExternalRuntimeEvidencePath = filepath.Join(fixtureDir, "external-runtime-evidence.json")
 	opts.CoordinationEvidenceSummaryPath = filepath.Join(fixtureDir, "coordination-evidence-summary.json")
 	return opts
 }
@@ -330,6 +344,14 @@ func validateProfileOptions(opts Options) error {
 			return errors.New("profile release-evidence is read-only; use --profile release for --deliver-main")
 		}
 		return requireTruthPlaneFullEvidenceForProfile(opts, profileReleaseEvidence)
+	case profileExternalRuntimeEvidence:
+		if opts.DeliverMain {
+			return errors.New("profile external-runtime-evidence is read-only; use --profile release for --deliver-main")
+		}
+		if strings.TrimSpace(opts.OpenClawExternalRuntimeEvidencePath) == "" {
+			return errors.New("profile external-runtime-evidence requires --openclaw-external-runtime-evidence")
+		}
+		return nil
 	case profileRelease:
 		if err := requireTruthPlaneFullEvidenceForProfile(opts, profileRelease); err != nil {
 			return err
@@ -395,7 +417,11 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	if opts.IncludeOpenClawToolCallChecklist {
 		report.OpenClawToolCallChecklist = buildOpenClawToolCallChecklist()
 	}
-	report.addCheck(checkConfig(opts.ConfigPath))
+	if opts.Profile == profileExternalRuntimeEvidence {
+		report.addCheck(skippedCheck("config", "profile external-runtime-evidence validates a read-only evidence file without loading config"))
+	} else {
+		report.addCheck(checkConfig(opts.ConfigPath))
+	}
 
 	if strings.TrimSpace(opts.SenderBaseURL) == "" {
 		report.addCheck(skippedCheck("sender_health", "sender-base-url is not configured"))
@@ -433,6 +459,11 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	report.addCheck(checkOpenClawTruthPlaneDeliveryResults(opts))
 	report.addCheck(checkCoordinationEvidenceSummary(opts))
 	report.addCheck(checkOpenClawA2AContractResults(opts))
+	externalRuntimeEvidenceCheck, externalRuntimeEvidence := checkOpenClawExternalRuntimeEvidenceResult(opts)
+	if externalRuntimeEvidence != nil {
+		report.ExternalRuntimeEvidence = externalRuntimeEvidence
+	}
+	report.addCheck(externalRuntimeEvidenceCheck)
 	if opts.OpenClawDispatchSmoke {
 		report.addCheck(checkOpenClawDispatch(ctx, mcpClient, &report, opts))
 	}
