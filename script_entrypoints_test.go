@@ -196,6 +196,51 @@ func TestDogfoodSeedEntrypointHelp(t *testing.T) {
 	}
 }
 
+func TestExternalRuntimeSampleEntrypointHelp(t *testing.T) {
+	binaryPath := filepath.Join(t.TempDir(), "clawside-external-runtime-sample")
+	buildCmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/clawside-external-runtime-sample")
+	var buildOutput bytes.Buffer
+	buildCmd.Stdout = &buildOutput
+	buildCmd.Stderr = &buildOutput
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("build external runtime sample binary: %v\n%s", err, buildOutput.String())
+	}
+
+	for _, arg := range []string{"help", "--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			cmd := exec.Command(binaryPath, arg)
+			cmd.Dir = t.TempDir()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("expected %s to exit 0 without local DB: %v\nstdout:\n%s\nstderr:\n%s", arg, err, stdout.String(), stderr.String())
+			}
+			out := stdout.String()
+			for _, want := range []string{
+				"usage: clawside-external-runtime-sample",
+				"--db",
+				"truth-plane",
+				"does not launch workers",
+				"does not trigger sender or Telegram delivery",
+			} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("expected %s help output to contain %q, got:\n%s", arg, want, out)
+				}
+			}
+			for _, forbidden := range []string{"message/send", "message/stream", "sender_auth_key", "sender-base-url", "--command", "--args", "--cwd", "--path", "--prompt", "--token", "--session", "--worker", "--chat-id", "--telegram"} {
+				if strings.Contains(strings.ToLower(out+stderr.String()), forbidden) {
+					t.Fatalf("external runtime sample help must not contain %q\nstdout:\n%s\nstderr:\n%s", forbidden, out, stderr.String())
+				}
+			}
+			if stderr.String() != "" {
+				t.Fatalf("expected %s help to avoid stderr, got:\n%s", arg, stderr.String())
+			}
+		})
+	}
+}
+
 func TestTelegramOperatorLifecycleScripts(t *testing.T) {
 	for _, path := range []string{"scripts/start_telegram_operator.sh", "scripts/stop_telegram_operator.sh", "scripts/restart_telegram_operator.sh"} {
 		info, err := os.Stat(path)
@@ -1428,6 +1473,16 @@ func TestReadmeDocumentsExternalSwarmRuntimeIntegrationGuide(t *testing.T) {
 			"workflow_status",
 			"coordination_evidence_summary",
 			"--external-runtime-smoke",
+			"cmd/clawside-external-runtime-sample",
+			"go run ./cmd/clawside-external-runtime-sample --db ./sender.db",
+			"project://sample/external-runtime/upstream",
+			"project://sample/external-runtime/downstream",
+			"project://sample/external-runtime/review",
+			"does not launch model workers",
+			"does not start runtime sessions",
+			"does not start sandboxes",
+			"does not trigger sender or Telegram delivery",
+			"does not accept arbitrary command/args/cwd/local path/private prompt/token/session/worker launch fields",
 			"<repo-root>",
 			"<owner>/<repo>",
 			"<workflow-id>",

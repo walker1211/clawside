@@ -130,6 +130,16 @@ To exercise the runtime-owned loop locally without launching workers, run:
 ./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --external-runtime-smoke --json
 ```
 
+#### P35 minimal external runtime sample
+
+`cmd/clawside-external-runtime-sample` is a minimal truth-plane-only sample for runtimes such as Claude, Kimi, OpenClaw, or another swarm. It registers runtime-owned agents with symbolic refs (`project://sample/external-runtime/upstream`, `project://sample/external-runtime/downstream`, `project://sample/external-runtime/review`), creates upstream and downstream handoffs, checks `next_work` and `blocked_work`, progresses protocol actions, then reads `workflow_status` and `coordination_evidence_summary`.
+
+```bash
+go run ./cmd/clawside-external-runtime-sample --db ./sender.db
+```
+
+Safety boundaries: the sample does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender or Telegram delivery, and does not accept arbitrary command/args/cwd/local path/private prompt/token/session/worker launch fields.
+
 Before making any public-readiness or release claim, keep verification read-only:
 
 ```bash

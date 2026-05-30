@@ -130,6 +130,16 @@ coordination_evidence_summary workflow_id=<workflow-id> include_agents=true
 ./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --external-runtime-smoke --json
 ```
 
+#### P35 minimal external runtime sample
+
+`cmd/clawside-external-runtime-sample` 是一个最小 truth-plane-only sample，用来给 Claude、Kimi、OpenClaw 或其他 swarm runtime 看清接入方式。它会注册 runtime-owned agents 和 symbolic refs（`project://sample/external-runtime/upstream`、`project://sample/external-runtime/downstream`、`project://sample/external-runtime/review`），创建 upstream/downstream handoffs，查询 `next_work` / `blocked_work`，推进 protocol actions，然后读取 `workflow_status` 和 `coordination_evidence_summary`。
+
+```bash
+go run ./cmd/clawside-external-runtime-sample --db ./sender.db
+```
+
+安全边界：the sample does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender or Telegram delivery, and does not accept arbitrary command/args/cwd/local path/private prompt/token/session/worker launch fields.
+
 在宣称 public-readiness 或 release 前，只运行只读检查：
 
 ```bash

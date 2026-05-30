@@ -48,7 +48,7 @@ func (m *StateMachine) Apply(event EventRecord) (Handoff, Decision) {
 		if err := validateReceiverActor(next, event); err != nil {
 			return next, rejectDecision(next.State, err.Error())
 		}
-		if next.State != StateDispatched {
+		if next.State != StateDispatched && !(next.State == StateCreated && next.DeliveryTargetRef == "") {
 			return next, rejectDecision(next.State, "received requires dispatched")
 		}
 		next.State = StateReceived

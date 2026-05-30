@@ -46,17 +46,40 @@ func TestApplyEventRequiresExplicitCompletedEvent(t *testing.T) {
 	}
 }
 
-func TestApplyEventRejectsReceivedBeforeDispatched(t *testing.T) {
+func TestApplyEventAcceptsReceivedFromCreatedWithoutDeliveryTarget(t *testing.T) {
+	writer := ActorRef{Type: ActorAgent, ID: "writer"}
 	machine := NewStateMachine(Handoff{
 		State:         StateCreated,
-		ReceiverActor: ActorRef{Type: ActorAgent, ID: "writer"},
+		ReceiverActor: writer,
+	})
+
+	handoff, decision := machine.Apply(EventRecord{
+		Type:          EventReceived,
+		ProducerActor: writer,
+		SubjectActor:  writer,
+	})
+	if !decision.Accepted {
+		t.Fatalf("expected received from created without delivery target, got %s", decision.Reason)
+	}
+	if handoff.State != StateReceived || !handoff.HasReceived {
+		t.Fatalf("expected received handoff, got state=%s has_received=%t", handoff.State, handoff.HasReceived)
+	}
+}
+
+func TestApplyEventRejectsReceivedBeforeDispatchedWithDeliveryTarget(t *testing.T) {
+	writer := ActorRef{Type: ActorAgent, ID: "writer"}
+	machine := NewStateMachine(Handoff{
+		State:             StateCreated,
+		ReceiverActor:     writer,
+		DeliveryTargetRef: "agent:writer",
 	})
 
 	if _, decision := machine.Apply(EventRecord{
-		Type:         EventReceived,
-		SubjectActor: ActorRef{Type: ActorAgent, ID: "writer"},
+		Type:          EventReceived,
+		ProducerActor: writer,
+		SubjectActor:  writer,
 	}); decision.Accepted {
-		t.Fatalf("expected received before dispatched to be rejected")
+		t.Fatalf("expected received before dispatched with delivery target to be rejected")
 	}
 }
 
