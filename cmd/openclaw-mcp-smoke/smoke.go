@@ -54,6 +54,7 @@ type Options struct {
 	MultiAgentCoordinationSmoke              bool
 	CollaborationTemplateSmoke               bool
 	ExternalRuntimeSmoke                     bool
+	PrivateMultiProjectDogfoodSmoke          bool
 	OpenClawCommand                          string
 	OpenClawArgs                             []string
 	OpenClawTarget                           string
@@ -110,18 +111,19 @@ var expectedV1Tools = []string{
 }
 
 type Report struct {
-	Status                       string                             `json:"status"`
-	Profile                      string                             `json:"profile,omitempty"`
-	Checks                       []CheckResult                      `json:"checks"`
-	Tools                        []string                           `json:"tools"`
-	DeliveryResult               *a2adelivery.DeliveryResult        `json:"delivery_result,omitempty"`
-	OpenClawDispatchResult       *OpenClawDispatchSmokeResult       `json:"openclaw_dispatch_result,omitempty"`
-	MultiProjectHandoffResult    *MultiProjectHandoffSmokeResult    `json:"multi_project_handoff_result,omitempty"`
-	MultiAgentCoordinationResult *MultiAgentCoordinationSmokeResult `json:"multi_agent_coordination_result,omitempty"`
-	CollaborationTemplateResult  *CollaborationTemplateSmokeResult  `json:"collaboration_template_result,omitempty"`
-	ExternalRuntimeResult        *ExternalRuntimeSmokeResult        `json:"external_runtime_result,omitempty"`
-	OpenClawToolCallChecklist    []OpenClawToolCallChecklistEntry   `json:"openclaw_tool_call_checklist,omitempty"`
-	Registration                 RegistrationGuidance               `json:"registration"`
+	Status                           string                                 `json:"status"`
+	Profile                          string                                 `json:"profile,omitempty"`
+	Checks                           []CheckResult                          `json:"checks"`
+	Tools                            []string                               `json:"tools"`
+	DeliveryResult                   *a2adelivery.DeliveryResult            `json:"delivery_result,omitempty"`
+	OpenClawDispatchResult           *OpenClawDispatchSmokeResult           `json:"openclaw_dispatch_result,omitempty"`
+	MultiProjectHandoffResult        *MultiProjectHandoffSmokeResult        `json:"multi_project_handoff_result,omitempty"`
+	MultiAgentCoordinationResult     *MultiAgentCoordinationSmokeResult     `json:"multi_agent_coordination_result,omitempty"`
+	CollaborationTemplateResult      *CollaborationTemplateSmokeResult      `json:"collaboration_template_result,omitempty"`
+	ExternalRuntimeResult            *ExternalRuntimeSmokeResult            `json:"external_runtime_result,omitempty"`
+	PrivateMultiProjectDogfoodResult *PrivateMultiProjectDogfoodSmokeResult `json:"private_multi_project_dogfood_result,omitempty"`
+	OpenClawToolCallChecklist        []OpenClawToolCallChecklistEntry       `json:"openclaw_tool_call_checklist,omitempty"`
+	Registration                     RegistrationGuidance                   `json:"registration"`
 }
 
 type OpenClawDispatchSmokeResult struct {
@@ -195,6 +197,18 @@ type ExternalRuntimeSmokeResult struct {
 	WorkflowFinalStatus      string `json:"workflow_final_status"`
 }
 
+type PrivateMultiProjectDogfoodSmokeResult struct {
+	WorkflowID             string `json:"workflow_id"`
+	UpstreamHandoffID      string `json:"upstream_handoff_id"`
+	DownstreamHandoffID    string `json:"downstream_handoff_id"`
+	DependencyGateVerified bool   `json:"dependency_gate_verified"`
+	ReviewApproved         bool   `json:"review_approved"`
+	EvidenceSummaryReady   bool   `json:"evidence_summary_ready"`
+	UpstreamFinalState     string `json:"upstream_final_state"`
+	DownstreamFinalState   string `json:"downstream_final_state"`
+	WorkflowFinalStatus    string `json:"workflow_final_status"`
+}
+
 func (r *Report) addCheck(check CheckResult) {
 	r.Checks = append(r.Checks, check)
 	if check.Status == checkStatusFailed {
@@ -246,6 +260,7 @@ func applyPrivateCoordinationProfileDefaults(opts Options) Options {
 	opts.MultiAgentCoordinationSmoke = true
 	opts.CollaborationTemplateSmoke = true
 	opts.ExternalRuntimeSmoke = true
+	opts.PrivateMultiProjectDogfoodSmoke = true
 	return opts
 }
 
@@ -432,6 +447,9 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	}
 	if opts.ExternalRuntimeSmoke {
 		report.addCheck(checkExternalRuntimeRehearsal(ctx, mcpClient, &report, opts))
+	}
+	if opts.PrivateMultiProjectDogfoodSmoke {
+		report.addCheck(checkPrivateMultiProjectDogfood(ctx, mcpClient, &report, opts))
 	}
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
@@ -1017,6 +1035,149 @@ func checkCollaborationTemplate(ctx context.Context, client smokeMCPClient, repo
 		DownstreamFinalState:     downstreamFinal,
 	}
 	return CheckResult{Name: "collaboration_template", Status: checkStatusOK, Detail: fmt.Sprintf("workflow_id=%s reviewer_ready=%t", workflowID, reviewerReady)}
+}
+
+func checkPrivateMultiProjectDogfood(ctx context.Context, client smokeMCPClient, report *Report, opts Options) CheckResult {
+	if client == nil {
+		return failedCheck("private_multi_project_dogfood", "mcp client is not initialized; configure --mcp-command before using --private-multi-project-dogfood-smoke")
+	}
+	message := strings.TrimSpace(opts.Text)
+	if message == "" {
+		message = "Private multi-project dogfood smoke test"
+	}
+	agents := []struct {
+		id         string
+		projectRef string
+	}{
+		{id: "dogfood-upstream", projectRef: "project://dogfood/upstream"},
+		{id: "dogfood-downstream", projectRef: "project://dogfood/downstream"},
+		{id: "dogfood-reviewer", projectRef: "project://dogfood/review"},
+	}
+	for _, agent := range agents {
+		if err := registerSmokeAgent(ctx, client, opts, agent.id, []string{agent.projectRef}); err != nil {
+			return failedCheck("private_multi_project_dogfood", err.Error())
+		}
+	}
+	for _, agent := range agents {
+		listed, err := callStructuredTool(ctx, client, "agent_list", map[string]any{
+			"project_ref": agent.projectRef,
+			"task_kind":   "generic_task",
+			"status":      "available",
+		}, opts)
+		if err != nil {
+			return failedCheck("private_multi_project_dogfood", err.Error())
+		}
+		if !agentsContainID(listed, agent.id) {
+			return failedCheck("private_multi_project_dogfood", fmt.Sprintf("agent_list did not return %s for %s", agent.id, agent.projectRef))
+		}
+	}
+
+	upstream, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_kind":                    "private_multi_project_dogfood",
+		"sender":                           map[string]any{"type": "system", "id": "openclaw-mcp-smoke"},
+		"receiver":                         map[string]any{"type": "agent", "id": "dogfood-upstream"},
+		"reviewer":                         map[string]any{"type": "agent", "id": "dogfood-reviewer"},
+		"task_kind":                        "generic_task",
+		"intent":                           message + ": upstream implementation",
+		"required_for_workflow_completion": true,
+		"needs_review":                     true,
+		"payload_ref":                      "project://dogfood/upstream",
+		"delivery_target_ref":              "agent:dogfood-upstream",
+	}, opts)
+	if err != nil {
+		return failedCheck("private_multi_project_dogfood", err.Error())
+	}
+	workflowID := nestedString(upstream, "workflow", "id")
+	upstreamID := nestedString(upstream, "handoff", "id")
+	if workflowID == "" || upstreamID == "" {
+		return failedCheck("private_multi_project_dogfood", "upstream handoff_create did not return workflow.id and handoff.id")
+	}
+	downstream, err := callStructuredTool(ctx, client, "handoff_create", map[string]any{
+		"workflow_id":                      workflowID,
+		"workflow_kind":                    "private_multi_project_dogfood",
+		"sender":                           map[string]any{"type": "agent", "id": "dogfood-upstream"},
+		"receiver":                         map[string]any{"type": "agent", "id": "dogfood-downstream"},
+		"task_kind":                        "generic_task",
+		"intent":                           message + ": downstream integration",
+		"parent_handoff_id":                upstreamID,
+		"depends_on_handoff_ids":           []string{upstreamID},
+		"required_for_workflow_completion": true,
+		"payload_ref":                      "project://dogfood/downstream",
+		"delivery_target_ref":              "agent:dogfood-downstream",
+	}, opts)
+	if err != nil {
+		return failedCheck("private_multi_project_dogfood", err.Error())
+	}
+	downstreamID := nestedString(downstream, "handoff", "id")
+	if nestedString(downstream, "workflow", "id") != workflowID || downstreamID == "" {
+		return failedCheck("private_multi_project_dogfood", "downstream handoff_create did not append to upstream workflow")
+	}
+
+	upstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "dogfood-upstream", "project_ref": "project://dogfood/upstream", "workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("private_multi_project_dogfood", err.Error())
+	}
+	if !workItemsContainHandoff(upstreamNext, upstreamID) {
+		return failedCheck("private_multi_project_dogfood", "next_work did not return the upstream dogfood handoff")
+	}
+	blocked, err := callStructuredTool(ctx, client, "blocked_work", map[string]any{"agent_id": "dogfood-downstream", "project_ref": "project://dogfood/downstream", "workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("private_multi_project_dogfood", err.Error())
+	}
+	dependencyReason := blockedWorkReasonCode(blocked, downstreamID, "dependency_incomplete", upstreamID)
+	dependencyGateVerified := dependencyReason != ""
+	if !dependencyGateVerified {
+		return failedCheck("private_multi_project_dogfood", "blocked_work did not report downstream dependency_incomplete")
+	}
+
+	upstreamFinal, _, reviewApproved, err := dispatchReviewAndCompleteSmokeHandoff(ctx, client, opts, workflowID, upstreamID, "dogfood-upstream", "dogfood-reviewer", message)
+	if err != nil {
+		return failedCheck("private_multi_project_dogfood", err.Error())
+	}
+	downstreamNext, err := callStructuredTool(ctx, client, "next_work", map[string]any{"agent_id": "dogfood-downstream", "project_ref": "project://dogfood/downstream", "workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("private_multi_project_dogfood", err.Error())
+	}
+	if !workItemsContainHandoff(downstreamNext, downstreamID) {
+		return failedCheck("private_multi_project_dogfood", "next_work did not return downstream after upstream review completion")
+	}
+	downstreamFinal, err := dispatchAndCompleteSmokeHandoff(ctx, client, opts, workflowID, downstreamID, "dogfood-downstream", message)
+	if err != nil {
+		return failedCheck("private_multi_project_dogfood", err.Error())
+	}
+
+	workflowProjection, err := callStructuredTool(ctx, client, "workflow_status", map[string]any{"workflow_id": workflowID}, opts)
+	if err != nil {
+		return failedCheck("private_multi_project_dogfood", err.Error())
+	}
+	workflowFinalStatus := nestedString(workflowProjection, "workflow", "status")
+	if workflowFinalStatus != "completed" {
+		return failedCheck("private_multi_project_dogfood", fmt.Sprintf("expected completed workflow, got status=%s", workflowFinalStatus))
+	}
+	if !workflowContainsHandoffs(workflowProjection, upstreamID, downstreamID) {
+		return failedCheck("private_multi_project_dogfood", "workflow_status did not return upstream and downstream dogfood handoffs")
+	}
+	evidence, err := callStructuredTool(ctx, client, "coordination_evidence_summary", map[string]any{"workflow_id": workflowID, "include_agents": true}, opts)
+	if err != nil {
+		return failedCheck("private_multi_project_dogfood", err.Error())
+	}
+	evidenceSummaryReady := evidenceSummaryContainsWorkflow(evidence, workflowID)
+	if !evidenceSummaryReady {
+		return failedCheck("private_multi_project_dogfood", "coordination_evidence_summary did not include the dogfood workflow")
+	}
+
+	report.PrivateMultiProjectDogfoodResult = &PrivateMultiProjectDogfoodSmokeResult{
+		WorkflowID:             workflowID,
+		UpstreamHandoffID:      upstreamID,
+		DownstreamHandoffID:    downstreamID,
+		DependencyGateVerified: dependencyGateVerified,
+		ReviewApproved:         reviewApproved,
+		EvidenceSummaryReady:   evidenceSummaryReady,
+		UpstreamFinalState:     upstreamFinal,
+		DownstreamFinalState:   downstreamFinal,
+		WorkflowFinalStatus:    workflowFinalStatus,
+	}
+	return CheckResult{Name: "private_multi_project_dogfood", Status: checkStatusOK, Detail: fmt.Sprintf("workflow_id=%s review_approved=%t dependency_gate=%t", workflowID, reviewApproved, dependencyGateVerified)}
 }
 
 func checkExternalRuntimeRehearsal(ctx context.Context, client smokeMCPClient, report *Report, opts Options) CheckResult {

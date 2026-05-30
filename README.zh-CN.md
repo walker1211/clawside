@@ -71,7 +71,7 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 - `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`：MCP private coordination rehearsal 应该为 green。
 - `./scripts/github-readiness.sh <owner>/<repo>`：仓库仍为 private 或 GitHub settings 未启用时，GitHub readiness 可以是 expected red；除非该脚本 exit 0，否则不要宣称仓库 public-ready。
 
-这条 rehearsal 覆盖当前 truth-plane bridge 行为：agent registry、symbolic `project://...` refs、`next_work`、`blocked_work`、reviewer gates、dependency gates、`workflow_status` 和 `coordination_evidence_summary`。`private-coordination` profile 会展开为 `--multi-agent-coordination-smoke`、`--collaboration-template-smoke` 和 `--external-runtime-smoke` 背后的 truth-plane-only coordination checks，并禁用 sender checks 和 delivery。它不调用 `message/send` 或 `message/stream`，不触发 sender 或 Telegram delivery，也不接受 runtime launch fields。
+这条 rehearsal 覆盖当前 truth-plane bridge 行为：agent registry、symbolic `project://...` refs、`next_work`、`blocked_work`、reviewer gates、dependency gates、`workflow_status` 和 `coordination_evidence_summary`。`private-coordination` profile 会展开为 `--multi-agent-coordination-smoke`、`--collaboration-template-smoke`、`--external-runtime-smoke` 和 `--private-multi-project-dogfood-smoke` 背后的 truth-plane-only coordination checks，并禁用 sender checks 和 delivery。它不调用 `message/send` 或 `message/stream`，不触发 sender 或 Telegram delivery，也不接受 runtime launch fields。
 
 ### P21 external swarm/runtime integration sequence
 
@@ -165,6 +165,15 @@ go run ./cmd/clawside-telegram-operator --config configs/config.toml
 /approve <handoff_id>
 ```
 
+可重复的 private dogfood 流程：用生命周期脚本启动 operator，生成一条已提交的 review handoff，然后在 Telegram private chat 中审批：
+
+```bash
+./scripts/start_telegram_operator.sh --bot guardian
+go run ./cmd/clawside-dogfood-seed --db ./sender.db --reviewer user:telegram:<user_id>
+# 在 Telegram 中发送输出里的 /status <workflow_id> 和 /approve <handoff_id>。
+./scripts/stop_telegram_operator.sh
+```
+
 安全边界：该 operator 不使用 `SENDER_AUTH_KEY`，不调用 `message/send` 或 `message/stream`，不启动 model worker、runtime session 或 sandbox，也不接受任意 `command`、`args`、`cwd`、本地路径、private prompt、token、session、stdout、stderr、sender delivery 字段或 Telegram delivery 字段。`/approve` 会以 `user:telegram:<user_id>` 记录 protocol approval。
 
 ## 最小使用路径
@@ -229,6 +238,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `cmd/clawside-mcp/`：stdio MCP server 入口
 - `cmd/clawside-a2a/`：实验性的 A2A compatibility HTTP endpoint，支持受控查询、inbound task creation 和只读 task events
 - `cmd/clawside-telegram-operator/`：私有 inbound Telegram operator，支持固定 truth-plane slash commands
+- `cmd/clawside-dogfood-seed/`：本地 private dogfood seed CLI，用于生成可在 Telegram 中审批的 review handoff
 - `cmd/openclaw-mcp-smoke/`：OpenClaw 消费 clawside MCP v1 surface 的本地 smoke verifier
 - `cmd/openclaw-dispatch/`：把 `handoff_dispatch adapter=openclaw` 请求适配到 OpenClaw-compatible CLI command 的本地 helper
 - `cmd/openclaw-tool-results-extract/`：从 OpenClaw trajectory 提取 clawside tool structured result 的本地只读 CLI

@@ -71,7 +71,7 @@ Expected results while the repository remains private:
 - `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`: MCP private coordination rehearsal should be green.
 - `./scripts/github-readiness.sh <owner>/<repo>`: GitHub readiness can be expected red while the repository is private or required GitHub settings are disabled; do not report the repository as public-ready until this script exits 0.
 
-The rehearsal covers the current truth-plane bridge behavior: agent registry, symbolic `project://...` references, `next_work`, `blocked_work`, reviewer gates, dependency gates, `workflow_status`, and `coordination_evidence_summary`. The `private-coordination` profile expands to the truth-plane-only coordination checks behind `--multi-agent-coordination-smoke`, `--collaboration-template-smoke`, and `--external-runtime-smoke`, with sender checks and delivery disabled. It does not call `message/send` or `message/stream`, does not trigger sender or Telegram delivery, and does not accept runtime launch fields.
+The rehearsal covers the current truth-plane bridge behavior: agent registry, symbolic `project://...` references, `next_work`, `blocked_work`, reviewer gates, dependency gates, `workflow_status`, and `coordination_evidence_summary`. The `private-coordination` profile expands to the truth-plane-only coordination checks behind `--multi-agent-coordination-smoke`, `--collaboration-template-smoke`, `--external-runtime-smoke`, and `--private-multi-project-dogfood-smoke`, with sender checks and delivery disabled. It does not call `message/send` or `message/stream`, does not trigger sender or Telegram delivery, and does not accept runtime launch fields.
 
 ### P21 external swarm/runtime integration sequence
 
@@ -165,6 +165,15 @@ Supported Telegram slash commands:
 /approve <handoff_id>
 ```
 
+For a repeatable private dogfood run, start the operator with the lifecycle script, seed a submitted review handoff, then approve it from a Telegram private chat:
+
+```bash
+./scripts/start_telegram_operator.sh --bot guardian
+go run ./cmd/clawside-dogfood-seed --db ./sender.db --reviewer user:telegram:<user_id>
+# Send the printed /status <workflow_id> and /approve <handoff_id> commands in Telegram.
+./scripts/stop_telegram_operator.sh
+```
+
 Safety boundaries: this operator does not use `SENDER_AUTH_KEY`, does not call `message/send` or `message/stream`, does not start model workers, runtime sessions, or sandboxes, and does not accept arbitrary `command`, `args`, `cwd`, local paths, private prompts, tokens, sessions, stdout, stderr, sender delivery fields, or Telegram delivery fields. `/approve` records a protocol approval as `user:telegram:<user_id>`.
 
 ## Minimal usage path
@@ -229,6 +238,7 @@ Do not remove `--verify-only`, create a release, make the repository public, cha
 - `cmd/clawside-mcp/`: stdio MCP server entrypoint.
 - `cmd/clawside-a2a/`: experimental A2A compatibility HTTP endpoint for controlled queries, inbound task creation, and read-only task events.
 - `cmd/clawside-telegram-operator/`: private inbound Telegram operator for fixed truth-plane slash commands.
+- `cmd/clawside-dogfood-seed/`: local private dogfood seed CLI for generating review handoffs for Telegram approval.
 - `cmd/openclaw-mcp-smoke/`: local smoke verifier for OpenClaw consuming the clawside MCP v1 surface.
 - `cmd/openclaw-dispatch/`: local helper that adapts `handoff_dispatch adapter=openclaw` requests to an OpenClaw-compatible CLI command.
 - `cmd/openclaw-tool-results-extract/`: local read-only CLI for extracting clawside tool structured results from OpenClaw trajectory.

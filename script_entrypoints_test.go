@@ -97,7 +97,11 @@ func TestTelegramOperatorDocsAndExamples(t *testing.T) {
 		content := readTextFile(t, path)
 		for _, want := range []string{
 			"cmd/clawside-telegram-operator",
+			"cmd/clawside-dogfood-seed",
 			"go run ./cmd/clawside-telegram-operator help",
+			"go run ./cmd/clawside-dogfood-seed",
+			"./scripts/start_telegram_operator.sh",
+			"./scripts/stop_telegram_operator.sh",
 			"CLAWSIDE_TELEGRAM_OPERATOR_BOT",
 			"CLAWSIDE_TELEGRAM_OPERATOR_DB_PATH",
 			"CLAWSIDE_TELEGRAM_OPERATOR_BASE_URL",
@@ -115,6 +119,9 @@ func TestTelegramOperatorDocsAndExamples(t *testing.T) {
 			if !strings.Contains(content, want) {
 				t.Fatalf("expected %s to contain %q", path, want)
 			}
+		}
+		if strings.Contains(content, "/create") {
+			t.Fatalf("%s must not document Telegram /create as supported", path)
 		}
 	}
 
@@ -140,6 +147,93 @@ func TestTelegramOperatorDocsAndExamples(t *testing.T) {
 		if !strings.Contains(configExample, want) {
 			t.Fatalf("expected configs/config.example.toml to contain %q", want)
 		}
+	}
+}
+
+func TestDogfoodSeedEntrypointHelp(t *testing.T) {
+	binaryPath := filepath.Join(t.TempDir(), "clawside-dogfood-seed")
+	buildCmd := exec.Command("go", "build", "-o", binaryPath, "./cmd/clawside-dogfood-seed")
+	var buildOutput bytes.Buffer
+	buildCmd.Stdout = &buildOutput
+	buildCmd.Stderr = &buildOutput
+	if err := buildCmd.Run(); err != nil {
+		t.Fatalf("build dogfood seed binary: %v\n%s", err, buildOutput.String())
+	}
+
+	for _, arg := range []string{"help", "--help", "-h"} {
+		t.Run(arg, func(t *testing.T) {
+			cmd := exec.Command(binaryPath, arg)
+			cmd.Dir = t.TempDir()
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("expected %s to exit 0 without local DB: %v\nstdout:\n%s\nstderr:\n%s", arg, err, stdout.String(), stderr.String())
+			}
+			out := stdout.String()
+			for _, want := range []string{
+				"usage: clawside-dogfood-seed",
+				"--db",
+				"--reviewer",
+				"--payload-ref",
+				"/status <workflow_id>",
+				"/approve <handoff_id>",
+			} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("expected %s help output to contain %q, got:\n%s", arg, want, out)
+				}
+			}
+			for _, forbidden := range []string{"token", "secret", "session", "runtime", "stdout", "stderr", "cwd"} {
+				if strings.Contains(strings.ToLower(out+stderr.String()), forbidden) {
+					t.Fatalf("dogfood seed help must not contain %q\nstdout:\n%s\nstderr:\n%s", forbidden, out, stderr.String())
+				}
+			}
+			if stderr.String() != "" {
+				t.Fatalf("expected %s help to avoid stderr, got:\n%s", arg, stderr.String())
+			}
+		})
+	}
+}
+
+func TestTelegramOperatorLifecycleScripts(t *testing.T) {
+	for _, path := range []string{"scripts/start_telegram_operator.sh", "scripts/stop_telegram_operator.sh", "scripts/restart_telegram_operator.sh"} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("expected %s to exist: %v", path, err)
+		}
+		if info.Mode()&0o111 == 0 {
+			t.Fatalf("expected %s to be executable", path)
+		}
+	}
+
+	for _, want := range []string{
+		"logs/telegram-operator.pid",
+		"logs/telegram-operator.log",
+		"go build -o",
+		"cmd/clawside-telegram-operator",
+		"clawside Telegram operator polling with bot",
+		"CLAWSIDE_TELEGRAM_OPERATOR_BOT",
+		"CLAWSIDE_TELEGRAM_OPERATOR_DB_PATH",
+		"CLAWSIDE_TELEGRAM_OPERATOR_BASE_URL",
+	} {
+		assertFileContains(t, "scripts/start_telegram_operator.sh", want)
+	}
+	for _, want := range []string{
+		"logs/telegram-operator.pid",
+		"logs/clawside-telegram-operator",
+		"process_matches_telegram_operator",
+		"ps -p \"$pid\" -o command=",
+		"kill \"$PID\"",
+	} {
+		assertFileContains(t, "scripts/stop_telegram_operator.sh", want)
+	}
+	restart := readTextFile(t, "scripts/restart_telegram_operator.sh")
+	if !strings.Contains(restart, "./stop_telegram_operator.sh") || !strings.Contains(restart, "./start_telegram_operator.sh") {
+		t.Fatalf("expected restart_telegram_operator.sh to delegate to stop/start")
+	}
+	if strings.Contains(restart, "nohup") || strings.Contains(restart, "logs/telegram-operator.pid") {
+		t.Fatalf("expected restart_telegram_operator.sh to stay thin")
 	}
 }
 
@@ -1295,6 +1389,7 @@ func TestReadmeDocumentsPrivateDogfoodRehearsal(t *testing.T) {
 			"GitHub readiness",
 			"expected red",
 			"private-coordination",
+			"--private-multi-project-dogfood-smoke",
 		}
 		if path == "README.zh-CN.md" {
 			wantTokens = append(wantTokens, "不启动 model worker、runtime session 或 sandbox")
@@ -1657,6 +1752,31 @@ func TestVerifyOpenClawMCPScriptSupportsExternalRuntimeSmoke(t *testing.T) {
 		}
 	}
 	for _, forbidden := range []string{"EXTERNAL_RUNTIME_ARGS=()", "${EXTERNAL_RUNTIME_ARGS[@]}", "--sender-auth-key \"$"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("expected %s not to contain %q", path, forbidden)
+		}
+	}
+}
+
+func TestVerifyOpenClawMCPScriptSupportsPrivateMultiProjectDogfoodSmoke(t *testing.T) {
+	path := "scripts/verify_openclaw_mcp.sh"
+	content := readTextFile(t, path)
+
+	for _, want := range []string{
+		"--private-multi-project-dogfood-smoke",
+		"PRIVATE_MULTI_PROJECT_DOGFOOD_SMOKE=\"false\"",
+		"--private-multi-project-dogfood-smoke)",
+		"PRIVATE_MULTI_PROJECT_DOGFOOD_SMOKE=\"true\"",
+		"if [[ \"$PRIVATE_MULTI_PROJECT_DOGFOOD_SMOKE\" == \"true\" ]]; then",
+		"set -- \"$@\" --private-multi-project-dogfood-smoke",
+		"truth-plane-only",
+		"no runtime/delivery",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	for _, forbidden := range []string{"PRIVATE_MULTI_PROJECT_DOGFOOD_ARGS=()", "${PRIVATE_MULTI_PROJECT_DOGFOOD_ARGS[@]}", "--sender-auth-key \"$"} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("expected %s not to contain %q", path, forbidden)
 		}

@@ -326,6 +326,7 @@ func TestRunHelpDocumentsPrivateCoordinationProfileWithoutConfig(t *testing.T) {
 				"private-coordination",
 				"truth-plane coordination rehearsal",
 				"-external-runtime-smoke",
+				"-private-multi-project-dogfood-smoke",
 				"sender, MCP startup, registration, and truth-plane",
 			} {
 				if !strings.Contains(help, want) {
@@ -348,7 +349,7 @@ func TestPrivateCoordinationProfileEnablesRuntimeOwnedRehearsals(t *testing.T) {
 	if opts.SenderBaseURL != "" {
 		t.Fatalf("expected private coordination profile to disable sender checks, got %q", opts.SenderBaseURL)
 	}
-	if !opts.MultiAgentCoordinationSmoke || !opts.CollaborationTemplateSmoke || !opts.ExternalRuntimeSmoke {
+	if !opts.MultiAgentCoordinationSmoke || !opts.CollaborationTemplateSmoke || !opts.ExternalRuntimeSmoke || !opts.PrivateMultiProjectDogfoodSmoke {
 		t.Fatalf("expected private coordination smokes enabled, got %+v", opts)
 	}
 	if opts.DeliverMain {
@@ -1240,6 +1241,214 @@ func TestCheckExternalRuntimeRehearsalCoversRuntimeOwnedReviewLoop(t *testing.T)
 	evidenceArgs := smokeCallArgsMap(t, client, 27)
 	if evidenceArgs["workflow_id"] != "workflow-1" || evidenceArgs["include_agents"] != true {
 		t.Fatalf("unexpected evidence args: %+v", evidenceArgs)
+	}
+}
+
+func TestCheckPrivateMultiProjectDogfoodCoversDependencyReviewAndEvidence(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: privateMultiProjectDogfoodSmokeResults(map[string]any{
+		"summary": map[string]any{
+			"workflow_count": float64(1),
+			"handoff_count":  float64(2),
+			"agent_count":    float64(3),
+			"workflows": []any{
+				map[string]any{"id": "workflow-1", "status": "completed"},
+			},
+		},
+	})}
+	report := Report{Status: reportStatusOK}
+
+	check := checkPrivateMultiProjectDogfood(context.Background(), client, &report, Options{Text: "private dogfood task"})
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected private multi-project dogfood check ok, got %+v", check)
+	}
+	if report.PrivateMultiProjectDogfoodResult == nil {
+		t.Fatalf("expected report private multi-project dogfood result")
+	}
+	result := report.PrivateMultiProjectDogfoodResult
+	if result.WorkflowID != "workflow-1" || result.UpstreamHandoffID != "upstream-1" || result.DownstreamHandoffID != "downstream-1" {
+		t.Fatalf("unexpected dogfood result ids: %+v", result)
+	}
+	if !result.DependencyGateVerified || !result.ReviewApproved || !result.EvidenceSummaryReady || result.WorkflowFinalStatus != "completed" {
+		t.Fatalf("unexpected dogfood result: %+v", result)
+	}
+	wantNames := []string{
+		"agent_register", "agent_register", "agent_register", "agent_list", "agent_list", "agent_list", "handoff_create", "handoff_create", "next_work", "blocked_work",
+		"handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress",
+		"next_work", "handoff_dispatch", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "handoff_progress", "workflow_status", "coordination_evidence_summary",
+	}
+	if len(client.calls) != len(wantNames) {
+		t.Fatalf("expected calls %+v, got %+v", wantNames, client.calls)
+	}
+	for i, want := range wantNames {
+		if client.calls[i].Params.Name != want {
+			t.Fatalf("call %d: expected %q, got %+v", i, want, client.calls[i])
+		}
+		assertSmokeArgsDoNotContainExecutionFields(t, smokeCallArgsMap(t, client, i), "private multi-project dogfood")
+	}
+	for _, tc := range []struct {
+		callIndex  int
+		projectRef string
+	}{
+		{callIndex: 0, projectRef: "project://dogfood/upstream"},
+		{callIndex: 1, projectRef: "project://dogfood/downstream"},
+		{callIndex: 2, projectRef: "project://dogfood/review"},
+	} {
+		assertSmokeProjectRefs(t, smokeCallArgsMap(t, client, tc.callIndex), tc.projectRef)
+	}
+	for _, tc := range []struct {
+		callIndex  int
+		agentID    string
+		projectRef string
+	}{
+		{callIndex: 3, agentID: "dogfood-upstream", projectRef: "project://dogfood/upstream"},
+		{callIndex: 4, agentID: "dogfood-downstream", projectRef: "project://dogfood/downstream"},
+		{callIndex: 5, agentID: "dogfood-reviewer", projectRef: "project://dogfood/review"},
+		{callIndex: 8, agentID: "dogfood-upstream", projectRef: "project://dogfood/upstream"},
+		{callIndex: 9, agentID: "dogfood-downstream", projectRef: "project://dogfood/downstream"},
+		{callIndex: 21, agentID: "dogfood-downstream", projectRef: "project://dogfood/downstream"},
+	} {
+		args := smokeCallArgsMap(t, client, tc.callIndex)
+		if args["agent_id"] != nil && args["agent_id"] != tc.agentID {
+			t.Fatalf("unexpected agent_id at call %d: %+v", tc.callIndex, args)
+		}
+		assertSmokeProjectRef(t, args, tc.projectRef)
+	}
+	upstreamCreateArgs := smokeCallArgsMap(t, client, 6)
+	if upstreamCreateArgs["needs_review"] != true || upstreamCreateArgs["payload_ref"] != "project://dogfood/upstream" {
+		t.Fatalf("unexpected upstream create args: %+v", upstreamCreateArgs)
+	}
+	reviewer, ok := upstreamCreateArgs["reviewer"].(map[string]any)
+	if !ok || reviewer["type"] != "agent" || reviewer["id"] != "dogfood-reviewer" {
+		t.Fatalf("expected dogfood reviewer actor, got %+v", upstreamCreateArgs["reviewer"])
+	}
+	downstreamCreateArgs := smokeCallArgsMap(t, client, 7)
+	if downstreamCreateArgs["workflow_id"] != "workflow-1" || downstreamCreateArgs["payload_ref"] != "project://dogfood/downstream" {
+		t.Fatalf("unexpected downstream create args: %+v", downstreamCreateArgs)
+	}
+	depends, ok := downstreamCreateArgs["depends_on_handoff_ids"].([]string)
+	if !ok || len(depends) != 1 || depends[0] != "upstream-1" {
+		t.Fatalf("unexpected downstream dependencies: %+v", downstreamCreateArgs["depends_on_handoff_ids"])
+	}
+	evidenceArgs := smokeCallArgsMap(t, client, 29)
+	if evidenceArgs["workflow_id"] != "workflow-1" || evidenceArgs["include_agents"] != true {
+		t.Fatalf("unexpected evidence args: %+v", evidenceArgs)
+	}
+}
+
+func TestCheckPrivateMultiProjectDogfoodReportsMissingDependencyGate(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "dogfood-upstream"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "dogfood-downstream"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "dogfood-reviewer"}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "dogfood-upstream"}}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "dogfood-downstream"}}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "dogfood-reviewer"}}}}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "upstream-1"},
+		}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "downstream-1"},
+		}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "upstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{"items": []any{}}),
+	}}
+	report := Report{Status: reportStatusOK}
+
+	check := checkPrivateMultiProjectDogfood(context.Background(), client, &report, Options{Text: "private dogfood task"})
+
+	if check.Status != checkStatusFailed {
+		t.Fatalf("expected missing dependency gate failure, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "dependency_incomplete") {
+		t.Fatalf("expected dependency_incomplete detail, got %+v", check)
+	}
+}
+
+func TestCheckPrivateMultiProjectDogfoodReportsMissingEvidence(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: privateMultiProjectDogfoodSmokeResults(map[string]any{
+		"summary": map[string]any{
+			"workflow_count": float64(1),
+			"handoff_count":  float64(2),
+			"agent_count":    float64(3),
+			"workflows":      []any{},
+		},
+	})}
+	report := Report{Status: reportStatusOK}
+
+	check := checkPrivateMultiProjectDogfood(context.Background(), client, &report, Options{Text: "private dogfood task"})
+
+	if check.Status != checkStatusFailed {
+		t.Fatalf("expected missing evidence failure, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "coordination_evidence_summary") {
+		t.Fatalf("expected evidence detail, got %+v", check)
+	}
+}
+
+func privateMultiProjectDogfoodSmokeResults(evidence map[string]any) []*mcp.CallToolResult {
+	return []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "dogfood-upstream"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "dogfood-downstream"}}}),
+		structuredSmokeResult(map[string]any{"agent": map[string]any{"actor": map[string]any{"id": "dogfood-reviewer"}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "dogfood-upstream"}}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "dogfood-downstream"}}}}),
+		structuredSmokeResult(map[string]any{"agents": []any{map[string]any{"actor": map[string]any{"id": "dogfood-reviewer"}}}}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "upstream-1"},
+		}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1"},
+			"handoff":  map[string]any{"id": "downstream-1"},
+		}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "upstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{
+				"handoff": map[string]any{"id": "downstream-1"},
+				"reasons": []any{map[string]any{"code": "dependency_incomplete", "dependency_handoff_id": "upstream-1"}},
+			},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-upstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "submitted"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "reviewed", "review_decision": "revision_required"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "submitted"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "reviewed", "review_decision": "approved"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{"items": []any{
+			map[string]any{"handoff": map[string]any{"id": "downstream-1"}},
+		}}),
+		structuredSmokeResult(map[string]any{
+			"attempt": map[string]any{"id": "attempt-downstream", "result_status": "requested"},
+			"events":  []any{map[string]any{"type": "transport_requested"}},
+		}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "received"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "claimed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "started"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "checkpointed"}}),
+		structuredSmokeResult(map[string]any{"handoff": map[string]any{"state": "completed"}}),
+		structuredSmokeResult(map[string]any{
+			"workflow": map[string]any{"id": "workflow-1", "status": "completed"},
+			"handoffs": []any{
+				map[string]any{"id": "upstream-1", "state": "completed"},
+				map[string]any{"id": "downstream-1", "state": "completed"},
+			},
+		}),
+		structuredSmokeResult(evidence),
 	}
 }
 

@@ -15,6 +15,7 @@ MULTI_PROJECT_HANDOFF_SMOKE="false"
 MULTI_AGENT_COORDINATION_SMOKE="false"
 COLLABORATION_TEMPLATE_SMOKE="false"
 EXTERNAL_RUNTIME_SMOKE="false"
+PRIVATE_MULTI_PROJECT_DOGFOOD_SMOKE="false"
 OPENCLAW_COMMAND_VALUE=""
 OPENCLAW_ARGS_VALUES=""
 OPENCLAW_TOOL_CALL_CHECKLIST="false"
@@ -64,6 +65,8 @@ usage() {
   printf '                             Run truth-plane-only upstream/downstream/reviewer collaboration template rehearsal; no runtime, worker, sender delivery, or Telegram\n'
   printf '  --external-runtime-smoke\n'
   printf '                             Run an external runtime-owned coordination loop through MCP without launching workers\n'
+  printf '  --private-multi-project-dogfood-smoke\n'
+  printf '                             Run truth-plane-only private multi-project dogfood smoke; no runtime/delivery\n'
   printf '  --openclaw-command COMMAND  Server-authorized OpenClaw dispatch command passed to clawside-mcp\n'
   printf '  --openclaw-arg ARG          Argument for the configured OpenClaw dispatch command; repeat for multiple args\n'
   printf '  --openclaw-tool-call-checklist\n'
@@ -176,6 +179,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --external-runtime-smoke)
       EXTERNAL_RUNTIME_SMOKE="true"
+      shift
+      ;;
+    --private-multi-project-dogfood-smoke)
+      PRIVATE_MULTI_PROJECT_DOGFOOD_SMOKE="true"
       shift
       ;;
     --openclaw-command)
@@ -377,6 +384,9 @@ run_smoke() {
   fi
   if [[ "$EXTERNAL_RUNTIME_SMOKE" == "true" ]]; then
     set -- "$@" --external-runtime-smoke
+  fi
+  if [[ "$PRIVATE_MULTI_PROJECT_DOGFOOD_SMOKE" == "true" ]]; then
+    set -- "$@" --private-multi-project-dogfood-smoke
   fi
   if [[ -n "$OPENCLAW_COMMAND_VALUE" ]]; then
     set -- "$@" --openclaw-command "$OPENCLAW_COMMAND_VALUE"
