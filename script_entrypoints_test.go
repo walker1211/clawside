@@ -688,6 +688,9 @@ func TestOpenClawExternalRuntimeEvidenceExtractScriptEntrypoint(t *testing.T) {
 	if !strings.Contains(content, "--events PATH") {
 		t.Fatalf("expected %s help to list --events", path)
 	}
+	if !strings.Contains(content, "read-only provenance") {
+		t.Fatalf("expected %s help to document read-only provenance", path)
+	}
 	if !strings.Contains(content, "--events)") || !strings.Contains(content, "EVENTS_PATH=\"$2\"") {
 		t.Fatalf("expected %s to parse --events PATH", path)
 	}
@@ -1547,7 +1550,7 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
 		wantTokens := []string{
-			"P36",
+			"P37",
 			"external runtime evidence dogfood",
 			"cmd/openclaw-external-runtime-evidence-extract/",
 			"scripts/extract_openclaw_external_runtime_evidence.sh",
@@ -1559,6 +1562,12 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 			"agent_register",
 			"blocked_work",
 			"coordination_evidence_summary",
+			"schema_version",
+			"p37.external-runtime-trajectory.v1",
+			"trajectory_provenance",
+			"openclaw_events_jsonl_export",
+			"read-only provenance",
+			"raw trajectory payloads",
 			"no_sender_delivery",
 			"no_runtime_launch_by_clawside",
 		}
@@ -1569,7 +1578,8 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 				"不启动 sandbox",
 				"不触发 sender delivery",
 				"不触发 Telegram delivery",
-				"不接受 arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/worker launch fields",
+				"不保存也不打印 raw trajectory payloads",
+				"不接受 arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields",
 			)
 		} else {
 			wantTokens = append(wantTokens,
@@ -1578,7 +1588,8 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 				"does not start sandboxes",
 				"does not trigger sender delivery",
 				"does not trigger Telegram delivery",
-				"does not accept arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/worker launch fields",
+				"does not store or print raw trajectory payloads",
+				"does not accept arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields",
 			)
 		}
 		for _, want := range wantTokens {

@@ -16,23 +16,39 @@ import (
 )
 
 const clawsideServerName = "clawside"
+const externalRuntimeEvidenceSchemaVersion = "p37.external-runtime-trajectory.v1"
 
 type externalRuntimeEvidenceOutput struct {
 	ExternalRuntimeEvidence externalRuntimeEvidence `json:"external_runtime_evidence"`
 }
 
 type externalRuntimeEvidence struct {
-	WorkflowID                string   `json:"workflow_id"`
-	UpstreamHandoffID         string   `json:"upstream_handoff_id"`
-	DownstreamHandoffID       string   `json:"downstream_handoff_id"`
-	Tools                     []string `json:"tools"`
-	DependencyGateVerified    bool     `json:"dependency_gate_verified"`
-	ReviewGateVerified        bool     `json:"review_gate_verified"`
-	DownstreamReady           bool     `json:"downstream_ready"`
-	WorkflowFinalStatus       string   `json:"workflow_final_status"`
-	EvidenceSummaryReady      bool     `json:"evidence_summary_ready"`
-	NoSenderDelivery          bool     `json:"no_sender_delivery"`
-	NoRuntimeLaunchByClawside bool     `json:"no_runtime_launch_by_clawside"`
+	SchemaVersion             string                              `json:"schema_version"`
+	WorkflowID                string                              `json:"workflow_id"`
+	UpstreamHandoffID         string                              `json:"upstream_handoff_id"`
+	DownstreamHandoffID       string                              `json:"downstream_handoff_id"`
+	Tools                     []string                            `json:"tools"`
+	DependencyGateVerified    bool                                `json:"dependency_gate_verified"`
+	ReviewGateVerified        bool                                `json:"review_gate_verified"`
+	DownstreamReady           bool                                `json:"downstream_ready"`
+	WorkflowFinalStatus       string                              `json:"workflow_final_status"`
+	EvidenceSummaryReady      bool                                `json:"evidence_summary_ready"`
+	NoSenderDelivery          bool                                `json:"no_sender_delivery"`
+	NoRuntimeLaunchByClawside bool                                `json:"no_runtime_launch_by_clawside"`
+	TrajectoryProvenance      externalRuntimeTrajectoryProvenance `json:"trajectory_provenance"`
+}
+
+type externalRuntimeTrajectoryProvenance struct {
+	SourceKind                           string   `json:"source_kind"`
+	ReadOnlyValidation                   bool     `json:"read_only_validation"`
+	ExternalRuntimeTrajectoryObserved    bool     `json:"external_runtime_trajectory_observed"`
+	TrajectoryEventCount                 int      `json:"trajectory_event_count"`
+	ClawsideToolResultCount              int      `json:"clawside_tool_result_count"`
+	NonClawsideEventCount                int      `json:"non_clawside_event_count"`
+	ObservedEventTypes                   []string `json:"observed_event_types"`
+	LifecycleOrderVerified               bool     `json:"lifecycle_order_verified"`
+	BoundedOutputSanitized               bool     `json:"bounded_output_sanitized"`
+	ForbiddenLaunchOrDeliveryToolsAbsent bool     `json:"forbidden_launch_or_delivery_tools_absent"`
 }
 
 type extractionState struct {
@@ -48,6 +64,21 @@ type extractionState struct {
 	downstreamCompleted        bool
 	workflowFinalStatus        string
 	evidenceSummaryReady       bool
+
+	trajectoryEventCount    int
+	clawsideToolResultCount int
+	nonClawsideEventCount   int
+	observedEventTypes      map[string]struct{}
+
+	upstreamCreatedAt     int
+	downstreamCreatedAt   int
+	dependencyGateAt      int
+	reviewApprovedAt      int
+	upstreamCompletedAt   int
+	downstreamReadyAt     int
+	downstreamCompletedAt int
+	workflowCompletedAt   int
+	evidenceSummaryAt     int
 }
 
 var requiredExternalRuntimeEvidenceTools = []string{
@@ -120,7 +151,7 @@ func helpRequested(args []string) bool {
 func writeUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage: openclaw-external-runtime-evidence-extract --events PATH [--output PATH]")
 	_, _ = fmt.Fprintln(w)
-	_, _ = fmt.Fprintln(w, "Extract bounded, sanitized external runtime evidence from OpenClaw trajectory events.")
+	_, _ = fmt.Fprintln(w, "Extract bounded, sanitized external runtime evidence with read-only provenance from OpenClaw trajectory events.")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "Options:")
 	_, _ = fmt.Fprintln(w, "  --events PATH   OpenClaw trajectory events JSONL path")
@@ -134,13 +165,22 @@ func extractExternalRuntimeEvidence(eventsPath string) (externalRuntimeEvidenceO
 	}
 	defer file.Close()
 
-	state := extractionState{toolsSeen: map[string]struct{}{}}
+	state := extractionState{toolsSeen: map[string]struct{}{}, observedEventTypes: map[string]struct{}{}}
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	lineIndex := 0
 	for scanner.Scan() {
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
 			continue
+		}
+		lineIndex++
+		metadata, ok, err := openclawtrajectory.ExtractEventMetadata(line, clawsideServerName)
+		if err != nil {
+			return externalRuntimeEvidenceOutput{}, fmt.Errorf("parse OpenClaw trajectory events: %w", err)
+		}
+		if ok {
+			state.observeMetadata(metadata)
 		}
 		result, ok, err := openclawtrajectory.ExtractToolResult(line, clawsideServerName)
 		if err != nil {
@@ -149,7 +189,7 @@ func extractExternalRuntimeEvidence(eventsPath string) (externalRuntimeEvidenceO
 		if !ok {
 			continue
 		}
-		state.observe(result.Tool, result.StructuredContent)
+		state.observe(lineIndex, result.Tool, result.StructuredContent)
 	}
 	if err := scanner.Err(); err != nil {
 		return externalRuntimeEvidenceOutput{}, fmt.Errorf("scan events: %w", err)
@@ -162,28 +202,40 @@ func extractExternalRuntimeEvidence(eventsPath string) (externalRuntimeEvidenceO
 	return externalRuntimeEvidenceOutput{ExternalRuntimeEvidence: output}, nil
 }
 
-func (state *extractionState) observe(tool string, content map[string]any) {
+func (state *extractionState) observeMetadata(metadata openclawtrajectory.EventMetadata) {
+	state.trajectoryEventCount++
+	if metadata.Type != "" {
+		state.observedEventTypes[metadata.Type] = struct{}{}
+	}
+	if metadata.ToolResult && metadata.Server == clawsideServerName {
+		state.clawsideToolResultCount++
+		return
+	}
+	state.nonClawsideEventCount++
+}
+
+func (state *extractionState) observe(lineIndex int, tool string, content map[string]any) {
 	if tool == "" || content == nil {
 		return
 	}
 	state.toolsSeen[tool] = struct{}{}
 	switch tool {
 	case "handoff_create":
-		state.observeHandoffCreate(content)
+		state.observeHandoffCreate(lineIndex, content)
 	case "blocked_work":
-		state.observeBlockedWork(content)
+		state.observeBlockedWork(lineIndex, content)
 	case "handoff_progress":
-		state.observeHandoffProgress(content)
+		state.observeHandoffProgress(lineIndex, content)
 	case "next_work":
-		state.observeNextWork(content)
+		state.observeNextWork(lineIndex, content)
 	case "workflow_status":
-		state.observeWorkflowStatus(content)
+		state.observeWorkflowStatus(lineIndex, content)
 	case "coordination_evidence_summary":
-		state.observeEvidenceSummary(content)
+		state.observeEvidenceSummary(lineIndex, content)
 	}
 }
 
-func (state *extractionState) observeHandoffCreate(content map[string]any) {
+func (state *extractionState) observeHandoffCreate(lineIndex int, content map[string]any) {
 	workflowID := nestedString(content, "workflow", "id")
 	handoff, _ := content["handoff"].(map[string]any)
 	handoffID := stringValue(handoff, "id")
@@ -201,14 +253,20 @@ func (state *extractionState) observeHandoffCreate(content map[string]any) {
 	}
 	if boolValue(handoff, "needs_review") {
 		state.upstreamHandoffID = handoffID
+		if state.upstreamCreatedAt == 0 {
+			state.upstreamCreatedAt = lineIndex
+		}
 		return
 	}
 	if dependsOnUpstream {
 		state.downstreamHandoffID = handoffID
+		if state.downstreamCreatedAt == 0 {
+			state.downstreamCreatedAt = lineIndex
+		}
 	}
 }
 
-func (state *extractionState) observeBlockedWork(content map[string]any) {
+func (state *extractionState) observeBlockedWork(lineIndex int, content map[string]any) {
 	if state.upstreamHandoffID == "" || state.downstreamHandoffID == "" {
 		return
 	}
@@ -221,30 +279,42 @@ func (state *extractionState) observeBlockedWork(content map[string]any) {
 			reason, _ := rawReason.(map[string]any)
 			if stringValue(reason, "code") == "dependency_incomplete" && stringValue(reason, "dependency_handoff_id") == state.upstreamHandoffID {
 				state.dependencyGateVerified = true
+				if state.dependencyGateAt == 0 {
+					state.dependencyGateAt = lineIndex
+				}
 			}
 		}
 	}
 }
 
-func (state *extractionState) observeHandoffProgress(content map[string]any) {
+func (state *extractionState) observeHandoffProgress(lineIndex int, content map[string]any) {
 	handoff, _ := content["handoff"].(map[string]any)
 	handoffID := stringValue(handoff, "id")
 	switch handoffID {
 	case state.upstreamHandoffID:
 		if stringValue(handoff, "state") == "reviewed" && stringValue(handoff, "review_decision") == "approved" {
 			state.reviewGateVerified = true
+			if state.reviewApprovedAt == 0 {
+				state.reviewApprovedAt = lineIndex
+			}
 		}
 		if stringValue(handoff, "state") == "completed" {
 			state.upstreamCompleted = true
+			if state.upstreamCompletedAt == 0 {
+				state.upstreamCompletedAt = lineIndex
+			}
 		}
 	case state.downstreamHandoffID:
 		if stringValue(handoff, "state") == "completed" {
 			state.downstreamCompleted = true
+			if state.downstreamCompletedAt == 0 {
+				state.downstreamCompletedAt = lineIndex
+			}
 		}
 	}
 }
 
-func (state *extractionState) observeNextWork(content map[string]any) {
+func (state *extractionState) observeNextWork(lineIndex int, content map[string]any) {
 	if state.downstreamHandoffID == "" || !state.upstreamCompleted {
 		return
 	}
@@ -252,11 +322,14 @@ func (state *extractionState) observeNextWork(content map[string]any) {
 		itemMap, _ := item.(map[string]any)
 		if nestedString(itemMap, "handoff", "id") == state.downstreamHandoffID {
 			state.downstreamReady = true
+			if state.downstreamReadyAt == 0 {
+				state.downstreamReadyAt = lineIndex
+			}
 		}
 	}
 }
 
-func (state *extractionState) observeWorkflowStatus(content map[string]any) {
+func (state *extractionState) observeWorkflowStatus(lineIndex int, content map[string]any) {
 	if nestedString(content, "workflow", "id") != state.workflowID {
 		return
 	}
@@ -267,23 +340,67 @@ func (state *extractionState) observeWorkflowStatus(content map[string]any) {
 		case state.upstreamHandoffID:
 			if stringValue(handoff, "state") == "completed" {
 				state.upstreamCompleted = true
+				if state.upstreamCompletedAt == 0 {
+					state.upstreamCompletedAt = lineIndex
+				}
 			}
 		case state.downstreamHandoffID:
 			if stringValue(handoff, "state") == "completed" {
 				state.downstreamCompleted = true
+				if state.downstreamCompletedAt == 0 {
+					state.downstreamCompletedAt = lineIndex
+				}
 			}
 		}
 	}
+	if state.workflowFinalStatus == "completed" && state.upstreamCompleted && state.downstreamCompleted && state.workflowCompletedAt == 0 {
+		state.workflowCompletedAt = lineIndex
+	}
 }
 
-func (state *extractionState) observeEvidenceSummary(content map[string]any) {
+func (state *extractionState) observeEvidenceSummary(lineIndex int, content map[string]any) {
 	summary, _ := content["summary"].(map[string]any)
 	for _, rawWorkflow := range arrayValue(summary, "workflows") {
 		workflow, _ := rawWorkflow.(map[string]any)
 		if stringValue(workflow, "id") == state.workflowID {
 			state.evidenceSummaryReady = true
+			if state.evidenceSummaryAt == 0 {
+				state.evidenceSummaryAt = lineIndex
+			}
 		}
 	}
+}
+
+func (state extractionState) lifecycleOrderVerified() bool {
+	indexes := []int{
+		state.upstreamCreatedAt,
+		state.downstreamCreatedAt,
+		state.dependencyGateAt,
+		state.reviewApprovedAt,
+		state.upstreamCompletedAt,
+		state.downstreamReadyAt,
+		state.downstreamCompletedAt,
+		state.workflowCompletedAt,
+		state.evidenceSummaryAt,
+	}
+	for index, value := range indexes {
+		if value == 0 {
+			return false
+		}
+		if index > 0 && value < indexes[index-1] {
+			return false
+		}
+	}
+	return true
+}
+
+func (state extractionState) sortedObservedEventTypes() []string {
+	types := make([]string, 0, len(state.observedEventTypes))
+	for eventType := range state.observedEventTypes {
+		types = append(types, eventType)
+	}
+	slices.Sort(types)
+	return types
 }
 
 func (state extractionState) output() (externalRuntimeEvidence, error) {
@@ -291,6 +408,9 @@ func (state extractionState) output() (externalRuntimeEvidence, error) {
 		if _, ok := state.toolsSeen[required]; !ok {
 			return externalRuntimeEvidence{}, errors.New("missing tool " + required + " in OpenClaw trajectory events")
 		}
+	}
+	if state.nonClawsideEventCount == 0 {
+		return externalRuntimeEvidence{}, errors.New("OpenClaw trajectory events did not include non-Clawside runtime events")
 	}
 	if state.downstreamWorkflowMismatch {
 		return externalRuntimeEvidence{}, errors.New("downstream handoff_create workflow id does not match upstream")
@@ -313,8 +433,12 @@ func (state extractionState) output() (externalRuntimeEvidence, error) {
 	if !state.evidenceSummaryReady {
 		return externalRuntimeEvidence{}, errors.New("coordination_evidence_summary did not verify workflow evidence")
 	}
+	if !state.lifecycleOrderVerified() {
+		return externalRuntimeEvidence{}, errors.New("OpenClaw trajectory events did not verify lifecycle order")
+	}
 	tools := append([]string(nil), requiredExternalRuntimeEvidenceTools...)
 	return externalRuntimeEvidence{
+		SchemaVersion:             externalRuntimeEvidenceSchemaVersion,
 		WorkflowID:                state.workflowID,
 		UpstreamHandoffID:         state.upstreamHandoffID,
 		DownstreamHandoffID:       state.downstreamHandoffID,
@@ -326,6 +450,18 @@ func (state extractionState) output() (externalRuntimeEvidence, error) {
 		EvidenceSummaryReady:      true,
 		NoSenderDelivery:          true,
 		NoRuntimeLaunchByClawside: true,
+		TrajectoryProvenance: externalRuntimeTrajectoryProvenance{
+			SourceKind:                           "openclaw_events_jsonl_export",
+			ReadOnlyValidation:                   true,
+			ExternalRuntimeTrajectoryObserved:    true,
+			TrajectoryEventCount:                 state.trajectoryEventCount,
+			ClawsideToolResultCount:              state.clawsideToolResultCount,
+			NonClawsideEventCount:                state.nonClawsideEventCount,
+			ObservedEventTypes:                   state.sortedObservedEventTypes(),
+			LifecycleOrderVerified:               true,
+			BoundedOutputSanitized:               true,
+			ForbiddenLaunchOrDeliveryToolsAbsent: true,
+		},
 	}, nil
 }
 

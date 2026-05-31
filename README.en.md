@@ -141,16 +141,16 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
 
 Safety boundaries: the sample does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender or Telegram delivery, and does not accept arbitrary command/args/cwd/local path/private prompt/token/session/worker launch fields.
 
-#### P36 external runtime evidence dogfood
+#### P37 external runtime evidence dogfood
 
-Use this path when the external runtime has run outside Clawside and exported OpenClaw trajectory `events.jsonl`. `cmd/openclaw-external-runtime-evidence-extract/` reads only Clawside MCP tool results from that trajectory and writes bounded evidence; it does not replay payloads or launch anything.
+Use this path when the external runtime has run outside Clawside and exported an OpenClaw trajectory `events.jsonl`. `cmd/openclaw-external-runtime-evidence-extract/` reads bounded envelope metadata plus Clawside MCP tool results from that trajectory, writes P37 evidence with `schema_version=p37.external-runtime-trajectory.v1` and `trajectory_provenance.source_kind=openclaw_events_jsonl_export`, and requires at least one non-Clawside trajectory event; it does not store or print raw trajectory payloads, replay payloads, or launch anything.
 
 Recommended sequence:
 
 1. Run the external runtime outside Clawside. The runtime owns workers, sessions, sandboxes, scheduling, model execution, and task execution.
 2. From that runtime, register/use Clawside MCP tools such as `agent_register`, `handoff_create`, `next_work`, `blocked_work`, `handoff_progress`, `workflow_status`, and `coordination_evidence_summary`.
 3. Export the OpenClaw trajectory events as `events.jsonl`.
-4. Extract the bounded evidence JSON:
+4. Extract the bounded evidence JSON with read-only provenance:
 
 ```bash
 ./scripts/extract_openclaw_external_runtime_evidence.sh --events <events-jsonl> --output ./external-runtime-evidence.json
@@ -167,7 +167,7 @@ Recommended sequence:
   --json
 ```
 
-The evidence contract records only IDs, the required tool set, `no_sender_delivery=true`, and `no_runtime_launch_by_clawside=true`; it also requires dependency, reviewer, downstream-ready, completed-workflow, and `coordination_evidence_summary` gates. This flow does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender delivery, does not trigger Telegram delivery, and does not accept arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/worker launch fields.
+The evidence contract records only IDs, the required tool set, `schema_version`, `trajectory_provenance`, `no_sender_delivery=true`, and `no_runtime_launch_by_clawside=true`; it also requires dependency, reviewer, downstream-ready, completed-workflow, `coordination_evidence_summary`, `non_clawside_event_count > 0`, and `lifecycle_order_verified=true` gates. This flow does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender delivery, does not trigger Telegram delivery, does not store or print raw trajectory payloads, and does not accept arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields.
 
 Before making any public-readiness or release claim, keep verification read-only:
 

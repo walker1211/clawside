@@ -9,19 +9,35 @@ import (
 )
 
 const openClawExternalRuntimeEvidenceCheckName = "openclaw_external_runtime_evidence"
+const openClawExternalRuntimeEvidenceSchemaVersion = "p37.external-runtime-trajectory.v1"
 
 type OpenClawExternalRuntimeEvidenceResult struct {
-	WorkflowID                string   `json:"workflow_id"`
-	UpstreamHandoffID         string   `json:"upstream_handoff_id"`
-	DownstreamHandoffID       string   `json:"downstream_handoff_id"`
-	Tools                     []string `json:"tools"`
-	DependencyGateVerified    bool     `json:"dependency_gate_verified"`
-	ReviewGateVerified        bool     `json:"review_gate_verified"`
-	DownstreamReady           bool     `json:"downstream_ready"`
-	WorkflowFinalStatus       string   `json:"workflow_final_status"`
-	EvidenceSummaryReady      bool     `json:"evidence_summary_ready"`
-	NoSenderDelivery          bool     `json:"no_sender_delivery"`
-	NoRuntimeLaunchByClawside bool     `json:"no_runtime_launch_by_clawside"`
+	SchemaVersion             string                                      `json:"schema_version"`
+	WorkflowID                string                                      `json:"workflow_id"`
+	UpstreamHandoffID         string                                      `json:"upstream_handoff_id"`
+	DownstreamHandoffID       string                                      `json:"downstream_handoff_id"`
+	Tools                     []string                                    `json:"tools"`
+	DependencyGateVerified    bool                                        `json:"dependency_gate_verified"`
+	ReviewGateVerified        bool                                        `json:"review_gate_verified"`
+	DownstreamReady           bool                                        `json:"downstream_ready"`
+	WorkflowFinalStatus       string                                      `json:"workflow_final_status"`
+	EvidenceSummaryReady      bool                                        `json:"evidence_summary_ready"`
+	NoSenderDelivery          bool                                        `json:"no_sender_delivery"`
+	NoRuntimeLaunchByClawside bool                                        `json:"no_runtime_launch_by_clawside"`
+	TrajectoryProvenance      OpenClawExternalRuntimeTrajectoryProvenance `json:"trajectory_provenance"`
+}
+
+type OpenClawExternalRuntimeTrajectoryProvenance struct {
+	SourceKind                           string   `json:"source_kind"`
+	ReadOnlyValidation                   bool     `json:"read_only_validation"`
+	ExternalRuntimeTrajectoryObserved    bool     `json:"external_runtime_trajectory_observed"`
+	TrajectoryEventCount                 int      `json:"trajectory_event_count"`
+	ClawsideToolResultCount              int      `json:"clawside_tool_result_count"`
+	NonClawsideEventCount                int      `json:"non_clawside_event_count"`
+	ObservedEventTypes                   []string `json:"observed_event_types"`
+	LifecycleOrderVerified               bool     `json:"lifecycle_order_verified"`
+	BoundedOutputSanitized               bool     `json:"bounded_output_sanitized"`
+	ForbiddenLaunchOrDeliveryToolsAbsent bool     `json:"forbidden_launch_or_delivery_tools_absent"`
 }
 
 var requiredOpenClawExternalRuntimeEvidenceTools = []string{
@@ -129,6 +145,7 @@ func validateOpenClawExternalRuntimeEvidenceResult(value any) (OpenClawExternalR
 	}
 
 	result := OpenClawExternalRuntimeEvidenceResult{
+		SchemaVersion:             nestedString(evidence, "schema_version"),
 		WorkflowID:                nestedString(evidence, "workflow_id"),
 		UpstreamHandoffID:         nestedString(evidence, "upstream_handoff_id"),
 		DownstreamHandoffID:       nestedString(evidence, "downstream_handoff_id"),
@@ -140,6 +157,14 @@ func validateOpenClawExternalRuntimeEvidenceResult(value any) (OpenClawExternalR
 		NoSenderDelivery:          externalRuntimeEvidenceBool(evidence, "no_sender_delivery"),
 		NoRuntimeLaunchByClawside: externalRuntimeEvidenceBool(evidence, "no_runtime_launch_by_clawside"),
 	}
+	if result.SchemaVersion != openClawExternalRuntimeEvidenceSchemaVersion {
+		return OpenClawExternalRuntimeEvidenceResult{}, "external runtime evidence schema_version must be " + openClawExternalRuntimeEvidenceSchemaVersion, false
+	}
+	provenance, detail, ok := externalRuntimeEvidenceProvenance(evidence)
+	if !ok {
+		return OpenClawExternalRuntimeEvidenceResult{}, detail, false
+	}
+	result.TrajectoryProvenance = provenance
 	if result.WorkflowID == "" {
 		return OpenClawExternalRuntimeEvidenceResult{}, "external runtime evidence workflow_id must be non-empty", false
 	}
@@ -213,6 +238,96 @@ func externalRuntimeEvidenceTools(evidence map[string]any) ([]string, string, bo
 		tools = append(tools, strings.TrimSpace(tool))
 	}
 	return tools, "", true
+}
+
+func externalRuntimeEvidenceProvenance(evidence map[string]any) (OpenClawExternalRuntimeTrajectoryProvenance, string, bool) {
+	raw, ok := structuredValue(evidence, "trajectory_provenance")
+	if !ok {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence trajectory_provenance must be an object", false
+	}
+	provenance, ok := raw.(map[string]any)
+	if !ok {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence trajectory_provenance must be an object", false
+	}
+	result := OpenClawExternalRuntimeTrajectoryProvenance{
+		SourceKind:                           nestedString(provenance, "source_kind"),
+		ReadOnlyValidation:                   externalRuntimeEvidenceBool(provenance, "read_only_validation"),
+		ExternalRuntimeTrajectoryObserved:    externalRuntimeEvidenceBool(provenance, "external_runtime_trajectory_observed"),
+		TrajectoryEventCount:                 externalRuntimeEvidenceInt(provenance, "trajectory_event_count"),
+		ClawsideToolResultCount:              externalRuntimeEvidenceInt(provenance, "clawside_tool_result_count"),
+		NonClawsideEventCount:                externalRuntimeEvidenceInt(provenance, "non_clawside_event_count"),
+		LifecycleOrderVerified:               externalRuntimeEvidenceBool(provenance, "lifecycle_order_verified"),
+		BoundedOutputSanitized:               externalRuntimeEvidenceBool(provenance, "bounded_output_sanitized"),
+		ForbiddenLaunchOrDeliveryToolsAbsent: externalRuntimeEvidenceBool(provenance, "forbidden_launch_or_delivery_tools_absent"),
+	}
+	if result.SourceKind != "openclaw_events_jsonl_export" {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence source_kind must be openclaw_events_jsonl_export", false
+	}
+	if !result.ReadOnlyValidation {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence read_only_validation must be true", false
+	}
+	if !result.ExternalRuntimeTrajectoryObserved {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence external_runtime_trajectory_observed must be true", false
+	}
+	if result.TrajectoryEventCount <= 0 {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence trajectory_event_count must be positive", false
+	}
+	if result.ClawsideToolResultCount < len(requiredOpenClawExternalRuntimeEvidenceTools) {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence clawside_tool_result_count must cover required tools", false
+	}
+	if result.NonClawsideEventCount <= 0 {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence non_clawside_event_count must be positive", false
+	}
+	observedEventTypes, detail, ok := externalRuntimeEvidenceObservedEventTypes(provenance)
+	if !ok {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, detail, false
+	}
+	result.ObservedEventTypes = observedEventTypes
+	if !result.LifecycleOrderVerified {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence lifecycle_order_verified must be true", false
+	}
+	if !result.BoundedOutputSanitized {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence bounded_output_sanitized must be true", false
+	}
+	if !result.ForbiddenLaunchOrDeliveryToolsAbsent {
+		return OpenClawExternalRuntimeTrajectoryProvenance{}, "external runtime evidence forbidden_launch_or_delivery_tools_absent must be true", false
+	}
+	return result, "", true
+}
+
+func externalRuntimeEvidenceObservedEventTypes(provenance map[string]any) ([]string, string, bool) {
+	raw, ok := structuredValue(provenance, "observed_event_types")
+	if !ok {
+		return nil, "external runtime evidence observed_event_types must be a non-empty array", false
+	}
+	values, ok := raw.([]any)
+	if !ok || len(values) == 0 {
+		return nil, "external runtime evidence observed_event_types must be a non-empty array", false
+	}
+	eventTypes := make([]string, 0, len(values))
+	for _, rawValue := range values {
+		value, ok := rawValue.(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return nil, "external runtime evidence observed_event_types must contain non-empty strings", false
+		}
+		eventTypes = append(eventTypes, strings.TrimSpace(value))
+	}
+	return eventTypes, "", true
+}
+
+func externalRuntimeEvidenceInt(evidence map[string]any, key string) int {
+	raw, ok := structuredValue(evidence, key)
+	if !ok {
+		return 0
+	}
+	switch value := raw.(type) {
+	case float64:
+		return int(value)
+	case int:
+		return value
+	default:
+		return 0
+	}
 }
 
 func externalRuntimeEvidenceBool(evidence map[string]any, key string) bool {

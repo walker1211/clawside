@@ -8,7 +8,7 @@ OUTPUT_PATH=""
 usage() {
   printf 'usage: %s --events PATH [--output PATH]\n' "$0"
   printf '\n'
-  printf 'Extract bounded external runtime evidence from OpenClaw trajectory events.jsonl.\n'
+  printf 'Extract bounded external runtime evidence with read-only provenance from OpenClaw trajectory events.jsonl.\n'
   printf '\n'
   printf 'Options:\n'
   printf '  --events PATH   OpenClaw trajectory events.jsonl path\n'

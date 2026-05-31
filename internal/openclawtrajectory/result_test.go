@@ -82,3 +82,51 @@ func TestExtractToolResultIgnoresOtherServersAndErroredResults(t *testing.T) {
 		t.Fatalf("errored result ok=%v err=%v, want ignored", ok, err)
 	}
 }
+
+func TestExtractEventMetadataReturnsNonToolEnvelopeWithoutRawPayload(t *testing.T) {
+	line := []byte(`{"type":"assistant.message","data":{"message":{"content":"private prompt token stdout stderr /Users/example/private"}}}`)
+
+	metadata, ok, err := ExtractEventMetadata(line, "clawside")
+	if err != nil {
+		t.Fatalf("ExtractEventMetadata: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected event metadata")
+	}
+	if metadata.Type != "assistant.message" {
+		t.Fatalf("type = %q, want assistant.message", metadata.Type)
+	}
+	if metadata.ToolResult || metadata.Server != "" || metadata.Tool != "" {
+		t.Fatalf("metadata exposed unexpected tool fields: %+v", metadata)
+	}
+}
+
+func TestExtractEventMetadataReturnsToolResultServerAndTool(t *testing.T) {
+	line := []byte(`{"type":"tool.result","data":{"message":{"toolName":"mcp__clawside__workflow_status","isError":false,"details":{"mcpServer":"clawside","mcpTool":"workflow_status","structuredContent":{"workflow":{"id":"wf-123"},"private_prompt":"do not expose"}}}}}`)
+
+	metadata, ok, err := ExtractEventMetadata(line, "clawside")
+	if err != nil {
+		t.Fatalf("ExtractEventMetadata: %v", err)
+	}
+	if !ok {
+		t.Fatalf("expected event metadata")
+	}
+	if metadata.Type != "tool.result" || !metadata.ToolResult || metadata.Server != "clawside" || metadata.Tool != "workflow_status" {
+		t.Fatalf("unexpected metadata: %+v", metadata)
+	}
+}
+
+func TestExtractEventMetadataInvalidJSONDoesNotLeakInput(t *testing.T) {
+	line := []byte(`{"type":"tool.result","private_prompt":"SECRET_VALUE"`)
+
+	_, _, err := ExtractEventMetadata(line, "clawside")
+	if err == nil {
+		t.Fatalf("expected invalid JSON error")
+	}
+	if err != ErrInvalidJSON {
+		t.Fatalf("expected ErrInvalidJSON, got %v", err)
+	}
+	if err.Error() == string(line) {
+		t.Fatalf("error leaked input: %v", err)
+	}
+}

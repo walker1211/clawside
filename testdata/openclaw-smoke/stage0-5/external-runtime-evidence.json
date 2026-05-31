@@ -1,5 +1,6 @@
 {
   "external_runtime_evidence": {
+    "schema_version": "p37.external-runtime-trajectory.v1",
     "workflow_id": "wf-123",
     "upstream_handoff_id": "hf-upstream",
     "downstream_handoff_id": "hf-downstream",
@@ -18,6 +19,21 @@
     "workflow_final_status": "completed",
     "evidence_summary_ready": true,
     "no_sender_delivery": true,
-    "no_runtime_launch_by_clawside": true
+    "no_runtime_launch_by_clawside": true,
+    "trajectory_provenance": {
+      "source_kind": "openclaw_events_jsonl_export",
+      "read_only_validation": true,
+      "external_runtime_trajectory_observed": true,
+      "trajectory_event_count": 16,
+      "clawside_tool_result_count": 15,
+      "non_clawside_event_count": 1,
+      "observed_event_types": [
+        "assistant.message",
+        "tool.result"
+      ],
+      "lifecycle_order_verified": true,
+      "bounded_output_sanitized": true,
+      "forbidden_launch_or_delivery_tools_absent": true
+    }
   }
 }

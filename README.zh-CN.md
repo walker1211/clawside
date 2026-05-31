@@ -141,16 +141,16 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
 
 安全边界：the sample does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender or Telegram delivery, and does not accept arbitrary command/args/cwd/local path/private prompt/token/session/worker launch fields.
 
-#### P36 external runtime evidence dogfood
+#### P37 external runtime evidence dogfood
 
-当外部 runtime 已在 Clawside 之外运行，并导出 OpenClaw trajectory `events.jsonl` 时，使用这条路径复验真实接入 evidence。`cmd/openclaw-external-runtime-evidence-extract/` 只读取 trajectory 中的 Clawside MCP tool results，并输出有界 evidence；它不 replay payload，也不启动任何 runtime。
+当外部 runtime 已在 Clawside 之外运行，并导出 OpenClaw trajectory `events.jsonl` 时，使用这条路径复验真实接入 evidence。`cmd/openclaw-external-runtime-evidence-extract/` 会从该 trajectory 读取 bounded envelope metadata 和 Clawside MCP tool results，输出带 `schema_version=p37.external-runtime-trajectory.v1` 与 `trajectory_provenance.source_kind=openclaw_events_jsonl_export` 的 P37 evidence，并要求至少一个 non-Clawside trajectory event；它不保存也不打印 raw trajectory payloads，不 replay payload，也不启动任何 runtime。
 
 推荐顺序：
 
 1. 在 Clawside 之外运行 external runtime。runtime 负责 workers、sessions、sandboxes、调度、model execution 和实际任务执行。
 2. 在该 runtime 中注册并使用 Clawside MCP tools，例如 `agent_register`、`handoff_create`、`next_work`、`blocked_work`、`handoff_progress`、`workflow_status` 和 `coordination_evidence_summary`。
 3. 从 OpenClaw 导出 trajectory events 为 `events.jsonl`。
-4. 提取有界 evidence JSON：
+4. 提取带 read-only provenance 的有界 evidence JSON：
 
 ```bash
 ./scripts/extract_openclaw_external_runtime_evidence.sh --events <events-jsonl> --output ./external-runtime-evidence.json
@@ -167,7 +167,7 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
   --json
 ```
 
-该 evidence contract 只记录 IDs、required tool set、`no_sender_delivery=true` 和 `no_runtime_launch_by_clawside=true`；同时要求 dependency、reviewer、downstream-ready、completed-workflow 和 `coordination_evidence_summary` gates。此流程不启动 model worker，不启动 runtime session，不启动 sandbox，不触发 sender delivery，不触发 Telegram delivery，也不接受 arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/worker launch fields。
+该 evidence contract 只记录 IDs、required tool set、`schema_version`、`trajectory_provenance`、`no_sender_delivery=true` 和 `no_runtime_launch_by_clawside=true`；同时要求 dependency、reviewer、downstream-ready、completed-workflow、`coordination_evidence_summary`、`non_clawside_event_count > 0` 和 `lifecycle_order_verified=true` gates。此流程不启动 model worker，不启动 runtime session，不启动 sandbox，不触发 sender delivery，不触发 Telegram delivery，不保存也不打印 raw trajectory payloads，也不接受 arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields。
 
 在宣称 public-readiness 或 release 前，只运行只读检查：
 

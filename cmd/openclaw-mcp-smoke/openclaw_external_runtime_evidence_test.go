@@ -41,6 +41,70 @@ func TestCheckOpenClawExternalRuntimeEvidenceValidatesRuntimeEvidence(t *testing
 	}
 }
 
+func TestValidateOpenClawExternalRuntimeEvidenceRequiresSchemaAndProvenance(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(map[string]any)
+		want   string
+	}{
+		{
+			name: "missing schema version",
+			mutate: func(evidence map[string]any) {
+				delete(evidence, "schema_version")
+			},
+			want: "external runtime evidence schema_version must be p37.external-runtime-trajectory.v1",
+		},
+		{
+			name: "missing provenance",
+			mutate: func(evidence map[string]any) {
+				delete(evidence, "trajectory_provenance")
+			},
+			want: "external runtime evidence trajectory_provenance must be an object",
+		},
+		{
+			name: "zero non clawside events",
+			mutate: func(evidence map[string]any) {
+				provenance := evidence["trajectory_provenance"].(map[string]any)
+				provenance["non_clawside_event_count"] = float64(0)
+			},
+			want: "external runtime evidence non_clawside_event_count must be positive",
+		},
+		{
+			name: "empty observed event types",
+			mutate: func(evidence map[string]any) {
+				provenance := evidence["trajectory_provenance"].(map[string]any)
+				provenance["observed_event_types"] = []any{}
+			},
+			want: "external runtime evidence observed_event_types must be a non-empty array",
+		},
+		{
+			name: "lifecycle order false",
+			mutate: func(evidence map[string]any) {
+				provenance := evidence["trajectory_provenance"].(map[string]any)
+				provenance["lifecycle_order_verified"] = false
+			},
+			want: "external runtime evidence lifecycle_order_verified must be true",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value := validOpenClawExternalRuntimeEvidenceValueForTest()
+			evidence := value["external_runtime_evidence"].(map[string]any)
+			tt.mutate(evidence)
+
+			detail, ok := validateOpenClawExternalRuntimeEvidence(value)
+
+			if ok {
+				t.Fatalf("expected validation failure")
+			}
+			if detail != tt.want {
+				t.Fatalf("expected detail %q, got %q", tt.want, detail)
+			}
+		})
+	}
+}
+
 func TestValidateOpenClawExternalRuntimeEvidenceRequiresWorkflowAndHandoffs(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -252,8 +316,11 @@ func TestRunSmokeExternalRuntimeEvidenceProfileIsReadOnly(t *testing.T) {
 	if report.ExternalRuntimeEvidence == nil {
 		t.Fatalf("expected external runtime evidence result")
 	}
-	if report.ExternalRuntimeEvidence.WorkflowID != "wf-123" || !report.ExternalRuntimeEvidence.NoSenderDelivery || !report.ExternalRuntimeEvidence.NoRuntimeLaunchByClawside {
+	if report.ExternalRuntimeEvidence.SchemaVersion != "p37.external-runtime-trajectory.v1" || report.ExternalRuntimeEvidence.WorkflowID != "wf-123" || !report.ExternalRuntimeEvidence.NoSenderDelivery || !report.ExternalRuntimeEvidence.NoRuntimeLaunchByClawside {
 		t.Fatalf("unexpected external runtime evidence result: %+v", report.ExternalRuntimeEvidence)
+	}
+	if !report.ExternalRuntimeEvidence.TrajectoryProvenance.ExternalRuntimeTrajectoryObserved || report.ExternalRuntimeEvidence.TrajectoryProvenance.NonClawsideEventCount == 0 {
+		t.Fatalf("unexpected external runtime provenance result: %+v", report.ExternalRuntimeEvidence.TrajectoryProvenance)
 	}
 	if len(report.Tools) != 0 {
 		t.Fatalf("external runtime evidence profile must not start MCP tools, got %+v", report.Tools)
@@ -262,6 +329,7 @@ func TestRunSmokeExternalRuntimeEvidenceProfileIsReadOnly(t *testing.T) {
 
 func validOpenClawExternalRuntimeEvidenceValueForTest() map[string]any {
 	return map[string]any{"external_runtime_evidence": map[string]any{
+		"schema_version":                "p37.external-runtime-trajectory.v1",
 		"workflow_id":                   "wf-123",
 		"upstream_handoff_id":           "hf-upstream",
 		"downstream_handoff_id":         "hf-downstream",
@@ -273,6 +341,18 @@ func validOpenClawExternalRuntimeEvidenceValueForTest() map[string]any {
 		"evidence_summary_ready":        true,
 		"no_sender_delivery":            true,
 		"no_runtime_launch_by_clawside": true,
+		"trajectory_provenance": map[string]any{
+			"source_kind":                               "openclaw_events_jsonl_export",
+			"read_only_validation":                      true,
+			"external_runtime_trajectory_observed":      true,
+			"trajectory_event_count":                    float64(16),
+			"clawside_tool_result_count":                float64(15),
+			"non_clawside_event_count":                  float64(1),
+			"observed_event_types":                      []any{"assistant.message", "tool.result"},
+			"lifecycle_order_verified":                  true,
+			"bounded_output_sanitized":                  true,
+			"forbidden_launch_or_delivery_tools_absent": true,
+		},
 	}}
 }
 

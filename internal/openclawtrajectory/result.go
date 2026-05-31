@@ -14,6 +14,13 @@ type ToolResult struct {
 	StructuredContent map[string]any
 }
 
+type EventMetadata struct {
+	Type       string
+	Tool       string
+	Server     string
+	ToolResult bool
+}
+
 type event struct {
 	Type string `json:"type"`
 	Data struct {
@@ -40,6 +47,31 @@ type contentItem struct {
 
 type contentTextPayload struct {
 	StructuredContent any `json:"structuredContent"`
+}
+
+func ExtractEventMetadata(line []byte, serverName string) (EventMetadata, bool, error) {
+	var item event
+	if err := json.Unmarshal(line, &item); err != nil {
+		return EventMetadata{}, false, ErrInvalidJSON
+	}
+	eventType := safeMetadataToken(item.Type)
+	if eventType == "" {
+		return EventMetadata{}, false, nil
+	}
+	metadata := EventMetadata{Type: eventType}
+	if item.Type != "tool.result" {
+		return metadata, true, nil
+	}
+	metadata.ToolResult = true
+	if len(item.Data.Message) == 0 {
+		return metadata, true, nil
+	}
+	var msg message
+	if err := json.Unmarshal(item.Data.Message, &msg); err != nil {
+		return EventMetadata{}, false, ErrInvalidJSON
+	}
+	metadata.Server, metadata.Tool = metadataServerAndTool(msg, serverName)
+	return metadata, true, nil
 }
 
 func ExtractToolResult(line []byte, serverName string) (ToolResult, bool, error) {
@@ -99,6 +131,45 @@ func trimServerToolPrefix(tool string, server string) string {
 		}
 	}
 	return tool
+}
+
+func metadataServerAndTool(msg message, serverName string) (string, string) {
+	if server := safeMetadataToken(msg.Details.MCPServer); server != "" {
+		tool := safeMetadataToken(msg.Details.MCPTool)
+		if tool == "" {
+			tool = safeMetadataToken(trimServerToolPrefix(strings.TrimSpace(msg.ToolName), server))
+		}
+		return server, tool
+	}
+	toolName := strings.TrimSpace(msg.ToolName)
+	if strings.HasPrefix(toolName, "mcp__") {
+		if server, tool, ok := strings.Cut(strings.TrimPrefix(toolName, "mcp__"), "__"); ok {
+			return safeMetadataToken(server), safeMetadataToken(tool)
+		}
+	}
+	for _, separator := range []string{".", "__"} {
+		if server, tool, ok := strings.Cut(toolName, separator); ok {
+			return safeMetadataToken(server), safeMetadataToken(tool)
+		}
+	}
+	if tool, ok := normalizeToolName(msg, serverName); ok {
+		return safeMetadataToken(serverName), safeMetadataToken(tool)
+	}
+	return "", safeMetadataToken(toolName)
+}
+
+func safeMetadataToken(value string) string {
+	text := strings.TrimSpace(value)
+	if text == "" || len(text) > 80 {
+		return ""
+	}
+	for _, char := range text {
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' || char >= '0' && char <= '9' || char == '_' || char == '-' || char == '.' {
+			continue
+		}
+		return ""
+	}
+	return text
 }
 
 func structuredContent(msg message) (map[string]any, error) {

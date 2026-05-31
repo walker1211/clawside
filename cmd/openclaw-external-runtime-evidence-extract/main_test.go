@@ -20,9 +20,14 @@ func TestRunHelpDoesNotRequireEvents(t *testing.T) {
 			if err != nil {
 				t.Fatalf("expected help to exit 0, got %v", err)
 			}
-			for _, want := range []string{"openclaw-external-runtime-evidence-extract", "--events PATH", "--output PATH"} {
+			for _, want := range []string{"openclaw-external-runtime-evidence-extract", "--events PATH", "--output PATH", "read-only provenance"} {
 				if !strings.Contains(stdout.String(), want) {
 					t.Fatalf("expected help to contain %q, got:\n%s", want, stdout.String())
+				}
+			}
+			for _, forbidden := range []string{"--command", "--args", "--cwd", "--session", "--worker", "--sandbox"} {
+				if strings.Contains(stdout.String(), forbidden) {
+					t.Fatalf("help exposed forbidden launch option %q:\n%s", forbidden, stdout.String())
 				}
 			}
 			if stderr.String() != "" {
@@ -100,6 +105,9 @@ func TestRunExtractsExternalRuntimeEvidenceFromTrajectory(t *testing.T) {
 		t.Fatalf("unmarshal output: %v\n%s", err, stdout.String())
 	}
 	evidence := output.ExternalRuntimeEvidence
+	if evidence.SchemaVersion != externalRuntimeEvidenceSchemaVersion {
+		t.Fatalf("schema version = %q, want %q", evidence.SchemaVersion, externalRuntimeEvidenceSchemaVersion)
+	}
 	if evidence.WorkflowID != "wf-123" || evidence.UpstreamHandoffID != "hf-upstream" || evidence.DownstreamHandoffID != "hf-downstream" {
 		t.Fatalf("unexpected ids: %+v", evidence)
 	}
@@ -112,11 +120,62 @@ func TestRunExtractsExternalRuntimeEvidenceFromTrajectory(t *testing.T) {
 	if len(evidence.Tools) != len(requiredExternalRuntimeEvidenceToolsForExtractorTest()) {
 		t.Fatalf("expected required tools, got %+v", evidence.Tools)
 	}
+	provenance := evidence.TrajectoryProvenance
+	if provenance.SourceKind != "openclaw_events_jsonl_export" || !provenance.ReadOnlyValidation || !provenance.ExternalRuntimeTrajectoryObserved {
+		t.Fatalf("unexpected provenance source: %+v", provenance)
+	}
+	if provenance.TrajectoryEventCount <= len(validExternalRuntimeTrajectoryResults()) || provenance.ClawsideToolResultCount != len(validExternalRuntimeTrajectoryResults()) || provenance.NonClawsideEventCount == 0 {
+		t.Fatalf("unexpected provenance counts: %+v", provenance)
+	}
+	if !provenance.LifecycleOrderVerified || !provenance.BoundedOutputSanitized || !provenance.ForbiddenLaunchOrDeliveryToolsAbsent {
+		t.Fatalf("unexpected provenance gates: %+v", provenance)
+	}
+	if !containsStringForExtractorTest(provenance.ObservedEventTypes, "tool.result") || !containsStringForExtractorTest(provenance.ObservedEventTypes, "assistant.message") {
+		t.Fatalf("unexpected observed event types: %+v", provenance.ObservedEventTypes)
+	}
 	text := stdout.String()
 	for _, forbidden := range []string{"message/send", "message/stream", "sender_auth_key", "command", "args", "cwd", "private prompt", "secret-token-value", "token", "session", "stdout", "stderr", "delivery_target_ref", "chat_id"} {
 		if strings.Contains(text, forbidden) {
 			t.Fatalf("output leaked forbidden string %q:\n%s", forbidden, text)
 		}
+	}
+}
+
+func TestRunFailsWhenTrajectoryHasOnlyClawsideToolResults(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeClawsideOnlyExternalRuntimeTrajectory(t, eventsPath, validExternalRuntimeTrajectoryResults())
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{"--events", eventsPath}, stdout, stderr)
+
+	if err == nil {
+		t.Fatalf("expected provenance failure")
+	}
+	if err.Error() != "OpenClaw trajectory events did not include non-Clawside runtime events" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if stdout.String() != "" || stderr.String() != "" {
+		t.Fatalf("expected no output, stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+}
+
+func TestRunFailsWhenTrajectoryLifecycleOrderIsInvalid(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	results := moveTrajectoryToolBefore(validExternalRuntimeTrajectoryResults(), "workflow_status", "blocked_work")
+	writeExternalRuntimeTrajectory(t, eventsPath, results)
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{"--events", eventsPath}, stdout, stderr)
+
+	if err == nil {
+		t.Fatalf("expected lifecycle order failure")
+	}
+	if err.Error() != "OpenClaw trajectory events did not verify lifecycle order" {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -203,6 +262,7 @@ func TestRunFailsWhenTrajectoryIsMissingRequiredEvidence(t *testing.T) {
 
 type externalRuntimeEvidenceOutputForTest struct {
 	ExternalRuntimeEvidence struct {
+		SchemaVersion             string   `json:"schema_version"`
 		WorkflowID                string   `json:"workflow_id"`
 		UpstreamHandoffID         string   `json:"upstream_handoff_id"`
 		DownstreamHandoffID       string   `json:"downstream_handoff_id"`
@@ -214,6 +274,18 @@ type externalRuntimeEvidenceOutputForTest struct {
 		EvidenceSummaryReady      bool     `json:"evidence_summary_ready"`
 		NoSenderDelivery          bool     `json:"no_sender_delivery"`
 		NoRuntimeLaunchByClawside bool     `json:"no_runtime_launch_by_clawside"`
+		TrajectoryProvenance      struct {
+			SourceKind                           string   `json:"source_kind"`
+			ReadOnlyValidation                   bool     `json:"read_only_validation"`
+			ExternalRuntimeTrajectoryObserved    bool     `json:"external_runtime_trajectory_observed"`
+			TrajectoryEventCount                 int      `json:"trajectory_event_count"`
+			ClawsideToolResultCount              int      `json:"clawside_tool_result_count"`
+			NonClawsideEventCount                int      `json:"non_clawside_event_count"`
+			ObservedEventTypes                   []string `json:"observed_event_types"`
+			LifecycleOrderVerified               bool     `json:"lifecycle_order_verified"`
+			BoundedOutputSanitized               bool     `json:"bounded_output_sanitized"`
+			ForbiddenLaunchOrDeliveryToolsAbsent bool     `json:"forbidden_launch_or_delivery_tools_absent"`
+		} `json:"trajectory_provenance"`
 	} `json:"external_runtime_evidence"`
 }
 
@@ -249,7 +321,24 @@ func requiredExternalRuntimeEvidenceToolsForExtractorTest() []string {
 
 func writeExternalRuntimeTrajectory(t *testing.T, path string, results []trajectoryToolResult) {
 	t.Helper()
-	var lines []string
+	lines := []string{externalRuntimeEnvelopeForTest(t)}
+	lines = append(lines, trajectoryToolResultLines(t, results)...)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write trajectory: %v", err)
+	}
+}
+
+func writeClawsideOnlyExternalRuntimeTrajectory(t *testing.T, path string, results []trajectoryToolResult) {
+	t.Helper()
+	lines := trajectoryToolResultLines(t, results)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write trajectory: %v", err)
+	}
+}
+
+func trajectoryToolResultLines(t *testing.T, results []trajectoryToolResult) []string {
+	t.Helper()
+	lines := make([]string, 0, len(results))
 	for _, result := range results {
 		server := result.server
 		if server == "" {
@@ -275,9 +364,24 @@ func writeExternalRuntimeTrajectory(t *testing.T, path string, results []traject
 		}
 		lines = append(lines, string(data))
 	}
-	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
-		t.Fatalf("write trajectory: %v", err)
+	return lines
+}
+
+func externalRuntimeEnvelopeForTest(t *testing.T) string {
+	t.Helper()
+	line := map[string]any{
+		"type": "assistant.message",
+		"data": map[string]any{
+			"message": map[string]any{
+				"content": "private prompt token session stdout stderr /Users/example/private chat_id 123456",
+			},
+		},
 	}
+	data, err := json.Marshal(line)
+	if err != nil {
+		t.Fatalf("marshal external runtime envelope: %v", err)
+	}
+	return string(data)
 }
 
 func filterTrajectoryResults(results []trajectoryToolResult, keep func(trajectoryToolResult) bool) []trajectoryToolResult {
@@ -298,6 +402,37 @@ func mutateTrajectoryResults(results []trajectoryToolResult, mutate func(*trajec
 		mutated = append(mutated, copyResult)
 	}
 	return mutated
+}
+
+func moveTrajectoryToolBefore(results []trajectoryToolResult, tool, beforeTool string) []trajectoryToolResult {
+	mutated := append([]trajectoryToolResult(nil), results...)
+	var moving trajectoryToolResult
+	movingIndex := -1
+	beforeIndex := -1
+	for index, result := range mutated {
+		if result.tool == tool && movingIndex == -1 {
+			moving = result
+			movingIndex = index
+		}
+		if result.tool == beforeTool && beforeIndex == -1 {
+			beforeIndex = index
+		}
+	}
+	if movingIndex == -1 || beforeIndex == -1 || movingIndex < beforeIndex {
+		return mutated
+	}
+	mutated = append(mutated[:movingIndex], mutated[movingIndex+1:]...)
+	mutated = append(mutated[:beforeIndex], append([]trajectoryToolResult{moving}, mutated[beforeIndex:]...)...)
+	return mutated
+}
+
+func containsStringForExtractorTest(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
 
 func cloneMapForTest(value map[string]any) map[string]any {
