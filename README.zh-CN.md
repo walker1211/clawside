@@ -204,6 +204,17 @@ P40 report 只列出 bounded `missing_tools`、`missing_gates`、`forbidden_tool
   --output ./external-runtime-evidence.json
 ```
 
+P41 把真实 OpenClaw rerun 固化为一个 repeatable workflow，但不把 Clawside 变成 OpenClaw launcher。无参数运行 `scripts/rerun_openclaw_external_runtime_evidence_workflow.sh` 会打印 sanitized checklist；随后 Run OpenClaw externally，export redacted trajectory 到 `.openclaw/trajectory-exports/<export-dir>/events.jsonl`，再用显式路径运行同一个脚本：
+
+```bash
+./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh
+./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh \
+  --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output ./external-runtime-evidence.json
+```
+
+P41 脚本只在 export 已存在后执行本地 bounded verification：先跑 P39 preflight，再跑 P40 suitability，只有 `suitable=true` 时才跑 P38 dogfood wrapper。如果 trajectory 不适合，它会打印 bounded gap report 和 `dogfood wrapper was not run`。它不启动 OpenClaw/Claude/Kimi runtime、session、sandbox 或 model worker，不触发 sender/Telegram delivery，不使用 delivery tools；公开文档只使用 placeholders，且 `SENDER_AUTH_KEY` 与 `CLAWSIDE_A2A_AUTH_KEY` 保持分离。
+
 该 evidence contract 只记录 IDs、required tool set、`schema_version`、`trajectory_provenance`、`no_sender_delivery=true` 和 `no_runtime_launch_by_clawside=true`；同时要求 dependency、reviewer、downstream-ready、completed-workflow、`coordination_evidence_summary`、`non_clawside_event_count > 0` 和 `lifecycle_order_verified=true` gates。此流程不启动 model worker，不启动 runtime session，不启动 sandbox，不触发 sender delivery，不触发 Telegram delivery，不保存也不打印 raw trajectory payloads，也不接受 arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields。`SENDER_AUTH_KEY` 和 `CLAWSIDE_A2A_AUTH_KEY` 保持分离，此 dogfood path 不复用这两个 auth key。
 
 在宣称 public-readiness 或 release 前，只运行只读检查：

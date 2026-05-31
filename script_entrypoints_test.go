@@ -857,6 +857,192 @@ func TestReportOpenClawExternalRuntimeEvidenceSuitabilityScriptEntrypoint(t *tes
 	}
 }
 
+func TestRerunOpenClawExternalRuntimeEvidenceWorkflowScriptEntrypoint(t *testing.T) {
+	path := "scripts/rerun_openclaw_external_runtime_evidence_workflow.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, helpToken := range []string{"help", "--help", "-h"} {
+		if !strings.Contains(content, helpToken) {
+			t.Fatalf("expected %s to support help token %q", path, helpToken)
+		}
+	}
+	for _, want := range []string{
+		"EVENTS_PATH=\"\"",
+		"OUTPUT_PATH=\"\"",
+		"P41",
+		"repeatable workflow",
+		"Run OpenClaw externally",
+		"--events PATH",
+		"--output PATH",
+		".openclaw/trajectory-exports/<export-dir>/events.jsonl",
+		"agent_register",
+		"handoff_create",
+		"blocked_work",
+		"handoff_progress",
+		"next_work",
+		"workflow_status",
+		"coordination_evidence_summary",
+		"suitable=true",
+		"$ROOT_DIR/scripts/preflight_openclaw_external_runtime_evidence.sh\" --events \"$EVENTS_PATH\" --output \"$OUTPUT_PATH\"",
+		"$ROOT_DIR/scripts/report_openclaw_external_runtime_evidence_suitability.sh\" --events \"$EVENTS_PATH\"",
+		"$ROOT_DIR/scripts/dogfood_openclaw_external_runtime_evidence.sh\" --events \"$EVENTS_PATH\" --output \"$OUTPUT_PATH\"",
+		"\"suitable\": true",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	if !strings.Contains(content, "--events)") || !strings.Contains(content, "EVENTS_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --events PATH", path)
+	}
+	if !strings.Contains(content, "--output)") || !strings.Contains(content, "OUTPUT_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --output PATH", path)
+	}
+	for _, forbidden := range []string{"--command)", "--args)", "--cwd)", "--path)", "--prompt)", "--token)", "--session)", "--worker)", "--sender-base-url)", "--mcp-command)", "--chat-id)", "--telegram)", "message/send", "message/stream"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("%s must not accept unsafe flag or delivery string %q", path, forbidden)
+		}
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") || strings.Contains(content, "BASH_SOURCE") {
+		t.Fatalf("%s should avoid Bash arrays and BASH_SOURCE", path)
+	}
+	if strings.Contains(content, "\nopenclaw agent") {
+		t.Fatalf("%s must not execute openclaw agent", path)
+	}
+}
+
+func TestRerunOpenClawExternalRuntimeEvidenceWorkflowHelpIsSanitized(t *testing.T) {
+	path := "scripts/rerun_openclaw_external_runtime_evidence_workflow.sh"
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("resolve absolute script path: %v", err)
+	}
+
+	cmd := exec.Command(absolutePath, "help")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("expected help to exit 0: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+
+	output := stdout.String() + stderr.String()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	for _, forbidden := range []string{absolutePath, cwd} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("expected help output to avoid local path %q, got:\n%s", forbidden, output)
+		}
+	}
+	if !strings.Contains(stdout.String(), "usage: ./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh [--events PATH --output PATH]") {
+		t.Fatalf("expected sanitized usage line, got:\n%s", stdout.String())
+	}
+}
+
+func TestRerunOpenClawExternalRuntimeEvidenceWorkflowRunsBoundedStages(t *testing.T) {
+	rootDir := t.TempDir()
+	scriptsDir := filepath.Join(rootDir, "scripts")
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+		t.Fatalf("create scripts dir: %v", err)
+	}
+
+	scriptPath := filepath.Join(scriptsDir, "rerun_openclaw_external_runtime_evidence_workflow.sh")
+	writeExecutableTestScript(t, scriptPath, readTextFile(t, "scripts/rerun_openclaw_external_runtime_evidence_workflow.sh"))
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "preflight_openclaw_external_runtime_evidence.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'preflight\n' >> "$LOG_PATH"
+`)
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "report_openclaw_external_runtime_evidence_suitability.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'suitability\n' >> "$LOG_PATH"
+if [[ "${SUITABLE:-false}" == "true" ]]; then
+  printf '{"suitable": true}\n'
+else
+  printf '{"suitable": false}\n'
+fi
+`)
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "dogfood_openclaw_external_runtime_evidence.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'dogfood\n' >> "$LOG_PATH"
+`)
+
+	runWorkflow := func(t *testing.T, suitable string) (string, string, string, error) {
+		t.Helper()
+		logPath := filepath.Join(rootDir, "workflow-"+suitable+".log")
+		cmd := exec.Command(scriptPath, "--events", "events.jsonl", "--output", "out.json")
+		cmd.Env = append(os.Environ(), "LOG_PATH="+logPath, "SUITABLE="+suitable)
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		err := cmd.Run()
+		logBytes, readErr := os.ReadFile(logPath)
+		if readErr != nil {
+			t.Fatalf("read workflow log: %v", readErr)
+		}
+		return stdout.String(), stderr.String(), string(logBytes), err
+	}
+
+	stdout, stderr, logText, err := runWorkflow(t, "false")
+	if err == nil {
+		t.Fatalf("expected unsuitable workflow to exit non-zero")
+	}
+	if logText != "preflight\nsuitability\n" {
+		t.Fatalf("expected unsuitable workflow to skip dogfood after suitability, got log %q", logText)
+	}
+	if !strings.Contains(stdout, `{"suitable": false}`) || !strings.Contains(stderr, "dogfood wrapper was not run") {
+		t.Fatalf("expected bounded unsuitable report and skip message, stdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+
+	stdout, stderr, logText, err = runWorkflow(t, "true")
+	if err != nil {
+		t.Fatalf("expected suitable workflow to exit 0: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if logText != "preflight\nsuitability\ndogfood\n" {
+		t.Fatalf("expected suitable workflow to run preflight, suitability, dogfood in order, got log %q", logText)
+	}
+}
+
+func TestRerunOpenClawExternalRuntimeEvidenceWorkflowRejectsUnsafeFlags(t *testing.T) {
+	path := "scripts/rerun_openclaw_external_runtime_evidence_workflow.sh"
+	for _, flag := range []string{"--command", "--sender-base-url", "--telegram"} {
+		t.Run(flag, func(t *testing.T) {
+			cmd := exec.Command(path, flag, "value")
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err == nil {
+				t.Fatalf("expected %s to be rejected", flag)
+			}
+			output := stdout.String() + stderr.String()
+			if !strings.Contains(output, "usage: ./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh") {
+				t.Fatalf("expected sanitized usage for %s, got:\n%s", flag, output)
+			}
+		})
+	}
+}
+
+func writeExecutableTestScript(t *testing.T, path string, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	if err := os.Chmod(path, 0o755); err != nil {
+		t.Fatalf("chmod %s: %v", path, err)
+	}
+}
+
 func TestOpenClawTruthPlaneExtractScriptEntrypoint(t *testing.T) {
 	path := "scripts/extract_openclaw_truth_plane_results.sh"
 	info, err := os.Stat(path)
@@ -1697,12 +1883,18 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 			"P38",
 			"P39",
 			"P40",
+			"P41",
 			"external runtime evidence dogfood",
 			"cmd/openclaw-external-runtime-evidence-extract/",
 			"scripts/extract_openclaw_external_runtime_evidence.sh",
 			"scripts/dogfood_openclaw_external_runtime_evidence.sh",
 			"scripts/preflight_openclaw_external_runtime_evidence.sh",
 			"scripts/report_openclaw_external_runtime_evidence_suitability.sh",
+			"scripts/rerun_openclaw_external_runtime_evidence_workflow.sh",
+			"repeatable workflow",
+			"Run OpenClaw externally",
+			"export redacted trajectory",
+			"dogfood wrapper was not run",
 			"--events <events-jsonl>",
 			"--events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl",
 			"--output ./external-runtime-evidence.json",

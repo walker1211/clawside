@@ -204,6 +204,17 @@ The P40 report lists only bounded `missing_tools`, `missing_gates`, `forbidden_t
   --output ./external-runtime-evidence.json
 ```
 
+P41 packages the real OpenClaw rerun into a repeatable workflow without turning Clawside into an OpenClaw launcher. Run it without arguments to print the sanitized checklist, then follow the checklist steps to Run OpenClaw externally, export redacted trajectory data to `.openclaw/trajectory-exports/<export-dir>/events.jsonl`, and run the same script with explicit paths:
+
+```bash
+./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh
+./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh \
+  --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output ./external-runtime-evidence.json
+```
+
+The P41 script runs local bounded verification only after an export exists: P39 preflight, then P40 suitability, then the P38 dogfood wrapper only when `suitable=true`. If the trajectory is not suitable, it prints the bounded gap report and `dogfood wrapper was not run`. It does not launch OpenClaw/Claude/Kimi runtime, sessions, sandboxes, or model workers; it does not trigger sender/Telegram delivery; and it uses only placeholders in public docs.
+
 The evidence contract records only IDs, the required tool set, `schema_version`, `trajectory_provenance`, `no_sender_delivery=true`, and `no_runtime_launch_by_clawside=true`; it also requires dependency, reviewer, downstream-ready, completed-workflow, `coordination_evidence_summary`, `non_clawside_event_count > 0`, and `lifecycle_order_verified=true` gates. This flow does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender delivery, does not trigger Telegram delivery, does not store or print raw trajectory payloads, and does not accept arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields. `SENDER_AUTH_KEY` and `CLAWSIDE_A2A_AUTH_KEY` remain separate and are not reused by this dogfood path.
 
 Before making any public-readiness or release claim, keep verification read-only:
