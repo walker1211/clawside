@@ -415,11 +415,12 @@ func (state *extractionState) observeNextWork(lineIndex int, content map[string]
 }
 
 func (state *extractionState) observeWorkflowStatus(lineIndex int, content map[string]any) {
-	if nestedString(content, "workflow", "id") != state.workflowID {
+	workflow := objectValue(content, "workflow", "Workflow")
+	if stringValue(workflow, "id") != state.workflowID {
 		return
 	}
-	state.workflowFinalStatus = nestedString(content, "workflow", "status")
-	for _, rawHandoff := range arrayValue(content, "handoffs") {
+	state.workflowFinalStatus = stringValue(workflow, "status")
+	for _, rawHandoff := range arrayValueAny(content, "handoffs", "Handoffs") {
 		handoff, _ := rawHandoff.(map[string]any)
 		switch stringValue(handoff, "id") {
 		case state.upstreamHandoffID:
@@ -447,7 +448,7 @@ func (state *extractionState) observeEvidenceSummary(lineIndex int, content map[
 	summary, _ := content["summary"].(map[string]any)
 	for _, rawWorkflow := range arrayValue(summary, "workflows") {
 		workflow, _ := rawWorkflow.(map[string]any)
-		if stringValue(workflow, "id") == state.workflowID {
+		if stringValue(workflow, "id") == state.workflowID && stringValue(workflow, "status") == "completed" {
 			state.evidenceSummaryReady = true
 			if state.evidenceSummaryAt == 0 {
 				state.evidenceSummaryAt = lineIndex
@@ -643,6 +644,15 @@ func nestedString(value map[string]any, objectKey, stringKey string) string {
 	return stringValue(nested, stringKey)
 }
 
+func objectValue(value map[string]any, keys ...string) map[string]any {
+	for _, key := range keys {
+		if nested, ok := value[key].(map[string]any); ok {
+			return nested
+		}
+	}
+	return nil
+}
+
 func stringValue(value map[string]any, key string) string {
 	text, _ := value[key].(string)
 	return strings.TrimSpace(text)
@@ -656,6 +666,15 @@ func boolValue(value map[string]any, key string) bool {
 func arrayValue(value map[string]any, key string) []any {
 	items, _ := value[key].([]any)
 	return items
+}
+
+func arrayValueAny(value map[string]any, keys ...string) []any {
+	for _, key := range keys {
+		if items, ok := value[key].([]any); ok {
+			return items
+		}
+	}
+	return nil
 }
 
 func containsString(values []any, want string) bool {

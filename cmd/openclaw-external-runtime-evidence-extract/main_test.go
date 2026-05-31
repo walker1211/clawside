@@ -364,6 +364,64 @@ func TestRunExtractsExternalRuntimeEvidenceFromTrajectory(t *testing.T) {
 	}
 }
 
+func TestRunExtractsExternalRuntimeEvidenceWithOpenClawWorkflowStatusCasing(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeExternalRuntimeTrajectory(t, eventsPath, mutateTrajectoryResults(validExternalRuntimeTrajectoryResults(), func(result *trajectoryToolResult) {
+		if result.tool == "workflow_status" {
+			result.structured = map[string]any{
+				"Workflow": map[string]any{"id": "wf-123", "status": "completed"},
+				"Handoffs": []any{
+					map[string]any{"id": "hf-upstream", "state": "completed"},
+					map[string]any{"id": "hf-downstream", "state": "completed"},
+				},
+			}
+		}
+	}))
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{"--events", eventsPath}, stdout, stderr)
+
+	if err != nil {
+		t.Fatalf("extract evidence with OpenClaw workflow status casing: %v\nstderr=%s", err, stderr.String())
+	}
+	var output externalRuntimeEvidenceOutputForTest
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, stdout.String())
+	}
+	if output.ExternalRuntimeEvidence.WorkflowFinalStatus != "completed" || !output.ExternalRuntimeEvidence.TrajectoryProvenance.LifecycleOrderVerified {
+		t.Fatalf("expected completed workflow evidence, got %+v", output.ExternalRuntimeEvidence)
+	}
+}
+
+func TestRunUsesCompletedEvidenceSummaryForLifecycleOrder(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	results := validExternalRuntimeTrajectoryResults()
+	earlySummary := trajectoryToolResult{
+		tool:       "coordination_evidence_summary",
+		structured: map[string]any{"summary": map[string]any{"workflows": []any{map[string]any{"id": "wf-123", "status": "active"}}}},
+	}
+	results = append(append(append([]trajectoryToolResult{}, results[:6]...), earlySummary), results[6:]...)
+	writeExternalRuntimeTrajectory(t, eventsPath, results)
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{"--events", eventsPath}, stdout, stderr)
+
+	if err != nil {
+		t.Fatalf("extract evidence with early incomplete summary: %v\nstderr=%s", err, stderr.String())
+	}
+	var output externalRuntimeEvidenceOutputForTest
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, stdout.String())
+	}
+	if !output.ExternalRuntimeEvidence.EvidenceSummaryReady || !output.ExternalRuntimeEvidence.TrajectoryProvenance.LifecycleOrderVerified {
+		t.Fatalf("expected final completed evidence summary to verify lifecycle order, got %+v", output.ExternalRuntimeEvidence)
+	}
+}
+
 func TestRunFailsWhenTrajectoryHasOnlyClawsideToolResults(t *testing.T) {
 	dir := t.TempDir()
 	eventsPath := filepath.Join(dir, "events.jsonl")
