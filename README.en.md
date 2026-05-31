@@ -189,7 +189,14 @@ After selecting an export, ask preflight to show the exact end-to-end wrapper co
   --output ./external-runtime-evidence.json
 ```
 
-Run the P38 wrapper explicitly for the actual extraction plus read-only validation step:
+P40 adds a read-only suitability gap report between preflight and the P38 wrapper. It uses `schema_version=p40.external-runtime-suitability.v1` and reports `suitable=true` only when the trajectory has the required Clawside MCP tool chain, lifecycle gates, non-Clawside trajectory observation, lifecycle order, and no forbidden launch or delivery tools:
+
+```bash
+./scripts/report_openclaw_external_runtime_evidence_suitability.sh \
+  --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl
+```
+
+The P40 report lists only bounded `missing_tools`, `missing_gates`, `forbidden_tools`, counts, observed event types, and a placeholder next command. It does not print raw trajectory payloads, does not launch runtime/session/sandbox/model workers, and does not trigger sender/Telegram delivery. If the report returns `suitable=true`, run the P38 wrapper explicitly for the actual extraction plus read-only validation step:
 
 ```bash
 ./scripts/dogfood_openclaw_external_runtime_evidence.sh \

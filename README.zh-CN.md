@@ -189,7 +189,14 @@ P39 增加一个只读 preflight/finder，用来查找本地 OpenClaw exports。
   --output ./external-runtime-evidence.json
 ```
 
-真正执行 extraction + read-only validation 时，显式运行 P38 wrapper：
+P40 在 preflight 和 P38 wrapper 之间增加一个 read-only suitability gap report。它使用 `schema_version=p40.external-runtime-suitability.v1`，只有当 trajectory 具备 required Clawside MCP tool chain、lifecycle gates、non-Clawside trajectory observation、lifecycle order，且没有 forbidden launch or delivery tools 时，才返回 `suitable=true`：
+
+```bash
+./scripts/report_openclaw_external_runtime_evidence_suitability.sh \
+  --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl
+```
+
+P40 report 只列出 bounded `missing_tools`、`missing_gates`、`forbidden_tools`、counts、observed event types 和 placeholder next command。它不打印 raw trajectory payloads，不启动 runtime/session/sandbox/model workers，也不触发 sender/Telegram delivery。若 report 返回 `suitable=true`，再显式运行 P38 wrapper 完成真正的 extraction + read-only validation：
 
 ```bash
 ./scripts/dogfood_openclaw_external_runtime_evidence.sh \

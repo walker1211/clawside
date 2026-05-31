@@ -54,6 +54,30 @@ func TestRunRequiresEventsPath(t *testing.T) {
 	}
 }
 
+func TestRunSuitabilityReportHelpDocumentsReadOnlyGapReport(t *testing.T) {
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{"help"}, stdout, stderr)
+
+	if err != nil {
+		t.Fatalf("expected help to exit 0, got %v", err)
+	}
+	for _, want := range []string{"--suitability-report", "read-only suitability", "gap report"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected help to contain %q, got:\n%s", want, stdout.String())
+		}
+	}
+	for _, forbidden := range []string{"--command", "--args", "--cwd", "--prompt", "--token", "--session", "--worker", "--sender-base-url", "--chat-id", "--telegram"} {
+		if strings.Contains(stdout.String(), forbidden) {
+			t.Fatalf("help exposed forbidden option %q:\n%s", forbidden, stdout.String())
+		}
+	}
+	if stderr.String() != "" {
+		t.Fatalf("expected help to write stdout only, got stderr %q", stderr.String())
+	}
+}
+
 func TestRunRejectsUnsafeUnknownOptionsWithoutEchoingValues(t *testing.T) {
 	for _, option := range []string{"--command", "--args", "--cwd", "--path", "--prompt", "--token", "--session", "--worker", "--sender-base-url", "--chat-id", "--telegram"} {
 		t.Run(option, func(t *testing.T) {
@@ -71,6 +95,205 @@ func TestRunRejectsUnsafeUnknownOptionsWithoutEchoingValues(t *testing.T) {
 				t.Fatalf("unsafe option error leaked supplied value: %s", combined)
 			}
 		})
+	}
+}
+
+func TestRunSuitabilityReportForCompleteTrajectory(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeExternalRuntimeTrajectory(t, eventsPath, append(validExternalRuntimeTrajectoryResults(), trajectoryToolResult{
+		server: "other",
+		tool:   "handoff_dispatch",
+		structured: map[string]any{
+			"command":        "run private worker",
+			"args":           []any{"--token", "secret-token-value"},
+			"cwd":            "/Users/example/private",
+			"private_prompt": "private prompt",
+			"session":        "session-123",
+			"stdout":         "stdout dump",
+			"stderr":         "stderr dump",
+			"chat_id":        float64(123456),
+		},
+	}))
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{"--events", eventsPath, "--suitability-report"}, stdout, stderr)
+
+	if err != nil {
+		t.Fatalf("suitability report: %v\nstderr=%s", err, stderr.String())
+	}
+	var output externalRuntimeEvidenceSuitabilityOutputForTest
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, stdout.String())
+	}
+	report := output.ExternalRuntimeEvidenceSuitability
+	if report.SchemaVersion != "p40.external-runtime-suitability.v1" {
+		t.Fatalf("schema version = %q, want %q", report.SchemaVersion, "p40.external-runtime-suitability.v1")
+	}
+	if !report.Suitable {
+		t.Fatalf("expected suitable report, got %+v", report)
+	}
+	if len(report.MissingTools) != 0 || len(report.MissingGates) != 0 || len(report.ForbiddenTools) != 0 {
+		t.Fatalf("expected no gaps, got %+v", report)
+	}
+	for _, required := range requiredExternalRuntimeEvidenceToolsForExtractorTest() {
+		if !containsStringForExtractorTest(report.RequiredTools, required) || !containsStringForExtractorTest(report.ObservedRequiredTools, required) {
+			t.Fatalf("expected required tool %q to be observed in %+v", required, report)
+		}
+	}
+	provenance := report.TrajectoryProvenance
+	if provenance.SourceKind != "openclaw_events_jsonl_export" || !provenance.ReadOnlyValidation || !provenance.ExternalRuntimeTrajectoryObserved {
+		t.Fatalf("unexpected provenance source: %+v", provenance)
+	}
+	if provenance.TrajectoryEventCount <= len(validExternalRuntimeTrajectoryResults()) || provenance.ClawsideToolResultCount != len(validExternalRuntimeTrajectoryResults()) || provenance.NonClawsideEventCount == 0 {
+		t.Fatalf("unexpected provenance counts: %+v", provenance)
+	}
+	if !provenance.LifecycleOrderVerified || !provenance.BoundedOutputSanitized || !provenance.ForbiddenLaunchOrDeliveryToolsAbsent {
+		t.Fatalf("unexpected provenance gates: %+v", provenance)
+	}
+	text := stdout.String()
+	for _, forbidden := range []string{"private prompt", "secret-token-value", "token", "session-123", "stdout dump", "stderr dump", "chat_id", "/Users/example/private", "\"command\":", "\"args\":", "\"cwd\":"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("output leaked forbidden string %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestRunSuitabilityReportReturnsGapsWithoutFailing(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeExternalRuntimeTrajectory(t, eventsPath, filterTrajectoryResults(validExternalRuntimeTrajectoryResults(), func(result trajectoryToolResult) bool {
+		return result.tool != "blocked_work"
+	}))
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{"--events", eventsPath, "--suitability-report"}, stdout, stderr)
+
+	if err != nil {
+		t.Fatalf("suitability report: %v\nstderr=%s", err, stderr.String())
+	}
+	var output externalRuntimeEvidenceSuitabilityOutputForTest
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, stdout.String())
+	}
+	report := output.ExternalRuntimeEvidenceSuitability
+	if report.Suitable {
+		t.Fatalf("expected unsuitable report, got %+v", report)
+	}
+	if !containsStringForExtractorTest(report.MissingTools, "blocked_work") {
+		t.Fatalf("expected missing blocked_work, got %+v", report.MissingTools)
+	}
+	if !containsStringForExtractorTest(report.MissingGates, "dependency_gate_verified") {
+		t.Fatalf("expected dependency gate gap, got %+v", report.MissingGates)
+	}
+	for _, forbidden := range []string{"private prompt", "token", "session", "stdout", "stderr", "chat_id", "/Users/example/private"} {
+		if strings.Contains(stdout.String(), forbidden) {
+			t.Fatalf("output leaked forbidden string %q:\n%s", forbidden, stdout.String())
+		}
+	}
+}
+
+func TestRunSuitabilityReportFlagsForbiddenClawsideTool(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	writeExternalRuntimeTrajectory(t, eventsPath, append(validExternalRuntimeTrajectoryResults(), trajectoryToolResult{
+		tool: "handoff_dispatch",
+		structured: map[string]any{
+			"command":        "run private worker",
+			"args":           []any{"--token", "secret-token-value"},
+			"cwd":            "/Users/example/private",
+			"private_prompt": "private prompt",
+			"session":        "session-123",
+			"stdout":         "stdout dump",
+			"stderr":         "stderr dump",
+			"chat_id":        float64(123456),
+		},
+	}))
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err := run([]string{"--events", eventsPath, "--suitability-report"}, stdout, stderr)
+
+	if err != nil {
+		t.Fatalf("suitability report: %v\nstderr=%s", err, stderr.String())
+	}
+	var output externalRuntimeEvidenceSuitabilityOutputForTest
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, stdout.String())
+	}
+	report := output.ExternalRuntimeEvidenceSuitability
+	if report.Suitable {
+		t.Fatalf("expected unsuitable report, got %+v", report)
+	}
+	if !containsStringForExtractorTest(report.ForbiddenTools, "handoff_dispatch") {
+		t.Fatalf("expected forbidden handoff_dispatch, got %+v", report.ForbiddenTools)
+	}
+	if !containsStringForExtractorTest(report.MissingGates, "forbidden_launch_or_delivery_tools_absent") {
+		t.Fatalf("expected forbidden launch/delivery gate gap, got %+v", report.MissingGates)
+	}
+	text := stdout.String()
+	for _, forbidden := range []string{"private prompt", "secret-token-value", "token", "session-123", "stdout dump", "stderr dump", "chat_id", "/Users/example/private", "\"command\":", "\"args\":", "\"cwd\":"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("output leaked forbidden string %q:\n%s", forbidden, text)
+		}
+	}
+}
+
+func TestRunSuitabilityReportFlagsForbiddenToolWithoutStructuredContent(t *testing.T) {
+	dir := t.TempDir()
+	eventsPath := filepath.Join(dir, "events.jsonl")
+	lines := []string{externalRuntimeEnvelopeForTest(t)}
+	lines = append(lines, trajectoryToolResultLines(t, validExternalRuntimeTrajectoryResults())...)
+	forbiddenLine := map[string]any{
+		"type": "tool.result",
+		"data": map[string]any{
+			"message": map[string]any{
+				"toolName": "mcp__clawside__message/send",
+				"isError":  false,
+				"details": map[string]any{
+					"mcpServer":         "clawside",
+					"mcpTool":           "message/send",
+					"structuredContent": "private prompt token session stdout stderr /Users/example/private chat_id",
+				},
+			},
+		},
+	}
+	data, err := json.Marshal(forbiddenLine)
+	if err != nil {
+		t.Fatalf("marshal forbidden trajectory line: %v", err)
+	}
+	lines = append(lines, string(data))
+	if err := os.WriteFile(eventsPath, []byte(strings.Join(lines, "\n")+"\n"), 0o600); err != nil {
+		t.Fatalf("write trajectory: %v", err)
+	}
+
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+	err = run([]string{"--events", eventsPath, "--suitability-report"}, stdout, stderr)
+
+	if err != nil {
+		t.Fatalf("suitability report should not fail on malformed forbidden content: %v\nstderr=%s", err, stderr.String())
+	}
+	var output externalRuntimeEvidenceSuitabilityOutputForTest
+	if err := json.Unmarshal(stdout.Bytes(), &output); err != nil {
+		t.Fatalf("unmarshal output: %v\n%s", err, stdout.String())
+	}
+	report := output.ExternalRuntimeEvidenceSuitability
+	if report.Suitable {
+		t.Fatalf("expected unsuitable report, got %+v", report)
+	}
+	if !containsStringForExtractorTest(report.ForbiddenTools, "message/send") {
+		t.Fatalf("expected forbidden message/send, got %+v", report.ForbiddenTools)
+	}
+	if !containsStringForExtractorTest(report.MissingGates, "forbidden_launch_or_delivery_tools_absent") {
+		t.Fatalf("expected forbidden launch/delivery gate gap, got %+v", report.MissingGates)
+	}
+	for _, forbidden := range []string{"private prompt", "token", "session", "stdout", "stderr", "chat_id", "/Users/example/private"} {
+		if strings.Contains(stdout.String(), forbidden) {
+			t.Fatalf("output leaked forbidden string %q:\n%s", forbidden, stdout.String())
+		}
 	}
 }
 
@@ -258,6 +481,31 @@ func TestRunFailsWhenTrajectoryIsMissingRequiredEvidence(t *testing.T) {
 			}
 		})
 	}
+}
+
+type externalRuntimeEvidenceSuitabilityOutputForTest struct {
+	ExternalRuntimeEvidenceSuitability struct {
+		SchemaVersion         string   `json:"schema_version"`
+		Suitable              bool     `json:"suitable"`
+		RequiredTools         []string `json:"required_tools"`
+		ObservedRequiredTools []string `json:"observed_required_tools"`
+		MissingTools          []string `json:"missing_tools"`
+		MissingGates          []string `json:"missing_gates"`
+		ForbiddenTools        []string `json:"forbidden_tools"`
+		NextCommand           string   `json:"next_command"`
+		TrajectoryProvenance  struct {
+			SourceKind                           string   `json:"source_kind"`
+			ReadOnlyValidation                   bool     `json:"read_only_validation"`
+			ExternalRuntimeTrajectoryObserved    bool     `json:"external_runtime_trajectory_observed"`
+			TrajectoryEventCount                 int      `json:"trajectory_event_count"`
+			ClawsideToolResultCount              int      `json:"clawside_tool_result_count"`
+			NonClawsideEventCount                int      `json:"non_clawside_event_count"`
+			ObservedEventTypes                   []string `json:"observed_event_types"`
+			LifecycleOrderVerified               bool     `json:"lifecycle_order_verified"`
+			BoundedOutputSanitized               bool     `json:"bounded_output_sanitized"`
+			ForbiddenLaunchOrDeliveryToolsAbsent bool     `json:"forbidden_launch_or_delivery_tools_absent"`
+		} `json:"trajectory_provenance"`
+	} `json:"external_runtime_evidence_suitability"`
 }
 
 type externalRuntimeEvidenceOutputForTest struct {

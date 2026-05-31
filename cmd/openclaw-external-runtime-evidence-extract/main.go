@@ -15,11 +15,30 @@ import (
 	"github.com/walker1211/clawside/internal/openclawtrajectory"
 )
 
-const clawsideServerName = "clawside"
-const externalRuntimeEvidenceSchemaVersion = "p37.external-runtime-trajectory.v1"
+const (
+	clawsideServerName                      = "clawside"
+	externalRuntimeEvidenceSchemaVersion    = "p37.external-runtime-trajectory.v1"
+	externalRuntimeSuitabilitySchemaVersion = "p40.external-runtime-suitability.v1"
+)
 
 type externalRuntimeEvidenceOutput struct {
 	ExternalRuntimeEvidence externalRuntimeEvidence `json:"external_runtime_evidence"`
+}
+
+type externalRuntimeEvidenceSuitabilityOutput struct {
+	ExternalRuntimeEvidenceSuitability externalRuntimeEvidenceSuitability `json:"external_runtime_evidence_suitability"`
+}
+
+type externalRuntimeEvidenceSuitability struct {
+	SchemaVersion         string                              `json:"schema_version"`
+	Suitable              bool                                `json:"suitable"`
+	RequiredTools         []string                            `json:"required_tools"`
+	ObservedRequiredTools []string                            `json:"observed_required_tools"`
+	MissingTools          []string                            `json:"missing_tools"`
+	MissingGates          []string                            `json:"missing_gates"`
+	ForbiddenTools        []string                            `json:"forbidden_tools"`
+	TrajectoryProvenance  externalRuntimeTrajectoryProvenance `json:"trajectory_provenance"`
+	NextCommand           string                              `json:"next_command"`
 }
 
 type externalRuntimeEvidence struct {
@@ -53,6 +72,7 @@ type externalRuntimeTrajectoryProvenance struct {
 
 type extractionState struct {
 	toolsSeen                  map[string]struct{}
+	forbiddenToolsSeen         map[string]struct{}
 	workflowID                 string
 	upstreamHandoffID          string
 	downstreamHandoffID        string
@@ -91,6 +111,18 @@ var requiredExternalRuntimeEvidenceTools = []string{
 	"coordination_evidence_summary",
 }
 
+var forbiddenExternalRuntimeEvidenceTools = map[string]struct{}{
+	"handoff_dispatch": {},
+	"a2a_deliver":      {},
+	"message/send":     {},
+	"message/stream":   {},
+	"sender_health":    {},
+	"sender_ready":     {},
+	"sender_stats":     {},
+	"sender_job_list":  {},
+	"sender_job_get":   {},
+}
+
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, err)
@@ -106,10 +138,12 @@ func run(args []string, stdout, _ io.Writer) error {
 
 	var eventsPath string
 	var outputPath string
+	var suitabilityReport bool
 	fs := flag.NewFlagSet("openclaw-external-runtime-evidence-extract", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&eventsPath, "events", "", "OpenClaw trajectory events JSONL path")
 	fs.StringVar(&outputPath, "output", "", "output JSON path")
+	fs.BoolVar(&suitabilityReport, "suitability-report", false, "write read-only suitability gap report")
 	if err := fs.Parse(args); err != nil {
 		return errors.New("unsupported option")
 	}
@@ -118,6 +152,23 @@ func run(args []string, stdout, _ io.Writer) error {
 	}
 	if strings.TrimSpace(eventsPath) == "" {
 		return errors.New("events path is required")
+	}
+
+	if suitabilityReport {
+		if strings.TrimSpace(outputPath) != "" {
+			return errors.New("output path is not supported for suitability report")
+		}
+		state, err := scanExternalRuntimeEvidence(strings.TrimSpace(eventsPath))
+		if err != nil {
+			return err
+		}
+		data, err := json.MarshalIndent(externalRuntimeEvidenceSuitabilityOutput{ExternalRuntimeEvidenceSuitability: state.suitabilityReport()}, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshal external runtime suitability report: %w", err)
+		}
+		data = append(data, '\n')
+		_, err = stdout.Write(data)
+		return err
 	}
 
 	output, err := extractExternalRuntimeEvidence(strings.TrimSpace(eventsPath))
@@ -152,20 +203,42 @@ func writeUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "Usage: openclaw-external-runtime-evidence-extract --events PATH [--output PATH]")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "Extract bounded, sanitized external runtime evidence with read-only provenance from OpenClaw trajectory events.")
+	_, _ = fmt.Fprintln(w, "Use --suitability-report for a read-only suitability gap report before extraction.")
 	_, _ = fmt.Fprintln(w)
 	_, _ = fmt.Fprintln(w, "Options:")
-	_, _ = fmt.Fprintln(w, "  --events PATH   OpenClaw trajectory events JSONL path")
-	_, _ = fmt.Fprintln(w, "  --output PATH   optional output JSON path")
+	_, _ = fmt.Fprintln(w, "  --events PATH          OpenClaw trajectory events JSONL path")
+	_, _ = fmt.Fprintln(w, "  --output PATH          optional output JSON path")
+	_, _ = fmt.Fprintln(w, "  --suitability-report   write read-only suitability gap report")
+}
+
+func newExtractionState() extractionState {
+	return extractionState{
+		toolsSeen:          map[string]struct{}{},
+		forbiddenToolsSeen: map[string]struct{}{},
+		observedEventTypes: map[string]struct{}{},
+	}
 }
 
 func extractExternalRuntimeEvidence(eventsPath string) (externalRuntimeEvidenceOutput, error) {
+	state, err := scanExternalRuntimeEvidence(eventsPath)
+	if err != nil {
+		return externalRuntimeEvidenceOutput{}, err
+	}
+	output, err := state.output()
+	if err != nil {
+		return externalRuntimeEvidenceOutput{}, err
+	}
+	return externalRuntimeEvidenceOutput{ExternalRuntimeEvidence: output}, nil
+}
+
+func scanExternalRuntimeEvidence(eventsPath string) (extractionState, error) {
 	file, err := os.Open(eventsPath)
 	if err != nil {
-		return externalRuntimeEvidenceOutput{}, fmt.Errorf("read events: %w", err)
+		return extractionState{}, fmt.Errorf("read events: %w", err)
 	}
 	defer file.Close()
 
-	state := extractionState{toolsSeen: map[string]struct{}{}, observedEventTypes: map[string]struct{}{}}
+	state := newExtractionState()
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	lineIndex := 0
@@ -177,14 +250,20 @@ func extractExternalRuntimeEvidence(eventsPath string) (externalRuntimeEvidenceO
 		lineIndex++
 		metadata, ok, err := openclawtrajectory.ExtractEventMetadata(line, clawsideServerName)
 		if err != nil {
-			return externalRuntimeEvidenceOutput{}, fmt.Errorf("parse OpenClaw trajectory events: %w", err)
+			return extractionState{}, fmt.Errorf("parse OpenClaw trajectory events: %w", err)
 		}
 		if ok {
 			state.observeMetadata(metadata)
+			if metadata.ToolResult && metadata.Server == clawsideServerName {
+				if _, forbidden := forbiddenExternalRuntimeEvidenceTools[metadata.Tool]; forbidden {
+					state.observeForbiddenTool(metadata.Tool)
+					continue
+				}
+			}
 		}
 		result, ok, err := openclawtrajectory.ExtractToolResult(line, clawsideServerName)
 		if err != nil {
-			return externalRuntimeEvidenceOutput{}, fmt.Errorf("parse OpenClaw trajectory events: %w", err)
+			return extractionState{}, fmt.Errorf("parse OpenClaw trajectory events: %w", err)
 		}
 		if !ok {
 			continue
@@ -192,14 +271,9 @@ func extractExternalRuntimeEvidence(eventsPath string) (externalRuntimeEvidenceO
 		state.observe(lineIndex, result.Tool, result.StructuredContent)
 	}
 	if err := scanner.Err(); err != nil {
-		return externalRuntimeEvidenceOutput{}, fmt.Errorf("scan events: %w", err)
+		return extractionState{}, fmt.Errorf("scan events: %w", err)
 	}
-
-	output, err := state.output()
-	if err != nil {
-		return externalRuntimeEvidenceOutput{}, err
-	}
-	return externalRuntimeEvidenceOutput{ExternalRuntimeEvidence: output}, nil
+	return state, nil
 }
 
 func (state *extractionState) observeMetadata(metadata openclawtrajectory.EventMetadata) {
@@ -214,11 +288,22 @@ func (state *extractionState) observeMetadata(metadata openclawtrajectory.EventM
 	state.nonClawsideEventCount++
 }
 
+func (state *extractionState) observeForbiddenTool(tool string) {
+	if strings.TrimSpace(tool) == "" {
+		return
+	}
+	state.toolsSeen[tool] = struct{}{}
+	state.forbiddenToolsSeen[tool] = struct{}{}
+}
+
 func (state *extractionState) observe(lineIndex int, tool string, content map[string]any) {
 	if tool == "" || content == nil {
 		return
 	}
 	state.toolsSeen[tool] = struct{}{}
+	if _, forbidden := forbiddenExternalRuntimeEvidenceTools[tool]; forbidden {
+		state.forbiddenToolsSeen[tool] = struct{}{}
+	}
 	switch tool {
 	case "handoff_create":
 		state.observeHandoffCreate(lineIndex, content)
@@ -403,11 +488,110 @@ func (state extractionState) sortedObservedEventTypes() []string {
 	return types
 }
 
+func (state extractionState) observedRequiredTools() []string {
+	observed := make([]string, 0, len(requiredExternalRuntimeEvidenceTools))
+	for _, required := range requiredExternalRuntimeEvidenceTools {
+		if _, ok := state.toolsSeen[required]; ok {
+			observed = append(observed, required)
+		}
+	}
+	return observed
+}
+
+func (state extractionState) missingTools() []string {
+	missing := make([]string, 0)
+	for _, required := range requiredExternalRuntimeEvidenceTools {
+		if _, ok := state.toolsSeen[required]; !ok {
+			missing = append(missing, required)
+		}
+	}
+	return missing
+}
+
+func (state extractionState) forbiddenTools() []string {
+	tools := make([]string, 0, len(state.forbiddenToolsSeen))
+	for tool := range state.forbiddenToolsSeen {
+		tools = append(tools, tool)
+	}
+	slices.Sort(tools)
+	return tools
+}
+
+func (state extractionState) missingGates() []string {
+	missing := make([]string, 0)
+	if state.nonClawsideEventCount == 0 {
+		missing = append(missing, "external_runtime_trajectory_observed")
+	}
+	if state.downstreamWorkflowMismatch {
+		missing = append(missing, "downstream_workflow_id_matched")
+	}
+	if state.workflowID == "" || state.upstreamHandoffID == "" || state.downstreamHandoffID == "" {
+		missing = append(missing, "workflow_and_handoff_ids_observed")
+	}
+	if !state.dependencyGateVerified {
+		missing = append(missing, "dependency_gate_verified")
+	}
+	if !state.reviewGateVerified {
+		missing = append(missing, "review_gate_verified")
+	}
+	if !state.downstreamReady {
+		missing = append(missing, "downstream_ready")
+	}
+	if state.workflowFinalStatus != "completed" || !state.upstreamCompleted || !state.downstreamCompleted {
+		missing = append(missing, "workflow_completed")
+	}
+	if !state.evidenceSummaryReady {
+		missing = append(missing, "evidence_summary_ready")
+	}
+	if !state.lifecycleOrderVerified() {
+		missing = append(missing, "lifecycle_order_verified")
+	}
+	if len(state.forbiddenToolsSeen) != 0 {
+		missing = append(missing, "forbidden_launch_or_delivery_tools_absent")
+	}
+	return missing
+}
+
+func (state extractionState) trajectoryProvenance() externalRuntimeTrajectoryProvenance {
+	return externalRuntimeTrajectoryProvenance{
+		SourceKind:                           "openclaw_events_jsonl_export",
+		ReadOnlyValidation:                   true,
+		ExternalRuntimeTrajectoryObserved:    state.nonClawsideEventCount != 0,
+		TrajectoryEventCount:                 state.trajectoryEventCount,
+		ClawsideToolResultCount:              state.clawsideToolResultCount,
+		NonClawsideEventCount:                state.nonClawsideEventCount,
+		ObservedEventTypes:                   state.sortedObservedEventTypes(),
+		LifecycleOrderVerified:               state.lifecycleOrderVerified(),
+		BoundedOutputSanitized:               true,
+		ForbiddenLaunchOrDeliveryToolsAbsent: len(state.forbiddenToolsSeen) == 0,
+	}
+}
+
+func (state extractionState) suitabilityReport() externalRuntimeEvidenceSuitability {
+	missingTools := state.missingTools()
+	missingGates := state.missingGates()
+	forbiddenTools := state.forbiddenTools()
+	return externalRuntimeEvidenceSuitability{
+		SchemaVersion:         externalRuntimeSuitabilitySchemaVersion,
+		Suitable:              len(missingTools) == 0 && len(missingGates) == 0 && len(forbiddenTools) == 0,
+		RequiredTools:         append([]string(nil), requiredExternalRuntimeEvidenceTools...),
+		ObservedRequiredTools: state.observedRequiredTools(),
+		MissingTools:          missingTools,
+		MissingGates:          missingGates,
+		ForbiddenTools:        forbiddenTools,
+		TrajectoryProvenance:  state.trajectoryProvenance(),
+		NextCommand:           "./scripts/dogfood_openclaw_external_runtime_evidence.sh --events <events-jsonl> --output ./external-runtime-evidence.json",
+	}
+}
+
 func (state extractionState) output() (externalRuntimeEvidence, error) {
 	for _, required := range requiredExternalRuntimeEvidenceTools {
 		if _, ok := state.toolsSeen[required]; !ok {
 			return externalRuntimeEvidence{}, errors.New("missing tool " + required + " in OpenClaw trajectory events")
 		}
+	}
+	if len(state.forbiddenToolsSeen) != 0 {
+		return externalRuntimeEvidence{}, errors.New("OpenClaw trajectory events included forbidden launch or delivery tools")
 	}
 	if state.nonClawsideEventCount == 0 {
 		return externalRuntimeEvidence{}, errors.New("OpenClaw trajectory events did not include non-Clawside runtime events")
@@ -450,18 +634,7 @@ func (state extractionState) output() (externalRuntimeEvidence, error) {
 		EvidenceSummaryReady:      true,
 		NoSenderDelivery:          true,
 		NoRuntimeLaunchByClawside: true,
-		TrajectoryProvenance: externalRuntimeTrajectoryProvenance{
-			SourceKind:                           "openclaw_events_jsonl_export",
-			ReadOnlyValidation:                   true,
-			ExternalRuntimeTrajectoryObserved:    true,
-			TrajectoryEventCount:                 state.trajectoryEventCount,
-			ClawsideToolResultCount:              state.clawsideToolResultCount,
-			NonClawsideEventCount:                state.nonClawsideEventCount,
-			ObservedEventTypes:                   state.sortedObservedEventTypes(),
-			LifecycleOrderVerified:               true,
-			BoundedOutputSanitized:               true,
-			ForbiddenLaunchOrDeliveryToolsAbsent: true,
-		},
+		TrajectoryProvenance:      state.trajectoryProvenance(),
 	}, nil
 }
 

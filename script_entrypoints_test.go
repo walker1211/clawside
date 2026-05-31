@@ -815,6 +815,48 @@ func TestPreflightOpenClawExternalRuntimeEvidenceScriptEntrypoint(t *testing.T) 
 	}
 }
 
+func TestReportOpenClawExternalRuntimeEvidenceSuitabilityScriptEntrypoint(t *testing.T) {
+	path := "scripts/report_openclaw_external_runtime_evidence_suitability.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, helpToken := range []string{"help", "--help", "-h"} {
+		if !strings.Contains(content, helpToken) {
+			t.Fatalf("expected %s to support help token %q", path, helpToken)
+		}
+	}
+	for _, want := range []string{
+		"EVENTS_PATH=\"\"",
+		"--events PATH",
+		"suitability",
+		"gap report",
+		"read-only",
+		"external-runtime-evidence",
+		"go run -C \"$ROOT_DIR\" ./cmd/openclaw-external-runtime-evidence-extract --events \"$EVENTS_PATH\" --suitability-report",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	if !strings.Contains(content, "--events)") || !strings.Contains(content, "EVENTS_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --events PATH", path)
+	}
+	for _, forbidden := range []string{"--command)", "--args)", "--cwd)", "--path)", "--prompt)", "--token)", "--session)", "--worker)", "--sender-base-url)", "--mcp-command)", "--chat-id)", "--telegram)", "message/send", "message/stream"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("%s must not accept unsafe flag or delivery string %q", path, forbidden)
+		}
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") || strings.Contains(content, "BASH_SOURCE") {
+		t.Fatalf("%s should avoid Bash arrays and BASH_SOURCE", path)
+	}
+}
+
 func TestOpenClawTruthPlaneExtractScriptEntrypoint(t *testing.T) {
 	path := "scripts/extract_openclaw_truth_plane_results.sh"
 	info, err := os.Stat(path)
@@ -1654,11 +1696,13 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 		wantTokens := []string{
 			"P38",
 			"P39",
+			"P40",
 			"external runtime evidence dogfood",
 			"cmd/openclaw-external-runtime-evidence-extract/",
 			"scripts/extract_openclaw_external_runtime_evidence.sh",
 			"scripts/dogfood_openclaw_external_runtime_evidence.sh",
 			"scripts/preflight_openclaw_external_runtime_evidence.sh",
+			"scripts/report_openclaw_external_runtime_evidence_suitability.sh",
 			"--events <events-jsonl>",
 			"--events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl",
 			"--output ./external-runtime-evidence.json",
@@ -1672,6 +1716,13 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 			"coordination_evidence_summary",
 			"schema_version",
 			"p37.external-runtime-trajectory.v1",
+			"p40.external-runtime-suitability.v1",
+			"suitability",
+			"gap report",
+			"suitable=true",
+			"missing_tools",
+			"missing_gates",
+			"forbidden_tools",
 			"trajectory_provenance",
 			"openclaw_events_jsonl_export",
 			"read-only provenance",
