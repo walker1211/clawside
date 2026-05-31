@@ -42,6 +42,7 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 | --- | --- |
 | 日常本地开发 | `./scripts/ci-local.sh clean` |
 | 私有 validation/readiness 聚合复验 | `./scripts/verify_private_readiness.sh` |
+| 私有真实 OpenClaw evidence 收口复验 | `./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir <export-dir>` |
 | A2A compatibility 和外部 client readiness | `./scripts/verify_clawside_a2a.sh` |
 | MCP tool surface 和 OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
 | 多项目 upstream/downstream/reviewer rehearsal | `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json` |
@@ -223,6 +224,14 @@ P42 增加私有 validation/readiness 聚合入口，用于 public 前的本地�
 ```
 
 它会依次运行 `./scripts/ci-local.sh clean`、`./scripts/verify_clawside_a2a.sh`、`./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`、带 `--profile external-runtime-evidence` 与 `testdata/openclaw-smoke/stage0-5/external-runtime-evidence.json` 的只读 fixture validation，以及 `./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh` checklist。它不会把仓库设为公开，不会创建 tag 或 release，不会 push，不会修改 GitHub 设置，不会触发 sender/Telegram delivery，也不会启动 OpenClaw/Claude/Kimi runtime、session、sandbox 或 model worker。GitHub readiness 仍然需要显式只读运行：`./scripts/github-readiness.sh <owner>/<repo>`。
+
+P43 用于在 public/release 前收口私有真实 OpenClaw external-runtime evidence loop。先在 Clawside 外部运行 OpenClaw，并把 redacted trajectory 导出到 `.openclaw/trajectory-exports/<export-dir>/events.jsonl`，然后运行：
+
+```bash
+./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir <export-dir>
+```
+
+该脚本会派生 repo-local events/output 路径，先运行 `./scripts/verify_private_readiness.sh`，再运行 `./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl --output ./external-runtime-evidence.json`。它不会把仓库设为公开，不会创建 tag 或 release，不会 push，不会修改 GitHub 设置，不会启动 OpenClaw/Claude/Kimi runtime、session、sandbox 或 model worker，不会触发 sender/Telegram delivery，也不接受任意 `--events` / `--output`、command/path/prompt/token/session/worker/sender/Telegram fields。
 
 该 evidence contract 只记录 IDs、required tool set、`schema_version`、`trajectory_provenance`、`no_sender_delivery=true` 和 `no_runtime_launch_by_clawside=true`；同时要求 dependency、reviewer、downstream-ready、completed-workflow、`coordination_evidence_summary`、`non_clawside_event_count > 0` 和 `lifecycle_order_verified=true` gates。此流程不启动 model worker，不启动 runtime session，不启动 sandbox，不触发 sender delivery，不触发 Telegram delivery，不保存也不打印 raw trajectory payloads，也不接受 arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields。`SENDER_AUTH_KEY` 和 `CLAWSIDE_A2A_AUTH_KEY` 保持分离，此 dogfood path 不复用这两个 auth key。
 

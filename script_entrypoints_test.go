@@ -1221,6 +1221,217 @@ func TestPrivateReadinessRejectsUnsafeFlags(t *testing.T) {
 	}
 }
 
+func TestPrivateOpenClawExternalRuntimeEvidenceClosureScriptEntrypoint(t *testing.T) {
+	path := "scripts/close_private_openclaw_external_runtime_evidence.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, helpToken := range []string{"help", "--help", "-h"} {
+		if !strings.Contains(content, helpToken) {
+			t.Fatalf("expected %s to support help token %q", path, helpToken)
+		}
+	}
+	for _, want := range []string{
+		"P43",
+		"private real OpenClaw external-runtime evidence closure",
+		"SCRIPT_NAME=\"./scripts/close_private_openclaw_external_runtime_evidence.sh\"",
+		"--export-dir",
+		"./.openclaw/trajectory-exports/$EXPORT_DIR/events.jsonl",
+		"./external-runtime-evidence.json",
+		"$ROOT_DIR/scripts/verify_private_readiness.sh\"",
+		"$ROOT_DIR/scripts/rerun_openclaw_external_runtime_evidence_workflow.sh\"",
+		"does not make the repository public",
+		"does not create tags or releases",
+		"does not trigger sender/Telegram delivery",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	for _, forbidden := range []string{"--events)", "--output)", "--command)", "--args)", "--cwd)", "--path)", "--prompt)", "--token)", "--session)", "--worker)", "--sender-base-url)", "--mcp-command)", "--chat-id)", "--telegram)", "git push", "git tag", "gh release", "gh repo edit", "gh api", "=()", "[@]", "BASH_SOURCE"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("%s must not contain %q", path, forbidden)
+		}
+	}
+}
+
+func TestPrivateOpenClawExternalRuntimeEvidenceClosureHelpIsSanitized(t *testing.T) {
+	path := "scripts/close_private_openclaw_external_runtime_evidence.sh"
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("resolve absolute script path: %v", err)
+	}
+
+	cmd := exec.Command(absolutePath, "help")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("expected help to exit 0: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+
+	output := stdout.String() + stderr.String()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	for _, forbidden := range []string{absolutePath, cwd} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("expected help output to avoid local path %q, got:\n%s", forbidden, output)
+		}
+	}
+	for _, want := range []string{
+		"usage: ./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir NAME",
+		".openclaw/trajectory-exports/<export-dir>/events.jsonl",
+		"does not make the repository public",
+		"does not create tags or releases",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected help output to contain %q, got:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestPrivateOpenClawExternalRuntimeEvidenceClosureRunsBoundedStagesInOrder(t *testing.T) {
+	rootDir := t.TempDir()
+	scriptsDir := filepath.Join(rootDir, "scripts")
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+		t.Fatalf("create scripts dir: %v", err)
+	}
+
+	scriptPath := filepath.Join(scriptsDir, "close_private_openclaw_external_runtime_evidence.sh")
+	writeExecutableTestScript(t, scriptPath, readTextFile(t, "scripts/close_private_openclaw_external_runtime_evidence.sh"))
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "verify_private_readiness.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'private-readiness\n' >> "$LOG_PATH"
+`)
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "rerun_openclaw_external_runtime_evidence_workflow.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'rerun %s\n' "$*" >> "$LOG_PATH"
+`)
+
+	logPath := filepath.Join(rootDir, "closure.log")
+	cmd := exec.Command(scriptPath, "--export-dir", "real-export")
+	cmd.Env = append(os.Environ(), "LOG_PATH="+logPath)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("expected private closure workflow to exit 0: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read workflow log: %v", err)
+	}
+	logText := string(logBytes)
+	for _, want := range []string{
+		"private-readiness\n",
+		"rerun --events ./.openclaw/trajectory-exports/real-export/events.jsonl --output ./external-runtime-evidence.json\n",
+	} {
+		if !strings.Contains(logText, want) {
+			t.Fatalf("expected workflow log to contain %q, got %q", want, logText)
+		}
+	}
+	if strings.Index(logText, "private-readiness") > strings.Index(logText, "rerun --events") {
+		t.Fatalf("expected private readiness before rerun, got log %q", logText)
+	}
+	if !strings.Contains(stdout.String(), "P43 private real OpenClaw external-runtime evidence closure complete") {
+		t.Fatalf("expected stdout to contain closure summary, got:\n%s", stdout.String())
+	}
+}
+
+func TestPrivateOpenClawExternalRuntimeEvidenceClosureRejectsUnsafeFlags(t *testing.T) {
+	path := "scripts/close_private_openclaw_external_runtime_evidence.sh"
+	for _, flag := range []string{"--events", "--output", "--command", "--args", "--cwd", "--path", "--prompt", "--token", "--session", "--worker", "--sender-base-url", "--mcp-command", "--chat-id", "--telegram"} {
+		t.Run(flag, func(t *testing.T) {
+			cmd := exec.Command(path, flag, "value")
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err == nil {
+				t.Fatalf("expected %s to be rejected", flag)
+			}
+			output := stdout.String() + stderr.String()
+			if !strings.Contains(output, "usage: ./scripts/close_private_openclaw_external_runtime_evidence.sh") {
+				t.Fatalf("expected sanitized usage for %s, got:\n%s", flag, output)
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Fatalf("get working directory: %v", err)
+			}
+			if strings.Contains(output, cwd) {
+				t.Fatalf("expected output for %s to avoid local path %q, got:\n%s", flag, cwd, output)
+			}
+		})
+	}
+}
+
+func TestPrivateOpenClawExternalRuntimeEvidenceClosureRejectsUnsafeExportDir(t *testing.T) {
+	rootDir := t.TempDir()
+	scriptsDir := filepath.Join(rootDir, "scripts")
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+		t.Fatalf("create scripts dir: %v", err)
+	}
+
+	path := filepath.Join(scriptsDir, "close_private_openclaw_external_runtime_evidence.sh")
+	writeExecutableTestScript(t, path, readTextFile(t, "scripts/close_private_openclaw_external_runtime_evidence.sh"))
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "verify_private_readiness.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'unexpected readiness\n'
+`)
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "rerun_openclaw_external_runtime_evidence_workflow.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'unexpected rerun\n'
+`)
+
+	unsafeValues := []string{"/tmp/export", "../export", "nested/export", "export with spaces", "export;rm", ".", "-", "--events", "--output"}
+	for _, value := range unsafeValues {
+		t.Run(value, func(t *testing.T) {
+			cmd := exec.Command(path, "--export-dir", value)
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err == nil {
+				t.Fatalf("expected export dir %q to be rejected, got stdout:\n%s\nstderr:\n%s", value, stdout.String(), stderr.String())
+			}
+			output := stdout.String() + stderr.String()
+			if !strings.Contains(output, "usage: ./scripts/close_private_openclaw_external_runtime_evidence.sh") {
+				t.Fatalf("expected sanitized usage for export dir %q, got:\n%s", value, output)
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Fatalf("get working directory: %v", err)
+			}
+			if strings.Contains(output, cwd) {
+				t.Fatalf("expected output for export dir %q to avoid local path %q, got:\n%s", value, cwd, output)
+			}
+		})
+	}
+
+	cmd := exec.Command(path, "--export-dir")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err == nil {
+		t.Fatalf("expected missing export dir value to be rejected")
+	}
+	if !strings.Contains(stdout.String()+stderr.String(), "usage: ./scripts/close_private_openclaw_external_runtime_evidence.sh") {
+		t.Fatalf("expected sanitized usage for missing export dir value, got:\n%s%s", stdout.String(), stderr.String())
+	}
+}
+
 func TestOpenClawTruthPlaneExtractScriptEntrypoint(t *testing.T) {
 	path := "scripts/extract_openclaw_truth_plane_results.sh"
 	info, err := os.Stat(path)
@@ -2160,6 +2371,40 @@ func TestPrivateReadinessDocsAndExamples(t *testing.T) {
 			}
 		} else {
 			for _, want := range []string{"does not make the repository public", "does not create tags or releases"} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("expected %s to contain %q", path, want)
+				}
+			}
+		}
+	}
+}
+
+func TestPrivateOpenClawExternalRuntimeEvidenceClosureDocsAndExamples(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		content := readTextFile(t, path)
+		for _, want := range []string{
+			"P43",
+			"./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir <export-dir>",
+			".openclaw/trajectory-exports/<export-dir>/events.jsonl",
+			"./external-runtime-evidence.json",
+			"./scripts/verify_private_readiness.sh",
+			"./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh",
+		} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", path, want)
+			}
+		}
+		if strings.Contains(content, "/Users/zhangyoujun/Projects/clawside") {
+			t.Fatalf("expected %s to avoid local absolute paths", path)
+		}
+		if path == "README.zh-CN.md" {
+			for _, want := range []string{"不会把仓库设为公开", "不会创建 tag 或 release", "不会 push", "不会修改 GitHub 设置", "不会触发 sender/Telegram delivery", "不会启动 OpenClaw/Claude/Kimi runtime、session、sandbox 或 model worker", "不接受任意 `--events` / `--output`"} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("expected %s to contain %q", path, want)
+				}
+			}
+		} else {
+			for _, want := range []string{"does not make the repository public", "does not create tags or releases", "does not trigger sender/Telegram delivery", "does not accept arbitrary `--events` / `--output`"} {
 				if !strings.Contains(content, want) {
 					t.Fatalf("expected %s to contain %q", path, want)
 				}

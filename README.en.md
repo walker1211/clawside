@@ -42,6 +42,7 @@ Which verifier should I run?
 | --- | --- |
 | Day-to-day local development | `./scripts/ci-local.sh clean` |
 | Private validation/readiness aggregate | `./scripts/verify_private_readiness.sh` |
+| Private real OpenClaw evidence closure | `./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir <export-dir>` |
 | A2A compatibility and external client readiness | `./scripts/verify_clawside_a2a.sh` |
 | MCP tool surface and OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
 | Multi-project upstream/downstream/reviewer rehearsal | `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json` |
@@ -223,6 +224,14 @@ P42 adds a private validation/readiness aggregate for local pre-public checks:
 ```
 
 It runs `./scripts/ci-local.sh clean`, `./scripts/verify_clawside_a2a.sh`, `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`, read-only fixture validation with `--profile external-runtime-evidence` and `testdata/openclaw-smoke/stage0-5/external-runtime-evidence.json`, and the `./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh` checklist. It does not make the repository public, does not create tags or releases, does not push, does not change GitHub settings, does not trigger sender/Telegram delivery, and does not launch OpenClaw/Claude/Kimi runtimes, sessions, sandboxes, or model workers. GitHub readiness remains explicit and read-only via `./scripts/github-readiness.sh <owner>/<repo>`.
+
+P43 closes the private real OpenClaw external-runtime evidence loop before public/release. First run OpenClaw externally and export a redacted trajectory to `.openclaw/trajectory-exports/<export-dir>/events.jsonl`, then run:
+
+```bash
+./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir <export-dir>
+```
+
+The script derives repo-local events/output paths and runs `./scripts/verify_private_readiness.sh`, then `./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl --output ./external-runtime-evidence.json`. It does not make the repository public, does not create tags or releases, does not push, does not mutate GitHub settings, does not launch OpenClaw/Claude/Kimi runtimes, sessions, sandboxes, or model workers, does not trigger sender/Telegram delivery, and does not accept arbitrary `--events` / `--output`, command/path/prompt/token/session/worker/sender/Telegram fields.
 
 The evidence contract records only IDs, the required tool set, `schema_version`, `trajectory_provenance`, `no_sender_delivery=true`, and `no_runtime_launch_by_clawside=true`; it also requires dependency, reviewer, downstream-ready, completed-workflow, `coordination_evidence_summary`, `non_clawside_event_count > 0`, and `lifecycle_order_verified=true` gates. This flow does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender delivery, does not trigger Telegram delivery, does not store or print raw trajectory payloads, and does not accept arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields. `SENDER_AUTH_KEY` and `CLAWSIDE_A2A_AUTH_KEY` remain separate and are not reused by this dogfood path.
 
