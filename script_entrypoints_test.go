@@ -1043,6 +1043,184 @@ func writeExecutableTestScript(t *testing.T, path string, content string) {
 	}
 }
 
+func TestPrivateReadinessScriptEntrypoint(t *testing.T) {
+	path := "scripts/verify_private_readiness.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, helpToken := range []string{"help", "--help", "-h"} {
+		if !strings.Contains(content, helpToken) {
+			t.Fatalf("expected %s to support help token %q", path, helpToken)
+		}
+	}
+	for _, want := range []string{
+		"P42",
+		"private/local validation only",
+		"private validation/readiness",
+		"SCRIPT_NAME=\"./scripts/verify_private_readiness.sh\"",
+		"$ROOT_DIR/scripts/ci-local.sh\" clean",
+		"$ROOT_DIR/scripts/verify_clawside_a2a.sh\"",
+		"$ROOT_DIR/scripts/verify_openclaw_mcp.sh\" --profile private-coordination --json",
+		"--profile external-runtime-evidence",
+		"--sender-base-url \"\"",
+		"--mcp-command \"\"",
+		"--openclaw-external-runtime-evidence testdata/openclaw-smoke/stage0-5/external-runtime-evidence.json",
+		"$ROOT_DIR/scripts/rerun_openclaw_external_runtime_evidence_workflow.sh\"",
+		"github-readiness.sh <owner>/<repo>",
+		"tag-release.sh --verify-only",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	for _, forbidden := range []string{"--command)", "--args)", "--cwd)", "--path)", "--prompt)", "--token)", "--session)", "--worker)", "--sender-base-url)", "--mcp-command)", "--chat-id)", "--telegram)", "--events)", "--output)", "git push", "git tag", "gh release", "gh repo edit", "gh api", "=()", "[@]", "BASH_SOURCE"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("%s must not contain %q", path, forbidden)
+		}
+	}
+}
+
+func TestPrivateReadinessHelpIsSanitized(t *testing.T) {
+	path := "scripts/verify_private_readiness.sh"
+	absolutePath, err := filepath.Abs(path)
+	if err != nil {
+		t.Fatalf("resolve absolute script path: %v", err)
+	}
+
+	cmd := exec.Command(absolutePath, "help")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("expected help to exit 0: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+
+	output := stdout.String() + stderr.String()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	for _, forbidden := range []string{absolutePath, cwd} {
+		if strings.Contains(output, forbidden) {
+			t.Fatalf("expected help output to avoid local path %q, got:\n%s", forbidden, output)
+		}
+	}
+	for _, want := range []string{
+		"usage: ./scripts/verify_private_readiness.sh",
+		"P42",
+		"private/local validation only",
+		"does not make the repository public",
+		"does not create tags or releases",
+	} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected help output to contain %q, got:\n%s", want, stdout.String())
+		}
+	}
+}
+
+func TestPrivateReadinessRunsBoundedStagesInOrder(t *testing.T) {
+	rootDir := t.TempDir()
+	scriptsDir := filepath.Join(rootDir, "scripts")
+	if err := os.MkdirAll(scriptsDir, 0o755); err != nil {
+		t.Fatalf("create scripts dir: %v", err)
+	}
+
+	scriptPath := filepath.Join(scriptsDir, "verify_private_readiness.sh")
+	writeExecutableTestScript(t, scriptPath, readTextFile(t, "scripts/verify_private_readiness.sh"))
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "ci-local.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'ci-local %s\n' "$*" >> "$LOG_PATH"
+`)
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "verify_clawside_a2a.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'a2a\n' >> "$LOG_PATH"
+`)
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "verify_openclaw_mcp.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'mcp %s\n' "$*" >> "$LOG_PATH"
+`)
+	writeExecutableTestScript(t, filepath.Join(scriptsDir, "rerun_openclaw_external_runtime_evidence_workflow.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+if [[ $# -ne 0 ]]; then
+  printf 'p41-checklist args=%s\n' "$*" >> "$LOG_PATH"
+else
+  printf 'p41-checklist no-args\n' >> "$LOG_PATH"
+fi
+`)
+
+	logPath := filepath.Join(rootDir, "workflow.log")
+	cmd := exec.Command(scriptPath)
+	cmd.Env = append(os.Environ(), "LOG_PATH="+logPath)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("expected private readiness workflow to exit 0: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+
+	logBytes, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("read workflow log: %v", err)
+	}
+	logText := string(logBytes)
+	lastIndex := -1
+	for _, want := range []string{
+		"ci-local clean",
+		"a2a",
+		"private-coordination",
+		"external-runtime-evidence",
+		"testdata/openclaw-smoke/stage0-5/external-runtime-evidence.json",
+		"p41-checklist no-args",
+	} {
+		index := strings.Index(logText, want)
+		if index == -1 {
+			t.Fatalf("expected workflow log to contain %q, got %q", want, logText)
+		}
+		if index < lastIndex {
+			t.Fatalf("expected %q to appear after previous stages, got log %q", want, logText)
+		}
+		lastIndex = index
+	}
+	if !strings.Contains(stdout.String(), "Remaining before public/release") {
+		t.Fatalf("expected stdout to contain remaining summary, got:\n%s", stdout.String())
+	}
+}
+
+func TestPrivateReadinessRejectsUnsafeFlags(t *testing.T) {
+	path := "scripts/verify_private_readiness.sh"
+	for _, flag := range []string{"--command", "--args", "--cwd", "--path", "--prompt", "--token", "--session", "--worker", "--sender-base-url", "--mcp-command", "--chat-id", "--telegram", "--events", "--output"} {
+		t.Run(flag, func(t *testing.T) {
+			cmd := exec.Command(path, flag, "value")
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err == nil {
+				t.Fatalf("expected %s to be rejected", flag)
+			}
+			output := stdout.String() + stderr.String()
+			if !strings.Contains(output, "usage: ./scripts/verify_private_readiness.sh") {
+				t.Fatalf("expected sanitized usage for %s, got:\n%s", flag, output)
+			}
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Fatalf("get working directory: %v", err)
+			}
+			if strings.Contains(output, cwd) {
+				t.Fatalf("expected output for %s to avoid local path %q, got:\n%s", flag, cwd, output)
+			}
+		})
+	}
+}
+
 func TestOpenClawTruthPlaneExtractScriptEntrypoint(t *testing.T) {
 	path := "scripts/extract_openclaw_truth_plane_results.sh"
 	info, err := os.Stat(path)
@@ -1948,6 +2126,43 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 		for _, want := range wantTokens {
 			if !strings.Contains(content, want) {
 				t.Fatalf("expected %s to contain %q", path, want)
+			}
+		}
+	}
+}
+
+func TestPrivateReadinessDocsAndExamples(t *testing.T) {
+	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+		content := readTextFile(t, path)
+		for _, want := range []string{
+			"P42",
+			"./scripts/verify_private_readiness.sh",
+			"./scripts/ci-local.sh clean",
+			"./scripts/verify_clawside_a2a.sh",
+			"./scripts/verify_openclaw_mcp.sh --profile private-coordination --json",
+			"--profile external-runtime-evidence",
+			"testdata/openclaw-smoke/stage0-5/external-runtime-evidence.json",
+			"./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh",
+			"./scripts/github-readiness.sh <owner>/<repo>",
+		} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", path, want)
+			}
+		}
+		if strings.Contains(content, "/Users/zhangyoujun/Projects/clawside") {
+			t.Fatalf("expected %s to avoid local absolute paths", path)
+		}
+		if path == "README.zh-CN.md" {
+			for _, want := range []string{"不会把仓库设为公开", "不会创建 tag 或 release"} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("expected %s to contain %q", path, want)
+				}
+			}
+		} else {
+			for _, want := range []string{"does not make the repository public", "does not create tags or releases"} {
+				if !strings.Contains(content, want) {
+					t.Fatalf("expected %s to contain %q", path, want)
+				}
 			}
 		}
 	}

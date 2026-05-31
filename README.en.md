@@ -41,6 +41,7 @@ Which verifier should I run?
 | Situation | Command |
 | --- | --- |
 | Day-to-day local development | `./scripts/ci-local.sh clean` |
+| Private validation/readiness aggregate | `./scripts/verify_private_readiness.sh` |
 | A2A compatibility and external client readiness | `./scripts/verify_clawside_a2a.sh` |
 | MCP tool surface and OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
 | Multi-project upstream/downstream/reviewer rehearsal | `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json` |
@@ -214,6 +215,14 @@ P41 packages the real OpenClaw rerun into a repeatable workflow without turning 
 ```
 
 The P41 script runs local bounded verification only after an export exists: P39 preflight, then P40 suitability, then the P38 dogfood wrapper only when `suitable=true`. If the trajectory is not suitable, it prints the bounded gap report and `dogfood wrapper was not run`. It does not launch OpenClaw/Claude/Kimi runtime, sessions, sandboxes, or model workers; it does not trigger sender/Telegram delivery; and it uses only placeholders in public docs.
+
+P42 adds a private validation/readiness aggregate for local pre-public checks:
+
+```bash
+./scripts/verify_private_readiness.sh
+```
+
+It runs `./scripts/ci-local.sh clean`, `./scripts/verify_clawside_a2a.sh`, `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`, read-only fixture validation with `--profile external-runtime-evidence` and `testdata/openclaw-smoke/stage0-5/external-runtime-evidence.json`, and the `./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh` checklist. It does not make the repository public, does not create tags or releases, does not push, does not change GitHub settings, does not trigger sender/Telegram delivery, and does not launch OpenClaw/Claude/Kimi runtimes, sessions, sandboxes, or model workers. GitHub readiness remains explicit and read-only via `./scripts/github-readiness.sh <owner>/<repo>`.
 
 The evidence contract records only IDs, the required tool set, `schema_version`, `trajectory_provenance`, `no_sender_delivery=true`, and `no_runtime_launch_by_clawside=true`; it also requires dependency, reviewer, downstream-ready, completed-workflow, `coordination_evidence_summary`, `non_clawside_event_count > 0`, and `lifecycle_order_verified=true` gates. This flow does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender delivery, does not trigger Telegram delivery, does not store or print raw trajectory payloads, and does not accept arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields. `SENDER_AUTH_KEY` and `CLAWSIDE_A2A_AUTH_KEY` remain separate and are not reused by this dogfood path.
 
