@@ -175,6 +175,28 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
   --output ./external-runtime-evidence.json
 ```
 
+P39 增加一个只读 preflight/finder，用来查找本地 OpenClaw exports。它只扫描已忽略的 repo-local 路径 `.openclaw/trajectory-exports/<export-dir>/events.jsonl`，只打印 bounded file metadata 和 next command，不打印 raw trajectory payloads：
+
+```bash
+./scripts/preflight_openclaw_external_runtime_evidence.sh
+```
+
+选定某个 export 后，用 preflight 打印准确的 end-to-end wrapper 命令：
+
+```bash
+./scripts/preflight_openclaw_external_runtime_evidence.sh \
+  --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output ./external-runtime-evidence.json
+```
+
+真正执行 extraction + read-only validation 时，显式运行 P38 wrapper：
+
+```bash
+./scripts/dogfood_openclaw_external_runtime_evidence.sh \
+  --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output ./external-runtime-evidence.json
+```
+
 该 evidence contract 只记录 IDs、required tool set、`schema_version`、`trajectory_provenance`、`no_sender_delivery=true` 和 `no_runtime_launch_by_clawside=true`；同时要求 dependency、reviewer、downstream-ready、completed-workflow、`coordination_evidence_summary`、`non_clawside_event_count > 0` 和 `lifecycle_order_verified=true` gates。此流程不启动 model worker，不启动 runtime session，不启动 sandbox，不触发 sender delivery，不触发 Telegram delivery，不保存也不打印 raw trajectory payloads，也不接受 arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields。`SENDER_AUTH_KEY` 和 `CLAWSIDE_A2A_AUTH_KEY` 保持分离，此 dogfood path 不复用这两个 auth key。
 
 在宣称 public-readiness 或 release 前，只运行只读检查：

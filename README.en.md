@@ -175,6 +175,28 @@ Or run the one-step local dogfood wrapper, which performs the same extraction an
   --output ./external-runtime-evidence.json
 ```
 
+P39 adds a read-only preflight/finder for local OpenClaw exports. It scans only the ignored repo-local path `.openclaw/trajectory-exports/<export-dir>/events.jsonl`, prints only bounded file metadata and the next command, and does not print raw trajectory payloads:
+
+```bash
+./scripts/preflight_openclaw_external_runtime_evidence.sh
+```
+
+After selecting an export, ask preflight to show the exact end-to-end wrapper command:
+
+```bash
+./scripts/preflight_openclaw_external_runtime_evidence.sh \
+  --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output ./external-runtime-evidence.json
+```
+
+Run the P38 wrapper explicitly for the actual extraction plus read-only validation step:
+
+```bash
+./scripts/dogfood_openclaw_external_runtime_evidence.sh \
+  --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl \
+  --output ./external-runtime-evidence.json
+```
+
 The evidence contract records only IDs, the required tool set, `schema_version`, `trajectory_provenance`, `no_sender_delivery=true`, and `no_runtime_launch_by_clawside=true`; it also requires dependency, reviewer, downstream-ready, completed-workflow, `coordination_evidence_summary`, `non_clawside_event_count > 0`, and `lifecycle_order_verified=true` gates. This flow does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender delivery, does not trigger Telegram delivery, does not store or print raw trajectory payloads, and does not accept arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields. `SENDER_AUTH_KEY` and `CLAWSIDE_A2A_AUTH_KEY` remain separate and are not reused by this dogfood path.
 
 Before making any public-readiness or release claim, keep verification read-only:

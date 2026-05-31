@@ -766,6 +766,55 @@ func TestDogfoodOpenClawExternalRuntimeEvidenceScriptEntrypoint(t *testing.T) {
 	}
 }
 
+func TestPreflightOpenClawExternalRuntimeEvidenceScriptEntrypoint(t *testing.T) {
+	path := "scripts/preflight_openclaw_external_runtime_evidence.sh"
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("expected %s to exist: %v", path, err)
+	}
+	if info.Mode()&0o111 == 0 {
+		t.Fatalf("expected %s to be executable", path)
+	}
+
+	content := readTextFile(t, path)
+	for _, helpToken := range []string{"help", "--help", "-h"} {
+		if !strings.Contains(content, helpToken) {
+			t.Fatalf("expected %s to support help token %q", path, helpToken)
+		}
+	}
+	for _, want := range []string{
+		"EVENTS_PATH=\"\"",
+		"OUTPUT_PATH=\"\"",
+		"TRAJECTORY_EXPORTS_DIR=\"$ROOT_DIR/.openclaw/trajectory-exports\"",
+		".openclaw/trajectory-exports",
+		"events.jsonl",
+		"--events PATH",
+		"--output PATH",
+		"dogfood_openclaw_external_runtime_evidence.sh",
+		"read-only",
+		"wc -c",
+		"wc -l",
+	} {
+		if !strings.Contains(content, want) {
+			t.Fatalf("expected %s to contain %q", path, want)
+		}
+	}
+	if !strings.Contains(content, "--events)") || !strings.Contains(content, "EVENTS_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --events PATH", path)
+	}
+	if !strings.Contains(content, "--output)") || !strings.Contains(content, "OUTPUT_PATH=\"$2\"") {
+		t.Fatalf("expected %s to parse --output PATH", path)
+	}
+	for _, forbidden := range []string{"scripts/extract_openclaw_external_runtime_evidence.sh", "scripts/verify_openclaw_mcp.sh", "--command)", "--args)", "--cwd)", "--path)", "--prompt)", "--token)", "--session)", "--worker)", "--sender-base-url)", "--mcp-command)", "--chat-id)", "--telegram)", "message/send", "message/stream"} {
+		if strings.Contains(content, forbidden) {
+			t.Fatalf("%s must not accept unsafe flag, delivery string, or bypass the dogfood wrapper with %q", path, forbidden)
+		}
+	}
+	if strings.Contains(content, "=()") || strings.Contains(content, "[@]") {
+		t.Fatalf("%s should avoid Bash arrays for Bash 3.2 with set -u", path)
+	}
+}
+
 func TestOpenClawTruthPlaneExtractScriptEntrypoint(t *testing.T) {
 	path := "scripts/extract_openclaw_truth_plane_results.sh"
 	info, err := os.Stat(path)
@@ -1604,14 +1653,19 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 		content := readTextFile(t, path)
 		wantTokens := []string{
 			"P38",
+			"P39",
 			"external runtime evidence dogfood",
 			"cmd/openclaw-external-runtime-evidence-extract/",
 			"scripts/extract_openclaw_external_runtime_evidence.sh",
 			"scripts/dogfood_openclaw_external_runtime_evidence.sh",
+			"scripts/preflight_openclaw_external_runtime_evidence.sh",
 			"--events <events-jsonl>",
+			"--events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl",
 			"--output ./external-runtime-evidence.json",
 			"--profile external-runtime-evidence",
 			"--openclaw-external-runtime-evidence ./external-runtime-evidence.json",
+			".openclaw/trajectory-exports/<export-dir>/events.jsonl",
+			"bounded file metadata",
 			"events.jsonl",
 			"agent_register",
 			"blocked_work",
