@@ -160,6 +160,29 @@ func TestApplyEventRejectsCompletedWithoutApprovedReview(t *testing.T) {
 	}
 }
 
+func TestApplyEventCompletesSubmittedHandoffWithReviewerActorWhenReviewNotRequired(t *testing.T) {
+	writer := ActorRef{Type: ActorAgent, ID: "writer"}
+	machine := NewStateMachine(Handoff{
+		State:         StateSubmitted,
+		TaskKind:      TaskGeneric,
+		ReceiverActor: writer,
+		CurrentOwner:  writer,
+		ReviewerActor: ActorRef{Type: ActorAgent, ID: "reviewer"},
+	})
+
+	handoff, decision := machine.Apply(EventRecord{
+		Type:          EventCompleted,
+		ProducerActor: writer,
+		SubjectActor:  writer,
+	})
+	if !decision.Accepted {
+		t.Fatalf("expected completed to be accepted, got rejection: %s", decision.Reason)
+	}
+	if handoff.State != StateCompleted {
+		t.Fatalf("expected completed state, got %s", handoff.State)
+	}
+}
+
 func TestApplyEventTransportRequestedMovesCreatedToDispatched(t *testing.T) {
 	machine := NewStateMachine(Handoff{State: StateCreated})
 

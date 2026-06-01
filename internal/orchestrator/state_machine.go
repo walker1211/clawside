@@ -236,7 +236,7 @@ func (h Handoff) requiresArtifacts() bool {
 }
 
 func (h Handoff) requiresReview() bool {
-	return h.TaskKind == TaskReviewRequired || h.NeedsReview || h.ReviewerActor.ID != ""
+	return h.TaskKind == TaskReviewRequired || h.NeedsReview
 }
 
 func (h Handoff) requiresSubmitted() bool {
