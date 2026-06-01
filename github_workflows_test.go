@@ -102,6 +102,66 @@ func TestReadmeOperatorIntegratorGuide(t *testing.T) {
 	}
 }
 
+func TestFinalClosureDocs(t *testing.T) {
+	for _, tc := range []struct {
+		path string
+		want []string
+	}{
+		{
+			path: "README.en.md",
+			want: []string{
+				"./scripts/final_closure_checklist.sh",
+				"./scripts/public_readiness_dry_run.sh",
+				"./scripts/release_evidence_dry_run.sh",
+				"private/local closure",
+				"does not make the repository public",
+				"does not push",
+				"does not create tags or releases",
+				"does not mutate GitHub settings",
+				"does not launch runtimes",
+				"does not trigger sender/Telegram delivery",
+			},
+		},
+		{
+			path: "README.zh-CN.md",
+			want: []string{
+				"./scripts/final_closure_checklist.sh",
+				"./scripts/public_readiness_dry_run.sh",
+				"./scripts/release_evidence_dry_run.sh",
+				"private/local closure",
+				"不会把仓库设为公开",
+				"不会 push",
+				"不会创建 tag 或 release",
+				"不会修改 GitHub 设置",
+				"不会启动 runtime",
+				"不会触发 sender/Telegram delivery",
+			},
+		},
+	} {
+		contentBytes, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("expected %s to exist: %v", tc.path, err)
+		}
+		content := string(contentBytes)
+		for _, want := range tc.want {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", tc.path, want)
+			}
+		}
+	}
+
+	contributingBytes, err := os.ReadFile("CONTRIBUTING.md")
+	if err != nil {
+		t.Fatalf("expected CONTRIBUTING.md to exist: %v", err)
+	}
+	contributing := string(contributingBytes)
+	for _, want := range []string{"scripts/final_closure_checklist.sh", "explicit maintainer authorization", "tags", "releases", "repository visibility", "GitHub settings"} {
+		if !strings.Contains(contributing, want) {
+			t.Fatalf("expected CONTRIBUTING.md to contain %q", want)
+		}
+	}
+}
+
 func TestRootReadmeLanguageSwitch(t *testing.T) {
 	contentBytes, err := os.ReadFile("README.md")
 	if err != nil {

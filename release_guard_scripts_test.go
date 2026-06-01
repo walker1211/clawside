@@ -113,6 +113,69 @@ func TestInstallHooksInstallsIntoRepoWhenRunOutsideRoot(t *testing.T) {
 	}
 }
 
+func TestReleaseEvidenceDryRunRunsManifestThenTagVerifyOnly(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/release_evidence_dry_run.sh")
+	writeFile(t, filepath.Join(repo, "scripts", "tag-release.sh"), `#!/usr/bin/env bash
+set -euo pipefail
+case " $* " in
+  *' --verify-only '*) ;;
+  *) printf 'missing --verify-only\n' >&2; exit 1 ;;
+esac
+case " $* " in
+  *' --authorize-tag-push '*) printf 'unexpected authorize flag\n' >&2; exit 1 ;;
+esac
+printf 'tag-release-verify-only\n' >> "$TAG_RELEASE_ORDER_LOG"
+`)
+	if err := os.Chmod(filepath.Join(repo, "scripts", "tag-release.sh"), 0o755); err != nil {
+		t.Fatalf("chmod tag-release.sh: %v", err)
+	}
+	bundleDir := filepath.Join(repo, "release-evidence", "bundle")
+	writeFile(t, filepath.Join(bundleDir, "manifest.json"), "{}\n")
+	orderLog := filepath.Join(t.TempDir(), "order.log")
+	binDir := t.TempDir()
+	writeFile(t, filepath.Join(binDir, "go"), `#!/usr/bin/env bash
+set -euo pipefail
+printf 'verify-manifest\n' >> "$TAG_RELEASE_ORDER_LOG"
+`)
+	if err := os.Chmod(filepath.Join(binDir, "go"), 0o755); err != nil {
+		t.Fatalf("chmod go stub: %v", err)
+	}
+	env := []string{"TAG_RELEASE_ORDER_LOG=" + orderLog, "PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH")}
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/release_evidence_dry_run.sh", env, "--evidence-bundle", bundleDir, "--tag", "v0.0.0-dry-run")
+	if err != nil {
+		t.Fatalf("release_evidence_dry_run.sh failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	assertOrderLog(t, env, "verify-manifest\ntag-release-verify-only\n", stdout, stderr)
+	if !strings.Contains(stdout+stderr, "P45_RELEASE_EVIDENCE_DRY_RUN_PASS") {
+		t.Fatalf("expected dry-run pass marker, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+func TestReleaseEvidenceDryRunRejectsAuthorizeTagPush(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/release_evidence_dry_run.sh")
+	bundleDir := filepath.Join(repo, "release-evidence", "bundle")
+	writeFile(t, filepath.Join(bundleDir, "manifest.json"), "{}\n")
+	stdout, stderr, err := runScript(t, repo, "scripts/release_evidence_dry_run.sh", "--authorize-tag-push", "--evidence-bundle", bundleDir)
+	if err == nil {
+		t.Fatalf("expected authorize flag to be rejected")
+	}
+	if !strings.Contains(stdout+stderr, "usage: ./scripts/release_evidence_dry_run.sh") {
+		t.Fatalf("expected sanitized usage, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+func TestReleaseEvidenceDryRunRequiresEvidenceBundle(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/release_evidence_dry_run.sh")
+	stdout, stderr, err := runScript(t, repo, "scripts/release_evidence_dry_run.sh")
+	if err == nil {
+		t.Fatalf("expected missing evidence bundle to fail")
+	}
+	if !strings.Contains(stdout+stderr, "usage: ./scripts/release_evidence_dry_run.sh") {
+		t.Fatalf("expected sanitized usage, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
 func TestTagReleaseRequiresEvidenceBundleBeforeTagging(t *testing.T) {
 	repo := newTempGitRepoWithTagRelease(t, "#!/usr/bin/env bash\nset -euo pipefail\n")
 
@@ -222,6 +285,154 @@ func assertOrderLog(t *testing.T, env []string, want string, stdout string, stde
 	}
 	if string(order) != want {
 		t.Fatalf("unexpected gate order:\n%s", order)
+	}
+}
+
+func TestFinalClosureChecklistRunsDocsP44AndP45(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/final_closure_checklist.sh")
+	writeFile(t, filepath.Join(repo, "external-runtime-evidence.json"), `{"ok":true}`)
+	bundleDir := filepath.Join(repo, "release-evidence", "bundle")
+	writeFile(t, filepath.Join(bundleDir, "manifest.json"), "{}\n")
+	writeFile(t, filepath.Join(repo, "scripts", "public_readiness_dry_run.sh"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'p44\\n' >> \"$CLOSURE_ORDER_LOG\"\n")
+	writeFile(t, filepath.Join(repo, "scripts", "release_evidence_dry_run.sh"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'p45\\n' >> \"$CLOSURE_ORDER_LOG\"\n")
+	for _, script := range []string{"public_readiness_dry_run.sh", "release_evidence_dry_run.sh"} {
+		if err := os.Chmod(filepath.Join(repo, "scripts", script), 0o755); err != nil {
+			t.Fatalf("chmod %s: %v", script, err)
+		}
+	}
+	binDir := t.TempDir()
+	writeFile(t, filepath.Join(binDir, "go"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'docs-security-baseline\\n' >> \"$CLOSURE_ORDER_LOG\"\n")
+	if err := os.Chmod(filepath.Join(binDir, "go"), 0o755); err != nil {
+		t.Fatalf("chmod go stub: %v", err)
+	}
+	orderLog := filepath.Join(t.TempDir(), "order.log")
+	env := []string{"CLOSURE_ORDER_LOG=" + orderLog, "PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH")}
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/final_closure_checklist.sh", env, "--external-runtime-evidence", "./external-runtime-evidence.json", "--evidence-bundle", bundleDir, "--tag", "v0.0.0-dry-run", "--repo", "example/clawside")
+	if err != nil {
+		t.Fatalf("final_closure_checklist.sh failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	order, err := os.ReadFile(orderLog)
+	if err != nil {
+		t.Fatalf("read order log: %v", err)
+	}
+	if string(order) != "docs-security-baseline\np44\np45\n" {
+		t.Fatalf("unexpected order log:\n%s", order)
+	}
+	if !strings.Contains(stdout+stderr, "FINAL_DECISION: P46_P47_FINAL_CLOSURE_PASS") {
+		t.Fatalf("expected final pass decision, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+func TestFinalClosureChecklistSeparatesPublicGapFromLocalClosure(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/final_closure_checklist.sh")
+	writeFile(t, filepath.Join(repo, "external-runtime-evidence.json"), `{"ok":true}`)
+	bundleDir := filepath.Join(repo, "release-evidence", "bundle")
+	writeFile(t, filepath.Join(bundleDir, "manifest.json"), "{}\n")
+	writeFile(t, filepath.Join(repo, "scripts", "public_readiness_dry_run.sh"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'PUBLIC_READINESS_GAP\\n'\nexit 1\n")
+	writeFile(t, filepath.Join(repo, "scripts", "release_evidence_dry_run.sh"), "#!/usr/bin/env bash\nset -euo pipefail\n")
+	for _, script := range []string{"public_readiness_dry_run.sh", "release_evidence_dry_run.sh"} {
+		if err := os.Chmod(filepath.Join(repo, "scripts", script), 0o755); err != nil {
+			t.Fatalf("chmod %s: %v", script, err)
+		}
+	}
+	binDir := t.TempDir()
+	writeFile(t, filepath.Join(binDir, "go"), "#!/usr/bin/env bash\nset -euo pipefail\n")
+	if err := os.Chmod(filepath.Join(binDir, "go"), 0o755); err != nil {
+		t.Fatalf("chmod go stub: %v", err)
+	}
+	env := []string{"PATH=" + binDir + string(os.PathListSeparator) + os.Getenv("PATH")}
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/final_closure_checklist.sh", env, "--external-runtime-evidence", "./external-runtime-evidence.json", "--evidence-bundle", bundleDir)
+	if err != nil {
+		t.Fatalf("public readiness gap should keep local closure result usable: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	output := stdout + stderr
+	for _, want := range []string{"PUBLIC_GITHUB_READINESS: GAP", "FINAL_DECISION: PRIVATE_LOCAL_CLOSURE_PASS_PUBLIC_READINESS_GAP"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected %q in output, got:\n%s", want, output)
+		}
+	}
+}
+
+func TestFinalClosureChecklistRequiresEvidenceAndBundle(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/final_closure_checklist.sh")
+	stdout, stderr, err := runScript(t, repo, "scripts/final_closure_checklist.sh")
+	if err == nil {
+		t.Fatalf("expected missing inputs to fail")
+	}
+	if !strings.Contains(stdout+stderr, "usage: ./scripts/final_closure_checklist.sh") {
+		t.Fatalf("expected sanitized usage, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+}
+
+func TestPublicReadinessDryRunPassesWhenAllGatesPass(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/public_readiness_dry_run.sh")
+	writeFile(t, filepath.Join(repo, "external-runtime-evidence.json"), `{"ok":true}`)
+	writeFile(t, filepath.Join(repo, "scripts", "verify_private_readiness.sh"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'private-readiness\\n' >> \"$CLOSURE_ORDER_LOG\"\n")
+	writeFile(t, filepath.Join(repo, "scripts", "verify_openclaw_mcp.sh"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'external-evidence %s\\n' \"$*\" >> \"$CLOSURE_ORDER_LOG\"\n")
+	writeFile(t, filepath.Join(repo, "scripts", "github-readiness.sh"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'github-readiness %s\\n' \"$*\" >> \"$CLOSURE_ORDER_LOG\"\n")
+	for _, script := range []string{"verify_private_readiness.sh", "verify_openclaw_mcp.sh", "github-readiness.sh"} {
+		if err := os.Chmod(filepath.Join(repo, "scripts", script), 0o755); err != nil {
+			t.Fatalf("chmod %s: %v", script, err)
+		}
+	}
+	orderLog := filepath.Join(t.TempDir(), "order.log")
+	env := []string{"CLOSURE_ORDER_LOG=" + orderLog}
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/public_readiness_dry_run.sh", env, "--external-runtime-evidence", "./external-runtime-evidence.json", "--repo", "example/clawside")
+	if err != nil {
+		t.Fatalf("public_readiness_dry_run.sh failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout+stderr, "P44_PUBLIC_READINESS_DRY_RUN_PASS") {
+		t.Fatalf("expected pass marker, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
+	}
+	order, err := os.ReadFile(orderLog)
+	if err != nil {
+		t.Fatalf("read order log: %v", err)
+	}
+	for _, want := range []string{"private-readiness\n", "--openclaw-external-runtime-evidence ./external-runtime-evidence.json", "github-readiness example/clawside\n"} {
+		if !strings.Contains(string(order), want) {
+			t.Fatalf("expected order log to contain %q, got:\n%s", want, order)
+		}
+	}
+}
+
+func TestPublicReadinessDryRunClassifiesGitHubFailureAsPublicGap(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/public_readiness_dry_run.sh")
+	writeFile(t, filepath.Join(repo, "external-runtime-evidence.json"), `{"ok":true}`)
+	writeFile(t, filepath.Join(repo, "scripts", "verify_private_readiness.sh"), "#!/usr/bin/env bash\nset -euo pipefail\n")
+	writeFile(t, filepath.Join(repo, "scripts", "verify_openclaw_mcp.sh"), "#!/usr/bin/env bash\nset -euo pipefail\n")
+	writeFile(t, filepath.Join(repo, "scripts", "github-readiness.sh"), "#!/usr/bin/env bash\nset -euo pipefail\nprintf 'FAIL secret scanning is unavailable or disabled\\n'\nprintf 'ghp_private_secret_1234567890 /Users/example/private\\n' >&2\nexit 1\n")
+	for _, script := range []string{"verify_private_readiness.sh", "verify_openclaw_mcp.sh", "github-readiness.sh"} {
+		if err := os.Chmod(filepath.Join(repo, "scripts", script), 0o755); err != nil {
+			t.Fatalf("chmod %s: %v", script, err)
+		}
+	}
+
+	stdout, stderr, err := runScript(t, repo, "scripts/public_readiness_dry_run.sh", "--external-runtime-evidence", "./external-runtime-evidence.json", "--repo", "example/clawside")
+	if err == nil {
+		t.Fatalf("expected GitHub readiness gap to exit non-zero")
+	}
+	output := stdout + stderr
+	if !strings.Contains(output, "PUBLIC_READINESS_GAP") {
+		t.Fatalf("expected public readiness gap marker, got:\n%s", output)
+	}
+	for _, leaked := range []string{"ghp_private_secret_1234567890", "/Users/example/private"} {
+		if strings.Contains(output, leaked) {
+			t.Fatalf("public readiness dry-run leaked %q:\n%s", leaked, output)
+		}
+	}
+}
+
+func TestPublicReadinessDryRunRequiresEvidencePath(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/public_readiness_dry_run.sh")
+	stdout, stderr, err := runScript(t, repo, "scripts/public_readiness_dry_run.sh")
+	if err == nil {
+		t.Fatalf("expected missing evidence path to fail")
+	}
+	if !strings.Contains(stdout+stderr, "usage: ./scripts/public_readiness_dry_run.sh") {
+		t.Fatalf("expected sanitized usage, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 }
 

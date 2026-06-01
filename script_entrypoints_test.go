@@ -1432,6 +1432,118 @@ printf 'unexpected rerun\n'
 	}
 }
 
+func TestClosureDryRunScriptsEntrypoints(t *testing.T) {
+	tests := []struct {
+		path      string
+		want      []string
+		forbidden []string
+	}{
+		{
+			path: "scripts/public_readiness_dry_run.sh",
+			want: []string{
+				"P44",
+				"SCRIPT_NAME=\"./scripts/public_readiness_dry_run.sh\"",
+				"--external-runtime-evidence",
+				"--repo",
+				"P44_PUBLIC_READINESS_DRY_RUN_PASS",
+				"PUBLIC_READINESS_GAP",
+				"does not make the repository public",
+				"does not push",
+				"does not create tags or releases",
+				"does not mutate GitHub settings",
+			},
+		},
+		{
+			path: "scripts/release_evidence_dry_run.sh",
+			want: []string{
+				"P45",
+				"SCRIPT_NAME=\"./scripts/release_evidence_dry_run.sh\"",
+				"--evidence-bundle",
+				"--tag",
+				"--verify-only",
+				"P45_RELEASE_EVIDENCE_DRY_RUN_PASS",
+				"does not create tags or releases",
+				"does not push",
+				"does not mutate GitHub settings",
+			},
+		},
+		{
+			path: "scripts/final_closure_checklist.sh",
+			want: []string{
+				"P46/P47",
+				"SCRIPT_NAME=\"./scripts/final_closure_checklist.sh\"",
+				"PRIVATE_LOCAL_CLOSURE",
+				"PUBLIC_GITHUB_READINESS",
+				"RELEASE_DRY_RUN",
+				"DOCS_SECURITY_BASELINE",
+				"FINAL_DECISION",
+				"does not make the repository public",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.path, func(t *testing.T) {
+			info, err := os.Stat(tc.path)
+			if err != nil {
+				t.Fatalf("expected %s to exist: %v", tc.path, err)
+			}
+			if info.Mode()&0o111 == 0 {
+				t.Fatalf("expected %s to be executable", tc.path)
+			}
+			content := readTextFile(t, tc.path)
+			for _, helpToken := range []string{"help", "--help", "-h"} {
+				if !strings.Contains(content, helpToken) {
+					t.Fatalf("expected %s to support help token %q", tc.path, helpToken)
+				}
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(content, want) {
+					t.Fatalf("expected %s to contain %q", tc.path, want)
+				}
+			}
+			for _, forbidden := range []string{"gh repo edit", "-X PATCH", "-X PUT", "-X POST", "-X DELETE", "git push", "git tag", "gh release", "--authorize-tag-push", "=()", "[@]", "BASH_SOURCE"} {
+				if strings.Contains(content, forbidden) {
+					t.Fatalf("%s must not contain %q", tc.path, forbidden)
+				}
+			}
+		})
+	}
+}
+
+func TestClosureDryRunScriptsHelpIsSanitized(t *testing.T) {
+	for _, path := range []string{"scripts/public_readiness_dry_run.sh", "scripts/release_evidence_dry_run.sh", "scripts/final_closure_checklist.sh"} {
+		t.Run(path, func(t *testing.T) {
+			absolutePath, err := filepath.Abs(path)
+			if err != nil {
+				t.Fatalf("resolve absolute script path: %v", err)
+			}
+			cmd := exec.Command(absolutePath, "help")
+			var stdout bytes.Buffer
+			var stderr bytes.Buffer
+			cmd.Stdout = &stdout
+			cmd.Stderr = &stderr
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("expected help to exit 0: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+			}
+			output := stdout.String() + stderr.String()
+			cwd, err := os.Getwd()
+			if err != nil {
+				t.Fatalf("get working directory: %v", err)
+			}
+			for _, forbidden := range []string{absolutePath, cwd} {
+				if strings.Contains(output, forbidden) {
+					t.Fatalf("expected help output to avoid local path %q, got:\n%s", forbidden, output)
+				}
+			}
+			for _, want := range []string{"usage: ./scripts/", "does not"} {
+				if !strings.Contains(stdout.String(), want) {
+					t.Fatalf("expected help output to contain %q, got:\n%s", want, stdout.String())
+				}
+			}
+		})
+	}
+}
+
 func TestOpenClawTruthPlaneExtractScriptEntrypoint(t *testing.T) {
 	path := "scripts/extract_openclaw_truth_plane_results.sh"
 	info, err := os.Stat(path)

@@ -43,6 +43,7 @@ Which verifier should I run?
 | Day-to-day local development | `./scripts/ci-local.sh clean` |
 | Private validation/readiness aggregate | `./scripts/verify_private_readiness.sh` |
 | Private real OpenClaw evidence closure | `./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir <export-dir>` |
+| Final private/local closure checklist | `./scripts/final_closure_checklist.sh --external-runtime-evidence ./external-runtime-evidence.json --evidence-bundle ./release-evidence/<bundle-dir> --tag v0.0.0-dry-run --repo <owner>/<repo>` |
 | A2A compatibility and external client readiness | `./scripts/verify_clawside_a2a.sh` |
 | MCP tool surface and OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
 | Multi-project upstream/downstream/reviewer rehearsal | `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json` |
@@ -232,6 +233,20 @@ P43 closes the private real OpenClaw external-runtime evidence loop before publi
 ```
 
 The script derives repo-local events/output paths and runs `./scripts/verify_private_readiness.sh`, then `./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl --output ./external-runtime-evidence.json`. It does not make the repository public, does not create tags or releases, does not push, does not mutate GitHub settings, does not launch OpenClaw/Claude/Kimi runtimes, sessions, sandboxes, or model workers, does not trigger sender/Telegram delivery, and does not accept arbitrary `--events` / `--output`, command/path/prompt/token/session/worker/sender/Telegram fields.
+
+### Final private/local closure checklist
+
+For private/local closure before any public release work, run:
+
+```bash
+./scripts/final_closure_checklist.sh \
+  --external-runtime-evidence ./external-runtime-evidence.json \
+  --evidence-bundle ./release-evidence/<bundle-dir> \
+  --tag v0.0.0-dry-run \
+  --repo <owner>/<repo>
+```
+
+This composes `./scripts/public_readiness_dry_run.sh` and `./scripts/release_evidence_dry_run.sh`. It is a dry-run checklist only: it does not make the repository public, does not push, does not create tags or releases, does not mutate GitHub settings, does not launch runtimes, and does not trigger sender/Telegram delivery. A private repository can still report `PUBLIC_READINESS_GAP` until GitHub public-readiness settings are available and explicitly configured outside this script.
 
 The evidence contract records only IDs, the required tool set, `schema_version`, `trajectory_provenance`, `no_sender_delivery=true`, and `no_runtime_launch_by_clawside=true`; it also requires dependency, reviewer, downstream-ready, completed-workflow, `coordination_evidence_summary`, `non_clawside_event_count > 0`, and `lifecycle_order_verified=true` gates. This flow does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender delivery, does not trigger Telegram delivery, does not store or print raw trajectory payloads, and does not accept arbitrary commands/local paths/private prompts/tokens/sessions/stdout/stderr/chat IDs/worker/runtime/sandbox launch fields. `SENDER_AUTH_KEY` and `CLAWSIDE_A2A_AUTH_KEY` remain separate and are not reused by this dogfood path.
 

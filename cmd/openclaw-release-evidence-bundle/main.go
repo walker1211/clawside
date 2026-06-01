@@ -202,7 +202,36 @@ func verifyBundleManifest(bundleDir string) error {
 			return fmt.Errorf("sha256 mismatch for %s: got %s want %s", evidence.OutputFile, sha256Value, evidence.SHA256)
 		}
 	}
+	if err := verifyGeneratedVerifier(bundleDir, manifest); err != nil {
+		return err
+	}
 	return nil
+}
+
+func verifyGeneratedVerifier(bundleDir string, manifest releaseEvidenceManifest) error {
+	path := filepath.Join(bundleDir, "verify-release-evidence.sh")
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat verify-release-evidence.sh: %w", err)
+	}
+	if info.Mode()&0o111 == 0 {
+		return errors.New("verify-release-evidence.sh is not executable")
+	}
+	actual, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read verify-release-evidence.sh: %w", err)
+	}
+	expected := expectedVerifyScriptFromManifest(manifest)
+	if string(actual) != expected {
+		return errors.New("verify-release-evidence.sh does not match manifest-derived verifier")
+	}
+	return nil
+}
+
+func expectedVerifyScriptFromManifest(manifest releaseEvidenceManifest) string {
+	var b strings.Builder
+	writeVerifyScriptContent(&b, manifest.Evidence)
+	return b.String()
 }
 
 type bundleRunner interface {
@@ -372,29 +401,33 @@ func releaseEvidenceVerifyCommand(plan bundlePlan) ([]string, error) {
 	return command, nil
 }
 
-func writePortableVerifyScript(path string, plan bundlePlan) error {
-	var b strings.Builder
+func writeVerifyScriptContent(b *strings.Builder, evidence []manifestEvidence) {
 	b.WriteString("#!/usr/bin/env bash\n")
 	b.WriteString("set -euo pipefail\n\n")
 	b.WriteString("BUNDLE_DIR=\"$(cd \"$(dirname \"$0\")\" && pwd)\"\n")
 	b.WriteString("REPO_ROOT=\"$(git -C \"$BUNDLE_DIR\" rev-parse --show-toplevel)\"\n\n")
 	b.WriteString("go run -C \"$REPO_ROOT\" ./cmd/openclaw-release-evidence-bundle verify-manifest --bundle-dir \"$BUNDLE_DIR\"\n\n")
 	b.WriteString("\"$REPO_ROOT/scripts/verify_openclaw_mcp.sh\" \\\n  --profile release-evidence")
-	for _, item := range plan.Evidence {
+	for _, item := range evidence {
 		b.WriteString(" \\\n  --")
-		b.WriteString(item.Spec.VerifyFlag)
+		b.WriteString(item.VerifyFlag)
 		b.WriteString(" \"$BUNDLE_DIR/")
-		b.WriteString(item.Spec.OutputFile)
-		b.WriteString("\"")
-	}
-	for _, item := range plan.CopiedEvidence {
-		b.WriteString(" \\\n  --")
-		b.WriteString(item.Spec.VerifyFlag)
-		b.WriteString(" \"$BUNDLE_DIR/")
-		b.WriteString(item.Spec.OutputFile)
+		b.WriteString(item.OutputFile)
 		b.WriteString("\"")
 	}
 	b.WriteByte('\n')
+}
+
+func writePortableVerifyScript(path string, plan bundlePlan) error {
+	var b strings.Builder
+	evidence := make([]manifestEvidence, 0, len(plan.Evidence)+len(plan.CopiedEvidence))
+	for _, item := range plan.Evidence {
+		evidence = append(evidence, manifestEvidence{OutputFile: item.Spec.OutputFile, VerifyFlag: item.Spec.VerifyFlag})
+	}
+	for _, item := range plan.CopiedEvidence {
+		evidence = append(evidence, manifestEvidence{OutputFile: item.Spec.OutputFile, VerifyFlag: item.Spec.VerifyFlag})
+	}
+	writeVerifyScriptContent(&b, evidence)
 	if err := os.WriteFile(path, []byte(b.String()), 0o755); err != nil {
 		return fmt.Errorf("write verify script: %w", err)
 	}

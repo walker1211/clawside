@@ -207,6 +207,42 @@ func TestRunVerifyManifestAcceptsGeneratedBundle(t *testing.T) {
 	}
 }
 
+func TestRunVerifyManifestRejectsTamperedVerifyScript(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "bundle")
+	runner := &recordingRunner{}
+	var buildStdout, buildStderr bytes.Buffer
+	if err := runWithRunner(context.Background(), bundleArgs(t, "--output-dir", outputDir, "--events", "events.jsonl"), &buildStdout, &buildStderr, runner); err != nil {
+		t.Fatalf("run bundle: %v\nstderr=%s", err, buildStderr.String())
+	}
+	if err := os.WriteFile(filepath.Join(outputDir, "verify-release-evidence.sh"), []byte("#!/usr/bin/env bash\nset -euo pipefail\nprintf 'tampered\\n'\n"), 0o755); err != nil {
+		t.Fatalf("tamper verify script: %v", err)
+	}
+
+	var verifyStdout, verifyStderr bytes.Buffer
+	err := run([]string{"verify-manifest", "--bundle-dir", outputDir}, &verifyStdout, &verifyStderr)
+	if err == nil || !strings.Contains(err.Error(), "verify-release-evidence.sh") {
+		t.Fatalf("expected verify script mismatch, got %v\nstderr=%s", err, verifyStderr.String())
+	}
+}
+
+func TestRunVerifyManifestRejectsNonExecutableVerifyScript(t *testing.T) {
+	outputDir := filepath.Join(t.TempDir(), "bundle")
+	runner := &recordingRunner{}
+	var buildStdout, buildStderr bytes.Buffer
+	if err := runWithRunner(context.Background(), bundleArgs(t, "--output-dir", outputDir, "--events", "events.jsonl"), &buildStdout, &buildStderr, runner); err != nil {
+		t.Fatalf("run bundle: %v\nstderr=%s", err, buildStderr.String())
+	}
+	if err := os.Chmod(filepath.Join(outputDir, "verify-release-evidence.sh"), 0o600); err != nil {
+		t.Fatalf("chmod verify script: %v", err)
+	}
+
+	var verifyStdout, verifyStderr bytes.Buffer
+	err := run([]string{"verify-manifest", "--bundle-dir", outputDir}, &verifyStdout, &verifyStderr)
+	if err == nil || !strings.Contains(err.Error(), "not executable") {
+		t.Fatalf("expected non-executable verify script error, got %v\nstderr=%s", err, verifyStderr.String())
+	}
+}
+
 func TestRunVerifyManifestRejectsTamperedEvidence(t *testing.T) {
 	outputDir := filepath.Join(t.TempDir(), "bundle")
 	runner := &recordingRunner{}

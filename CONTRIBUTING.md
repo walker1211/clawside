@@ -37,4 +37,6 @@ Use Conventional Commits, for example `feat(mcp): add read-only status tool` or 
 
 ## Releases
 
+Release and public-readiness checks are dry-run by default. Use `scripts/final_closure_checklist.sh` to verify private/local closure. Creating tags, pushing, publishing releases, changing repository visibility, or mutating GitHub settings requires explicit maintainer authorization and is not performed by the checklist scripts.
+
 Only maintainers should create or push release tags. Use `scripts/tag-release.sh --evidence-bundle ./release-evidence/openclaw-vX.Y.Z vX.Y.Z` only after explicit release authorization and read-only release evidence verification; it runs the evidence gate, clean gate, creates the tag, and pushes it to origin.
