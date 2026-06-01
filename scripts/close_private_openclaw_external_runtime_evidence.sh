@@ -8,7 +8,7 @@ EXPORT_DIR=""
 usage() {
   printf 'usage: %s --export-dir NAME\n' "$SCRIPT_NAME"
   printf '\n'
-  printf 'P43 private real OpenClaw external-runtime evidence closure.\n'
+  printf 'Private real OpenClaw external-runtime evidence closure.\n'
   printf '\n'
   printf 'Run OpenClaw externally, export a redacted trajectory to .openclaw/trajectory-exports/<export-dir>/events.jsonl, then run this bounded private closure.\n'
   printf '\n'
@@ -60,11 +60,11 @@ cd "$ROOT_DIR"
 EVENTS_PATH="./.openclaw/trajectory-exports/$EXPORT_DIR/events.jsonl"
 OUTPUT_PATH="./external-runtime-evidence.json"
 
-printf 'P43 private real OpenClaw external-runtime evidence closure.\n'
+printf 'Private real OpenClaw external-runtime evidence closure.\n'
 printf 'This does not make the repository public, create tags or releases, push, change GitHub settings, launch external runtimes, or trigger delivery.\n'
 
 "$ROOT_DIR/scripts/verify_private_readiness.sh"
 "$ROOT_DIR/scripts/rerun_openclaw_external_runtime_evidence_workflow.sh" --events "$EVENTS_PATH" --output "$OUTPUT_PATH"
 
-printf '\nP43 private real OpenClaw external-runtime evidence closure complete.\n'
+printf '\nPrivate real OpenClaw external-runtime evidence closure complete.\n'
 printf 'Public/release actions remain deferred: no repo-public mutation, no tag, no release, no push, no GitHub settings mutation, no runtime launch, and no sender/Telegram delivery.\n'

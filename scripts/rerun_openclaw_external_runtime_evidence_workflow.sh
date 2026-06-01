@@ -9,7 +9,7 @@ OUTPUT_PATH=""
 usage() {
   printf 'usage: %s [--events PATH --output PATH]\n' "$SCRIPT_NAME"
   printf '\n'
-  printf 'P41 repeatable workflow for real OpenClaw external-runtime-evidence dogfood.\n'
+  printf 'Repeatable real-export workflow for OpenClaw external-runtime-evidence dogfood.\n'
   printf '\n'
   printf 'Run OpenClaw externally, then use this script for bounded local verification.\n'
   printf '\n'
@@ -21,7 +21,7 @@ usage() {
   printf '  5. Run this script again with --events PATH --output PATH.\n'
   printf '\n'
   printf 'Local verification order:\n'
-  printf '  P39 preflight -> P40 suitability -> P38 dogfood wrapper only when suitable=true.\n'
+  printf '  preflight -> suitability report -> dogfood wrapper only when suitable=true.\n'
   printf '\n'
   printf 'Options:\n'
   printf '  --events PATH   OpenClaw trajectory events.jsonl path\n'

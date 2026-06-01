@@ -11,7 +11,7 @@ REPO_SLUG=""
 usage() {
   printf 'usage: %s --external-runtime-evidence PATH --evidence-bundle DIR [--tag TAG] [--repo OWNER/REPO]\n' "$SCRIPT_NAME"
   printf '\n'
-  printf 'P46/P47 final private/local closure checklist. This is read-only/dry-run and does not make the repository public, push, tag, release, mutate GitHub settings, launch runtimes, or trigger delivery.\n'
+  printf 'Final private/local closure checklist. This is read-only/dry-run and does not make the repository public, push, tag, release, mutate GitHub settings, launch runtimes, or trigger delivery.\n'
 }
 
 if [[ $# -eq 1 ]]; then
@@ -75,7 +75,7 @@ fi
 
 cd "$ROOT_DIR"
 
-printf 'P46/P47 final private/local closure checklist.\n'
+printf 'Final private/local closure checklist.\n'
 printf 'This is read-only/dry-run and does not make the repository public, push, tag, release, mutate GitHub settings, launch runtimes, or trigger delivery.\n'
 
 if ! go test -count=1 . -run 'TestStage9LicenseFile|TestGitHubReadinessFiles|TestRootReadmeLanguageSwitch|TestGitHubCIWorkflow|TestGitHubReleaseWorkflow'; then
@@ -85,32 +85,32 @@ if ! go test -count=1 . -run 'TestStage9LicenseFile|TestGitHubReadinessFiles|Tes
 fi
 printf 'DOCS_SECURITY_BASELINE: PASS\n'
 
-P44_OUTPUT=""
+PUBLIC_READINESS_OUTPUT=""
 PUBLIC_GITHUB_READINESS="PASS"
 if [[ -n "$REPO_SLUG" ]]; then
-  if ! P44_OUTPUT="$($ROOT_DIR/scripts/public_readiness_dry_run.sh --external-runtime-evidence "$EXTERNAL_RUNTIME_EVIDENCE" --repo "$REPO_SLUG" 2>&1)"; then
-    if printf '%s\n' "$P44_OUTPUT" | grep -q 'PUBLIC_READINESS_GAP'; then
+  if ! PUBLIC_READINESS_OUTPUT="$($ROOT_DIR/scripts/public_readiness_dry_run.sh --external-runtime-evidence "$EXTERNAL_RUNTIME_EVIDENCE" --repo "$REPO_SLUG" 2>&1)"; then
+    if printf '%s\n' "$PUBLIC_READINESS_OUTPUT" | grep -q 'PUBLIC_READINESS_GAP'; then
       PUBLIC_GITHUB_READINESS="GAP"
     else
-      printf '%s\n' "$P44_OUTPUT"
+      printf '%s\n' "$PUBLIC_READINESS_OUTPUT"
       printf 'PRIVATE_LOCAL_CLOSURE: FAIL\n'
       printf 'FINAL_DECISION: LOCAL_CLOSURE_BLOCKED\n'
       exit 1
     fi
   fi
 else
-  if ! P44_OUTPUT="$($ROOT_DIR/scripts/public_readiness_dry_run.sh --external-runtime-evidence "$EXTERNAL_RUNTIME_EVIDENCE" 2>&1)"; then
-    if printf '%s\n' "$P44_OUTPUT" | grep -q 'PUBLIC_READINESS_GAP'; then
+  if ! PUBLIC_READINESS_OUTPUT="$($ROOT_DIR/scripts/public_readiness_dry_run.sh --external-runtime-evidence "$EXTERNAL_RUNTIME_EVIDENCE" 2>&1)"; then
+    if printf '%s\n' "$PUBLIC_READINESS_OUTPUT" | grep -q 'PUBLIC_READINESS_GAP'; then
       PUBLIC_GITHUB_READINESS="GAP"
     else
-      printf '%s\n' "$P44_OUTPUT"
+      printf '%s\n' "$PUBLIC_READINESS_OUTPUT"
       printf 'PRIVATE_LOCAL_CLOSURE: FAIL\n'
       printf 'FINAL_DECISION: LOCAL_CLOSURE_BLOCKED\n'
       exit 1
     fi
   fi
 fi
-printf '%s\n' "$P44_OUTPUT"
+printf '%s\n' "$PUBLIC_READINESS_OUTPUT"
 printf 'PRIVATE_LOCAL_CLOSURE: PASS\n'
 printf 'PUBLIC_GITHUB_READINESS: %s\n' "$PUBLIC_GITHUB_READINESS"
 
@@ -124,5 +124,5 @@ printf 'RELEASE_DRY_RUN: PASS\n'
 if [[ "$PUBLIC_GITHUB_READINESS" = "GAP" ]]; then
   printf 'FINAL_DECISION: PRIVATE_LOCAL_CLOSURE_PASS_PUBLIC_READINESS_GAP\n'
 else
-  printf 'FINAL_DECISION: P46_P47_FINAL_CLOSURE_PASS\n'
+  printf 'FINAL_DECISION: FINAL_CLOSURE_PASS\n'
 fi

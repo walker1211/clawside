@@ -147,7 +147,7 @@ printf 'verify-manifest\n' >> "$TAG_RELEASE_ORDER_LOG"
 		t.Fatalf("release_evidence_dry_run.sh failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
 	assertOrderLog(t, env, "verify-manifest\ntag-release-verify-only\n", stdout, stderr)
-	if !strings.Contains(stdout+stderr, "P45_RELEASE_EVIDENCE_DRY_RUN_PASS") {
+	if !strings.Contains(stdout+stderr, "RELEASE_EVIDENCE_DRY_RUN_PASS") {
 		t.Fatalf("expected dry-run pass marker, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 }
@@ -288,7 +288,7 @@ func assertOrderLog(t *testing.T, env []string, want string, stdout string, stde
 	}
 }
 
-func TestFinalClosureChecklistRunsDocsP44AndP45(t *testing.T) {
+func TestFinalClosureChecklistRunsDocsPublicAndReleaseDryRuns(t *testing.T) {
 	repo := newTempGitRepoWithScript(t, "scripts/final_closure_checklist.sh")
 	writeFile(t, filepath.Join(repo, "external-runtime-evidence.json"), `{"ok":true}`)
 	bundleDir := filepath.Join(repo, "release-evidence", "bundle")
@@ -319,7 +319,7 @@ func TestFinalClosureChecklistRunsDocsP44AndP45(t *testing.T) {
 	if string(order) != "docs-security-baseline\np44\np45\n" {
 		t.Fatalf("unexpected order log:\n%s", order)
 	}
-	if !strings.Contains(stdout+stderr, "FINAL_DECISION: P46_P47_FINAL_CLOSURE_PASS") {
+	if !strings.Contains(stdout+stderr, "FINAL_DECISION: FINAL_CLOSURE_PASS") {
 		t.Fatalf("expected final pass decision, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 }
@@ -384,7 +384,7 @@ func TestPublicReadinessDryRunPassesWhenAllGatesPass(t *testing.T) {
 	if err != nil {
 		t.Fatalf("public_readiness_dry_run.sh failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
 	}
-	if !strings.Contains(stdout+stderr, "P44_PUBLIC_READINESS_DRY_RUN_PASS") {
+	if !strings.Contains(stdout+stderr, "PUBLIC_READINESS_DRY_RUN_PASS") {
 		t.Fatalf("expected pass marker, got:\nstdout:\n%s\nstderr:\n%s", stdout, stderr)
 	}
 	order, err := os.ReadFile(orderLog)

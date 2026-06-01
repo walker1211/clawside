@@ -51,13 +51,13 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 | Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
 | 仓库切 public 前的 GitHub readiness | `./scripts/github-readiness.sh <owner>/<repo>` |
 
-### P20-P22 当前集成状态
+### 当前集成状态
 
-- **P20 private dogfood rehearsal**：当前 private dogfood 路径已记录为可重复的本地演练。它是 Clawside truth-plane / MCP sidecar 的私有操作证据，不是公开 release evidence。
-- **P21 external swarm/runtime integration guide**：本文档补齐外部 runtime 如何自己启动 worker，并把 Clawside 当作 coordination sidecar 使用的顺序。
-- **P22 release 继续暂缓**：除非获得明确授权，不要把仓库设为 public，不要修改 GitHub 设置，不要创建 release，也不要创建或推送 tag。public-readiness 检查保持只读：`./scripts/github-readiness.sh <owner>/<repo>`。
+- **Private dogfood rehearsal**：当前 private dogfood 路径已记录为可重复的本地演练。它是 Clawside truth-plane / MCP sidecar 的私有操作证据，不是公开 release evidence。
+- **External swarm/runtime integration guide**：本文档补齐外部 runtime 如何自己启动 worker，并把 Clawside 当作 coordination sidecar 使用的顺序。
+- **Release 继续暂缓**：除非获得明确授权，不要把仓库设为 public，不要修改 GitHub 设置，不要创建 release，也不要创建或推送 tag。public-readiness 检查保持只读：`./scripts/github-readiness.sh <owner>/<repo>`。
 
-### P20 private dogfood rehearsal sequence
+### Private dogfood rehearsal sequence
 
 这条路径用于在不发布 release evidence 的前提下演练私有 runtime 接入。Clawside 记录 durable truth-plane state；Clawside 不启动 model worker、runtime session 或 sandbox。
 
@@ -77,7 +77,7 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 
 这条 rehearsal 覆盖当前 truth-plane bridge 行为：agent registry、symbolic `project://...` refs、`next_work`、`blocked_work`、reviewer gates、dependency gates、`workflow_status` 和 `coordination_evidence_summary`。`private-coordination` profile 会展开为 `--multi-agent-coordination-smoke`、`--collaboration-template-smoke`、`--external-runtime-smoke` 和 `--private-multi-project-dogfood-smoke` 背后的 truth-plane-only coordination checks，并禁用 sender checks 和 delivery。它不调用 `message/send` 或 `message/stream`，不触发 sender 或 Telegram delivery，也不接受 runtime launch fields。
 
-### P21 external swarm/runtime integration sequence
+### External swarm/runtime integration sequence
 
 External swarm/runtime integrator 应把 Clawside 当作 coordination sidecar。runtime 负责 model execution、worker/session/sandbox lifecycle、调度和实际任务执行。Clawside 只保存和投影 durable truth、workflow/handoff state、ownership、watch、repair、divergence、dependency gate、reviewer gate、evidence，以及 A2A-compatible read/query/cancel surface。
 
@@ -134,7 +134,7 @@ coordination_evidence_summary workflow_id=<workflow-id> include_agents=true
 ./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --external-runtime-smoke --json
 ```
 
-#### P35 minimal external runtime sample
+#### Minimal external runtime sample
 
 `cmd/clawside-external-runtime-sample` 是一个最小 truth-plane-only sample，用来给 Claude、Kimi、OpenClaw 或其他 swarm runtime 看清接入方式。它会注册 runtime-owned agents 和 symbolic refs（`project://sample/external-runtime/upstream`、`project://sample/external-runtime/downstream`、`project://sample/external-runtime/review`），创建 upstream/downstream handoffs，查询 `next_work` / `blocked_work`，推进 protocol actions，然后读取 `workflow_status` 和 `coordination_evidence_summary`。
 
@@ -144,7 +144,7 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
 
 安全边界：the sample does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender or Telegram delivery, and does not accept arbitrary command/args/cwd/local path/private prompt/token/session/worker launch fields.
 
-#### P38 real OpenClaw trajectory external runtime evidence dogfood validation
+#### Real OpenClaw trajectory external runtime evidence dogfood validation
 
 当外部 runtime 已在 Clawside 之外运行，并导出 OpenClaw trajectory `events.jsonl` 时，使用这条路径复验真实接入 evidence。`cmd/openclaw-external-runtime-evidence-extract/` 会从该 trajectory 读取 bounded envelope metadata 和 Clawside MCP tool results，输出带 `schema_version=p37.external-runtime-trajectory.v1` 与 `trajectory_provenance.source_kind=openclaw_events_jsonl_export` 的 evidence，并要求至少一个 non-Clawside trajectory event；它不保存也不打印 raw trajectory payloads，不 replay payload，也不启动任何 runtime。
 
@@ -178,7 +178,7 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
   --output ./external-runtime-evidence.json
 ```
 
-P39 增加一个只读 preflight/finder，用来查找本地 OpenClaw exports。它只扫描已忽略的 repo-local 路径 `.openclaw/trajectory-exports/<export-dir>/events.jsonl`，只打印 bounded file metadata 和 next command，不打印 raw trajectory payloads：
+Preflight/finder 提供只读检查，用来查找本地 OpenClaw exports。它只扫描已忽略的 repo-local 路径 `.openclaw/trajectory-exports/<export-dir>/events.jsonl`，只打印 bounded file metadata 和 next command，不打印 raw trajectory payloads：
 
 ```bash
 ./scripts/preflight_openclaw_external_runtime_evidence.sh
@@ -192,14 +192,14 @@ P39 增加一个只读 preflight/finder，用来查找本地 OpenClaw exports。
   --output ./external-runtime-evidence.json
 ```
 
-P40 在 preflight 和 P38 wrapper 之间增加一个 read-only suitability gap report。它使用 `schema_version=p40.external-runtime-suitability.v1`，只有当 trajectory 具备 required Clawside MCP tool chain、lifecycle gates、non-Clawside trajectory observation、lifecycle order，且没有 forbidden launch or delivery tools 时，才返回 `suitable=true`：
+Suitability report 位于 preflight 和 dogfood wrapper 之间。它使用 `schema_version=p40.external-runtime-suitability.v1`，只有当 trajectory 具备 required Clawside MCP tool chain、lifecycle gates、non-Clawside trajectory observation、lifecycle order，且没有 forbidden launch or delivery tools 时，才返回 `suitable=true`：
 
 ```bash
 ./scripts/report_openclaw_external_runtime_evidence_suitability.sh \
   --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
-P40 report 只列出 bounded `missing_tools`、`missing_gates`、`forbidden_tools`、counts、observed event types 和 placeholder next command。它不打印 raw trajectory payloads，不启动 runtime/session/sandbox/model workers，也不触发 sender/Telegram delivery。若 report 返回 `suitable=true`，再显式运行 P38 wrapper 完成真正的 extraction + read-only validation：
+Suitability report 只列出 bounded `missing_tools`、`missing_gates`、`forbidden_tools`、counts、observed event types 和 placeholder next command。它不打印 raw trajectory payloads，不启动 runtime/session/sandbox/model workers，也不触发 sender/Telegram delivery。若 report 返回 `suitable=true`，再显式运行 dogfood wrapper 完成真正的 extraction + read-only validation：
 
 ```bash
 ./scripts/dogfood_openclaw_external_runtime_evidence.sh \
@@ -207,7 +207,7 @@ P40 report 只列出 bounded `missing_tools`、`missing_gates`、`forbidden_tool
   --output ./external-runtime-evidence.json
 ```
 
-P41 把真实 OpenClaw rerun 固化为一个 repeatable workflow，但不把 Clawside 变成 OpenClaw launcher。无参数运行 `scripts/rerun_openclaw_external_runtime_evidence_workflow.sh` 会打印 sanitized checklist；随后 Run OpenClaw externally，export redacted trajectory 到 `.openclaw/trajectory-exports/<export-dir>/events.jsonl`，再用显式路径运行同一个脚本：
+Repeatable real-export workflow 把真实 OpenClaw rerun 固化为可重复流程，但不把 Clawside 变成 OpenClaw launcher。无参数运行 `scripts/rerun_openclaw_external_runtime_evidence_workflow.sh` 会打印 sanitized checklist；随后 Run OpenClaw externally，export redacted trajectory 到 `.openclaw/trajectory-exports/<export-dir>/events.jsonl`，再用显式路径运行同一个脚本：
 
 ```bash
 ./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh
@@ -216,9 +216,9 @@ P41 把真实 OpenClaw rerun 固化为一个 repeatable workflow，但不把 Cla
   --output ./external-runtime-evidence.json
 ```
 
-P41 脚本只在 export 已存在后执行本地 bounded verification：先跑 P39 preflight，再跑 P40 suitability，只有 `suitable=true` 时才跑 P38 dogfood wrapper。如果 trajectory 不适合，它会打印 bounded gap report 和 `dogfood wrapper was not run`。它不启动 OpenClaw/Claude/Kimi runtime、session、sandbox 或 model worker，不触发 sender/Telegram delivery，不使用 delivery tools；公开文档只使用 placeholders，且 `SENDER_AUTH_KEY` 与 `CLAWSIDE_A2A_AUTH_KEY` 保持分离。
+这个脚本只在 export 已存在后执行本地 bounded verification：先跑 preflight，再跑 suitability report，只有 `suitable=true` 时才跑 dogfood wrapper。如果 trajectory 不适合，它会打印 bounded gap report 和 `dogfood wrapper was not run`。它不启动 OpenClaw/Claude/Kimi runtime、session、sandbox 或 model worker，不触发 sender/Telegram delivery，不使用 delivery tools；公开文档只使用 placeholders，且 `SENDER_AUTH_KEY` 与 `CLAWSIDE_A2A_AUTH_KEY` 保持分离。
 
-P42 增加私有 validation/readiness 聚合入口，用于 public 前的本地安全复验：
+私有 validation/readiness 聚合入口用于 public 前的本地安全复验：
 
 ```bash
 ./scripts/verify_private_readiness.sh
@@ -226,7 +226,7 @@ P42 增加私有 validation/readiness 聚合入口，用于 public 前的本地�
 
 它会依次运行 `./scripts/ci-local.sh clean`、`./scripts/verify_clawside_a2a.sh`、`./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`、带 `--profile external-runtime-evidence` 与 `testdata/openclaw-smoke/stage0-5/external-runtime-evidence.json` 的只读 fixture validation，以及 `./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh` checklist。它不会把仓库设为公开，不会创建 tag 或 release，不会 push，不会修改 GitHub 设置，不会触发 sender/Telegram delivery，也不会启动 OpenClaw/Claude/Kimi runtime、session、sandbox 或 model worker。GitHub readiness 仍然需要显式只读运行：`./scripts/github-readiness.sh <owner>/<repo>`。
 
-P43 用于在 public/release 前收口私有真实 OpenClaw external-runtime evidence loop。先在 Clawside 外部运行 OpenClaw，并把 redacted trajectory 导出到 `.openclaw/trajectory-exports/<export-dir>/events.jsonl`，然后运行：
+私有真实 OpenClaw external-runtime evidence loop 用于在 public/release 前收口。先在 Clawside 外部运行 OpenClaw，并把 redacted trajectory 导出到 `.openclaw/trajectory-exports/<export-dir>/events.jsonl`，然后运行：
 
 ```bash
 ./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir <export-dir>
@@ -256,7 +256,7 @@ P43 用于在 public/release 前收口私有真实 OpenClaw external-runtime evi
 ./scripts/github-readiness.sh <owner>/<repo>
 ```
 
-### P29 private Telegram operator entrypoint
+### Private Telegram operator entrypoint
 
 `cmd/clawside-telegram-operator` 是独立的 inbound 长轮询 operator，用于 private dogfood。它打开同一个 truth-plane SQLite DB，读取已配置的 Telegram bot token 和 allowlist，只接受 allowlist 中 Telegram 用户的 private chat，并返回有界的手写摘要。
 
@@ -343,7 +343,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
   --verify
 ```
 
-6. 可选的 tag 前只读复验。P22 release 继续暂缓，因此除非获得明确授权，否则保留 `--verify-only`：
+6. 可选的 tag 前只读复验。Release 继续暂缓，因此除非获得明确授权，否则保留 `--verify-only`：
 
 ```bash
 ./scripts/tag-release.sh --verify-only --evidence-bundle <bundle-dir> vX.Y.Z
@@ -805,7 +805,7 @@ SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 ```
 
-如需验收 built-in collaboration template catalog 和 P17 多项目 agent 协作演练路径，可打开 opt-in template smoke。它会检查 `upstream_downstream_review`、`review_gate` 和 `fanout_review` catalog metadata，为 upstream/downstream/reviewer 注册 symbolic `project://...` refs，应用 `upstream_downstream_review`，验证带 project filter 的 `next_work` / `blocked_work` 依赖 gating，验证 upstream 完成后 downstream 进入可执行队列，验证 downstream 完成后 reviewer 进入可执行队列，并检查 template 幂等 replay。这只是 truth-plane coordination evidence：不会调用 `message/send` 或 `message/stream`，不会发送 push notifications，不会启动 runtime session、sandbox 或 worker，不会触发 sender/Telegram delivery，也不接受 command/args/local paths/private prompts/session IDs/tokens/job IDs。
+如需验收 built-in collaboration template catalog 和多项目 agent 协作演练路径，可打开 opt-in template smoke。它会检查 `upstream_downstream_review`、`review_gate` 和 `fanout_review` catalog metadata，为 upstream/downstream/reviewer 注册 symbolic `project://...` refs，应用 `upstream_downstream_review`，验证带 project filter 的 `next_work` / `blocked_work` 依赖 gating，验证 upstream 完成后 downstream 进入可执行队列，验证 downstream 完成后 reviewer 进入可执行队列，并检查 template 幂等 replay。这只是 truth-plane coordination evidence：不会调用 `message/send` 或 `message/stream`，不会发送 push notifications，不会启动 runtime session、sandbox 或 worker，不会触发 sender/Telegram delivery，也不接受 command/args/local paths/private prompts/session IDs/tokens/job IDs。
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke

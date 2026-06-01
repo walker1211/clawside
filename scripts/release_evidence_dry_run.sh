@@ -9,7 +9,7 @@ TAG_NAME="v0.0.0-dry-run"
 usage() {
   printf 'usage: %s --evidence-bundle DIR [--tag vX.Y.Z-dry-run]\n' "$SCRIPT_NAME"
   printf '\n'
-  printf 'P45 release evidence dry-run. Verify-only; does not create tags or releases, does not push, does not mutate GitHub settings, does not launch runtimes, and does not trigger sender/Telegram delivery.\n'
+  printf 'Release evidence dry-run. Verify-only; does not create tags or releases, does not push, does not mutate GitHub settings, does not launch runtimes, and does not trigger sender/Telegram delivery.\n'
   printf '\n'
   printf 'Options:\n'
   printf '  --evidence-bundle DIR   Release evidence bundle directory\n'
@@ -73,10 +73,10 @@ fi
 
 cd "$ROOT_DIR"
 
-printf 'P45 release evidence dry-run.\n'
+printf 'Release evidence dry-run.\n'
 printf 'Verify-only: no tag, release, push, GitHub settings mutation, runtime launch, or sender/Telegram delivery.\n'
 
 go run -C "$ROOT_DIR" ./cmd/openclaw-release-evidence-bundle verify-manifest --bundle-dir "$EVIDENCE_BUNDLE"
 "$ROOT_DIR/scripts/tag-release.sh" --verify-only --evidence-bundle "$EVIDENCE_BUNDLE" "$TAG_NAME"
 
-printf 'P45_RELEASE_EVIDENCE_DRY_RUN_PASS\n'
+printf 'RELEASE_EVIDENCE_DRY_RUN_PASS\n'

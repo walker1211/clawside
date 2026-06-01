@@ -9,11 +9,11 @@ REPO_SLUG=""
 usage() {
   printf 'usage: %s --external-runtime-evidence PATH [--repo OWNER/REPO]\n' "$SCRIPT_NAME"
   printf '\n'
-  printf 'P44 read-only public-readiness dry-run gap report.\n'
+  printf 'Read-only public-readiness dry-run gap report.\n'
   printf 'This does not make the repository public, does not push, does not create tags or releases, does not mutate GitHub settings, does not launch runtimes, and does not trigger sender/Telegram delivery.\n'
   printf '\n'
   printf 'Options:\n'
-  printf '  --external-runtime-evidence PATH   Bounded P43 evidence JSON, usually ./external-runtime-evidence.json\n'
+  printf '  --external-runtime-evidence PATH   Bounded external-runtime evidence JSON, usually ./external-runtime-evidence.json\n'
   printf '  --repo OWNER/REPO                  Optional GitHub repository slug for read-only readiness checks\n'
   printf '  help, --help, -h                   Show this help\n'
 }
@@ -67,7 +67,7 @@ fi
 
 cd "$ROOT_DIR"
 
-printf 'P44 read-only public-readiness dry-run gap report.\n'
+printf 'Read-only public-readiness dry-run gap report.\n'
 printf 'This does not make the repository public, push, create tags or releases, mutate GitHub settings, launch runtimes, or trigger sender/Telegram delivery.\n'
 
 if ! "$ROOT_DIR/scripts/verify_private_readiness.sh"; then
@@ -94,4 +94,4 @@ else
 fi
 printf '%s\n' "$GITHUB_OUTPUT"
 
-printf 'P44_PUBLIC_READINESS_DRY_RUN_PASS\n'
+printf 'PUBLIC_READINESS_DRY_RUN_PASS\n'

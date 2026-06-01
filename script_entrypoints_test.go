@@ -876,8 +876,7 @@ func TestRerunOpenClawExternalRuntimeEvidenceWorkflowScriptEntrypoint(t *testing
 	for _, want := range []string{
 		"EVENTS_PATH=\"\"",
 		"OUTPUT_PATH=\"\"",
-		"P41",
-		"repeatable workflow",
+		"Repeatable real-export workflow",
 		"Run OpenClaw externally",
 		"--events PATH",
 		"--output PATH",
@@ -1060,9 +1059,8 @@ func TestPrivateReadinessScriptEntrypoint(t *testing.T) {
 		}
 	}
 	for _, want := range []string{
-		"P42",
-		"private/local validation only",
-		"private validation/readiness",
+		"Private/local validation only",
+		"Private validation/readiness",
 		"SCRIPT_NAME=\"./scripts/verify_private_readiness.sh\"",
 		"$ROOT_DIR/scripts/ci-local.sh\" clean",
 		"$ROOT_DIR/scripts/verify_clawside_a2a.sh\"",
@@ -1114,8 +1112,7 @@ func TestPrivateReadinessHelpIsSanitized(t *testing.T) {
 	}
 	for _, want := range []string{
 		"usage: ./scripts/verify_private_readiness.sh",
-		"P42",
-		"private/local validation only",
+		"Private/local validation only",
 		"does not make the repository public",
 		"does not create tags or releases",
 	} {
@@ -1238,8 +1235,7 @@ func TestPrivateOpenClawExternalRuntimeEvidenceClosureScriptEntrypoint(t *testin
 		}
 	}
 	for _, want := range []string{
-		"P43",
-		"private real OpenClaw external-runtime evidence closure",
+		"Private real OpenClaw external-runtime evidence closure",
 		"SCRIPT_NAME=\"./scripts/close_private_openclaw_external_runtime_evidence.sh\"",
 		"--export-dir",
 		"./.openclaw/trajectory-exports/$EXPORT_DIR/events.jsonl",
@@ -1344,7 +1340,7 @@ printf 'rerun %s\n' "$*" >> "$LOG_PATH"
 	if strings.Index(logText, "private-readiness") > strings.Index(logText, "rerun --events") {
 		t.Fatalf("expected private readiness before rerun, got log %q", logText)
 	}
-	if !strings.Contains(stdout.String(), "P43 private real OpenClaw external-runtime evidence closure complete") {
+	if !strings.Contains(stdout.String(), "Private real OpenClaw external-runtime evidence closure complete") {
 		t.Fatalf("expected stdout to contain closure summary, got:\n%s", stdout.String())
 	}
 }
@@ -1441,11 +1437,10 @@ func TestClosureDryRunScriptsEntrypoints(t *testing.T) {
 		{
 			path: "scripts/public_readiness_dry_run.sh",
 			want: []string{
-				"P44",
 				"SCRIPT_NAME=\"./scripts/public_readiness_dry_run.sh\"",
 				"--external-runtime-evidence",
 				"--repo",
-				"P44_PUBLIC_READINESS_DRY_RUN_PASS",
+				"PUBLIC_READINESS_DRY_RUN_PASS",
 				"PUBLIC_READINESS_GAP",
 				"does not make the repository public",
 				"does not push",
@@ -1456,12 +1451,11 @@ func TestClosureDryRunScriptsEntrypoints(t *testing.T) {
 		{
 			path: "scripts/release_evidence_dry_run.sh",
 			want: []string{
-				"P45",
 				"SCRIPT_NAME=\"./scripts/release_evidence_dry_run.sh\"",
 				"--evidence-bundle",
 				"--tag",
 				"--verify-only",
-				"P45_RELEASE_EVIDENCE_DRY_RUN_PASS",
+				"RELEASE_EVIDENCE_DRY_RUN_PASS",
 				"does not create tags or releases",
 				"does not push",
 				"does not mutate GitHub settings",
@@ -1470,7 +1464,6 @@ func TestClosureDryRunScriptsEntrypoints(t *testing.T) {
 		{
 			path: "scripts/final_closure_checklist.sh",
 			want: []string{
-				"P46/P47",
 				"SCRIPT_NAME=\"./scripts/final_closure_checklist.sh\"",
 				"PRIVATE_LOCAL_CLOSURE",
 				"PUBLIC_GITHUB_READINESS",
@@ -2303,7 +2296,6 @@ func TestReadmeDocumentsPrivateDogfoodRehearsal(t *testing.T) {
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
 		wantTokens := []string{
-			"P20",
 			"private dogfood",
 			"./scripts/ci-local.sh clean",
 			"./scripts/verify_clawside_a2a.sh",
@@ -2334,8 +2326,7 @@ func TestReadmeDocumentsExternalSwarmRuntimeIntegrationGuide(t *testing.T) {
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
 		wantTokens := []string{
-			"P21",
-			"external swarm/runtime integration",
+			"External swarm/runtime integration",
 			"coordination sidecar",
 			"agent_register",
 			"collaboration_template_apply",
@@ -2381,10 +2372,6 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
 		wantTokens := []string{
-			"P38",
-			"P39",
-			"P40",
-			"P41",
 			"external runtime evidence dogfood",
 			"cmd/openclaw-external-runtime-evidence-extract/",
 			"scripts/extract_openclaw_external_runtime_evidence.sh",
@@ -2392,7 +2379,7 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 			"scripts/preflight_openclaw_external_runtime_evidence.sh",
 			"scripts/report_openclaw_external_runtime_evidence_suitability.sh",
 			"scripts/rerun_openclaw_external_runtime_evidence_workflow.sh",
-			"repeatable workflow",
+			"Repeatable real-export workflow",
 			"Run OpenClaw externally",
 			"export redacted trajectory",
 			"dogfood wrapper was not run",
@@ -2458,7 +2445,6 @@ func TestPrivateReadinessDocsAndExamples(t *testing.T) {
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
 		for _, want := range []string{
-			"P42",
 			"./scripts/verify_private_readiness.sh",
 			"./scripts/ci-local.sh clean",
 			"./scripts/verify_clawside_a2a.sh",
@@ -2495,7 +2481,6 @@ func TestPrivateOpenClawExternalRuntimeEvidenceClosureDocsAndExamples(t *testing
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
 		for _, want := range []string{
-			"P43",
 			"./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir <export-dir>",
 			".openclaw/trajectory-exports/<export-dir>/events.jsonl",
 			"./external-runtime-evidence.json",
@@ -2528,10 +2513,10 @@ func TestPrivateOpenClawExternalRuntimeEvidenceClosureDocsAndExamples(t *testing
 func TestReadmeKeepsReleaseDeferredAndPublicDocsSanitized(t *testing.T) {
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
-		wantTokens := []string{"P22", "./scripts/github-readiness.sh <owner>/<repo>"}
+		wantTokens := []string{"./scripts/github-readiness.sh <owner>/<repo>"}
 		if path == "README.zh-CN.md" {
 			wantTokens = append(wantTokens,
-				"P22 release 继续暂缓",
+				"Release 继续暂缓",
 				"不要把仓库设为 public",
 				"不要修改 GitHub 设置",
 				"不要创建 release",
@@ -2540,7 +2525,7 @@ func TestReadmeKeepsReleaseDeferredAndPublicDocsSanitized(t *testing.T) {
 			)
 		} else {
 			wantTokens = append(wantTokens,
-				"P22 release remains deferred",
+				"Release remains deferred",
 				"do not make the repository public",
 				"do not change GitHub settings",
 				"do not create a release",

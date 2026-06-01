@@ -7,9 +7,9 @@ SCRIPT_NAME="./scripts/verify_private_readiness.sh"
 usage() {
   printf 'usage: %s\n' "$SCRIPT_NAME"
   printf '\n'
-  printf 'P42 private validation/readiness aggregate.\n'
+  printf 'Private validation/readiness aggregate.\n'
   printf '\n'
-  printf 'P42 private/local validation only: re-run local private checks without publishing or delivery.\n'
+  printf 'Private/local validation only: re-run local private checks without publishing or delivery.\n'
   printf '\n'
   printf 'Safety boundaries:\n'
   printf '  - does not make the repository public\n'
@@ -68,13 +68,13 @@ fi
 
 cd "$ROOT_DIR"
 
-printf 'P42 private/local validation only.\n'
+printf 'Private/local validation only.\n'
 printf 'This does not make the repository public, create tags or releases, push, change GitHub settings, launch external runtimes, or trigger delivery.\n'
 
 run_stage "clean CI" "$ROOT_DIR/scripts/ci-local.sh" clean
 run_stage "A2A readiness" "$ROOT_DIR/scripts/verify_clawside_a2a.sh"
 run_stage "private coordination" "$ROOT_DIR/scripts/verify_openclaw_mcp.sh" --profile private-coordination --json
 run_stage "external-runtime evidence fixture" "$ROOT_DIR/scripts/verify_openclaw_mcp.sh" --profile external-runtime-evidence --sender-base-url "" --mcp-command "" --openclaw-external-runtime-evidence testdata/openclaw-smoke/stage0-5/external-runtime-evidence.json --json
-run_stage "P41 real-export checklist" "$ROOT_DIR/scripts/rerun_openclaw_external_runtime_evidence_workflow.sh"
+run_stage "real-export checklist" "$ROOT_DIR/scripts/rerun_openclaw_external_runtime_evidence_workflow.sh"
 
 print_remaining

@@ -51,13 +51,13 @@ Which verifier should I run?
 | Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
 | GitHub public readiness before opening the repository | `./scripts/github-readiness.sh <owner>/<repo>` |
 
-### P20-P22 current integration status
+### Current integration status
 
-- **P20 private dogfood rehearsal:** the current private dogfood path is documented as a repeatable local rehearsal. Treat it as private operational evidence for Clawside's truth-plane / MCP sidecar behavior, not as public release evidence.
-- **P21 external swarm/runtime integration guide:** this README now documents how an external runtime launches its own workers and uses Clawside as a coordination sidecar.
-- **P22 release remains deferred:** until there is explicit authorization, do not make the repository public, do not change GitHub settings, do not create a release, and do not create or push a tag. Keep public-readiness checks read-only with `./scripts/github-readiness.sh <owner>/<repo>`.
+- **Private dogfood rehearsal:** the current private dogfood path is documented as a repeatable local rehearsal. Treat it as private operational evidence for Clawside's truth-plane / MCP sidecar behavior, not as public release evidence.
+- **External swarm/runtime integration guide:** this README now documents how an external runtime launches its own workers and uses Clawside as a coordination sidecar.
+- **Release remains deferred:** until there is explicit authorization, do not make the repository public, do not change GitHub settings, do not create a release, and do not create or push a tag. Keep public-readiness checks read-only with `./scripts/github-readiness.sh <owner>/<repo>`.
 
-### P20 private dogfood rehearsal sequence
+### Private dogfood rehearsal sequence
 
 Use this sequence to rehearse the private runtime path without publishing release evidence. Clawside records durable truth-plane state; it does not launch model workers, runtime sessions, or sandboxes.
 
@@ -77,7 +77,7 @@ Expected results while the repository remains private:
 
 The rehearsal covers the current truth-plane bridge behavior: agent registry, symbolic `project://...` references, `next_work`, `blocked_work`, reviewer gates, dependency gates, `workflow_status`, and `coordination_evidence_summary`. The `private-coordination` profile expands to the truth-plane-only coordination checks behind `--multi-agent-coordination-smoke`, `--collaboration-template-smoke`, `--external-runtime-smoke`, and `--private-multi-project-dogfood-smoke`, with sender checks and delivery disabled. It does not call `message/send` or `message/stream`, does not trigger sender or Telegram delivery, and does not accept runtime launch fields.
 
-### P21 external swarm/runtime integration sequence
+### External swarm/runtime integration sequence
 
 An external swarm/runtime integrator should treat Clawside as a coordination sidecar. The runtime owns model execution, worker/session/sandbox lifecycle, scheduling, and task execution. Clawside owns durable truth, workflow/handoff state, ownership, watches, repair, divergence, dependency gates, reviewer gates, evidence, and A2A-compatible read/query/cancel surfaces.
 
@@ -134,7 +134,7 @@ To exercise the runtime-owned loop locally without launching workers, run:
 ./scripts/verify_openclaw_mcp.sh --sender-base-url "" --collaboration-template-smoke --external-runtime-smoke --json
 ```
 
-#### P35 minimal external runtime sample
+#### Minimal external runtime sample
 
 `cmd/clawside-external-runtime-sample` is a minimal truth-plane-only sample for runtimes such as Claude, Kimi, OpenClaw, or another swarm. It registers runtime-owned agents with symbolic refs (`project://sample/external-runtime/upstream`, `project://sample/external-runtime/downstream`, `project://sample/external-runtime/review`), creates upstream and downstream handoffs, checks `next_work` and `blocked_work`, progresses protocol actions, then reads `workflow_status` and `coordination_evidence_summary`.
 
@@ -144,7 +144,7 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
 
 Safety boundaries: the sample does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender or Telegram delivery, and does not accept arbitrary command/args/cwd/local path/private prompt/token/session/worker launch fields.
 
-#### P38 real OpenClaw trajectory external runtime evidence dogfood validation
+#### Real OpenClaw trajectory external runtime evidence dogfood validation
 
 Use this path when the external runtime has run outside Clawside and exported an OpenClaw trajectory `events.jsonl`. `cmd/openclaw-external-runtime-evidence-extract/` reads bounded envelope metadata plus Clawside MCP tool results from that trajectory, writes evidence with `schema_version=p37.external-runtime-trajectory.v1` and `trajectory_provenance.source_kind=openclaw_events_jsonl_export`, and requires at least one non-Clawside trajectory event; it does not store or print raw trajectory payloads, replay payloads, or launch anything.
 
@@ -178,7 +178,7 @@ Or run the one-step local dogfood wrapper, which performs the same extraction an
   --output ./external-runtime-evidence.json
 ```
 
-P39 adds a read-only preflight/finder for local OpenClaw exports. It scans only the ignored repo-local path `.openclaw/trajectory-exports/<export-dir>/events.jsonl`, prints only bounded file metadata and the next command, and does not print raw trajectory payloads:
+The preflight finder adds a read-only check for local OpenClaw exports. It scans only the ignored repo-local path `.openclaw/trajectory-exports/<export-dir>/events.jsonl`, prints only bounded file metadata and the next command, and does not print raw trajectory payloads:
 
 ```bash
 ./scripts/preflight_openclaw_external_runtime_evidence.sh
@@ -192,14 +192,14 @@ After selecting an export, ask preflight to show the exact end-to-end wrapper co
   --output ./external-runtime-evidence.json
 ```
 
-P40 adds a read-only suitability gap report between preflight and the P38 wrapper. It uses `schema_version=p40.external-runtime-suitability.v1` and reports `suitable=true` only when the trajectory has the required Clawside MCP tool chain, lifecycle gates, non-Clawside trajectory observation, lifecycle order, and no forbidden launch or delivery tools:
+The suitability report runs between preflight and the dogfood wrapper. It uses `schema_version=p40.external-runtime-suitability.v1` and reports `suitable=true` only when the trajectory has the required Clawside MCP tool chain, lifecycle gates, non-Clawside trajectory observation, lifecycle order, and no forbidden launch or delivery tools:
 
 ```bash
 ./scripts/report_openclaw_external_runtime_evidence_suitability.sh \
   --events ./.openclaw/trajectory-exports/<export-dir>/events.jsonl
 ```
 
-The P40 report lists only bounded `missing_tools`, `missing_gates`, `forbidden_tools`, counts, observed event types, and a placeholder next command. It does not print raw trajectory payloads, does not launch runtime/session/sandbox/model workers, and does not trigger sender/Telegram delivery. If the report returns `suitable=true`, run the P38 wrapper explicitly for the actual extraction plus read-only validation step:
+The suitability report lists only bounded `missing_tools`, `missing_gates`, `forbidden_tools`, counts, observed event types, and a placeholder next command. It does not print raw trajectory payloads, does not launch runtime/session/sandbox/model workers, and does not trigger sender/Telegram delivery. If the report returns `suitable=true`, run the dogfood wrapper explicitly for the actual extraction plus read-only validation step:
 
 ```bash
 ./scripts/dogfood_openclaw_external_runtime_evidence.sh \
@@ -207,7 +207,7 @@ The P40 report lists only bounded `missing_tools`, `missing_gates`, `forbidden_t
   --output ./external-runtime-evidence.json
 ```
 
-P41 packages the real OpenClaw rerun into a repeatable workflow without turning Clawside into an OpenClaw launcher. Run it without arguments to print the sanitized checklist, then follow the checklist steps to Run OpenClaw externally, export redacted trajectory data to `.openclaw/trajectory-exports/<export-dir>/events.jsonl`, and run the same script with explicit paths:
+Repeatable real-export workflow packages the real OpenClaw rerun without turning Clawside into an OpenClaw launcher. Run it without arguments to print the sanitized checklist, then follow the checklist steps to Run OpenClaw externally, export redacted trajectory data to `.openclaw/trajectory-exports/<export-dir>/events.jsonl`, and run the same script with explicit paths:
 
 ```bash
 ./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh
@@ -216,9 +216,9 @@ P41 packages the real OpenClaw rerun into a repeatable workflow without turning 
   --output ./external-runtime-evidence.json
 ```
 
-The P41 script runs local bounded verification only after an export exists: P39 preflight, then P40 suitability, then the P38 dogfood wrapper only when `suitable=true`. If the trajectory is not suitable, it prints the bounded gap report and `dogfood wrapper was not run`. It does not launch OpenClaw/Claude/Kimi runtime, sessions, sandboxes, or model workers; it does not trigger sender/Telegram delivery; and it uses only placeholders in public docs.
+The script runs local bounded verification only after an export exists: preflight, then the suitability report, then the dogfood wrapper only when `suitable=true`. If the trajectory is not suitable, it prints the bounded gap report and `dogfood wrapper was not run`. It does not launch OpenClaw/Claude/Kimi runtime, sessions, sandboxes, or model workers; it does not trigger sender/Telegram delivery; and it uses only placeholders in public docs.
 
-P42 adds a private validation/readiness aggregate for local pre-public checks:
+The private validation/readiness aggregate is for local pre-public checks:
 
 ```bash
 ./scripts/verify_private_readiness.sh
@@ -226,7 +226,7 @@ P42 adds a private validation/readiness aggregate for local pre-public checks:
 
 It runs `./scripts/ci-local.sh clean`, `./scripts/verify_clawside_a2a.sh`, `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`, read-only fixture validation with `--profile external-runtime-evidence` and `testdata/openclaw-smoke/stage0-5/external-runtime-evidence.json`, and the `./scripts/rerun_openclaw_external_runtime_evidence_workflow.sh` checklist. It does not make the repository public, does not create tags or releases, does not push, does not change GitHub settings, does not trigger sender/Telegram delivery, and does not launch OpenClaw/Claude/Kimi runtimes, sessions, sandboxes, or model workers. GitHub readiness remains explicit and read-only via `./scripts/github-readiness.sh <owner>/<repo>`.
 
-P43 closes the private real OpenClaw external-runtime evidence loop before public/release. First run OpenClaw externally and export a redacted trajectory to `.openclaw/trajectory-exports/<export-dir>/events.jsonl`, then run:
+The private real OpenClaw external-runtime evidence loop closes before public/release. First run OpenClaw externally and export a redacted trajectory to `.openclaw/trajectory-exports/<export-dir>/events.jsonl`, then run:
 
 ```bash
 ./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir <export-dir>
@@ -256,7 +256,7 @@ Before making any public-readiness or release claim, keep verification read-only
 ./scripts/github-readiness.sh <owner>/<repo>
 ```
 
-### P29 private Telegram operator entrypoint
+### Private Telegram operator entrypoint
 
 `cmd/clawside-telegram-operator` is a separate inbound long-polling operator for private dogfood. It opens the same truth-plane SQLite DB, reads the configured Telegram bot token and allowlist, accepts only allowlisted Telegram users in a private chat, and replies with bounded hand-written summaries.
 
@@ -343,7 +343,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
   --verify
 ```
 
-6. Optional tag preflight only. P22 release remains deferred, so keep `--verify-only` unless there is explicit authorization:
+6. Optional tag preflight only. Release remains deferred, so keep `--verify-only` unless there is explicit authorization:
 
 ```bash
 ./scripts/tag-release.sh --verify-only --evidence-bundle <bundle-dir> vX.Y.Z
@@ -805,7 +805,7 @@ For machine-readable output:
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --json
 ```
 
-To validate the built-in collaboration template catalog and the P17 multi-project agent rehearsal path, enable the opt-in template smoke. It checks `upstream_downstream_review`, `review_gate`, and `fanout_review` catalog metadata, registers upstream/downstream/reviewer agents on symbolic `project://...` refs, applies `upstream_downstream_review`, verifies project-filtered `next_work` / `blocked_work` dependency gating, validates downstream readiness after upstream completion, validates reviewer readiness after downstream completion, and checks idempotent template replay. This is truth-plane coordination evidence only: it does not call `message/send` or `message/stream`, send push notifications, launch runtime sessions/sandboxes/workers, trigger sender/Telegram delivery, or accept command/args/local paths/private prompts/session IDs/tokens/job IDs.
+To validate the built-in collaboration template catalog and the multi-project agent rehearsal path, enable the opt-in template smoke. It checks `upstream_downstream_review`, `review_gate`, and `fanout_review` catalog metadata, registers upstream/downstream/reviewer agents on symbolic `project://...` refs, applies `upstream_downstream_review`, verifies project-filtered `next_work` / `blocked_work` dependency gating, validates downstream readiness after upstream completion, validates reviewer readiness after downstream completion, and checks idempotent template replay. This is truth-plane coordination evidence only: it does not call `message/send` or `message/stream`, send push notifications, launch runtime sessions/sandboxes/workers, trigger sender/Telegram delivery, or accept command/args/local paths/private prompts/session IDs/tokens/job IDs.
 
 ```bash
 SENDER_AUTH_KEY=... ./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke
