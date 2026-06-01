@@ -253,11 +253,18 @@ func applyProfileDefaults(opts Options) Options {
 		return applyFixturesProfileDefaults(opts)
 	case profilePrivateCoordination:
 		return applyPrivateCoordinationProfileDefaults(opts)
+	case profileReleaseEvidence:
+		return applyReleaseEvidenceProfileDefaults(opts)
 	case profileExternalRuntimeEvidence:
 		return applyExternalRuntimeEvidenceProfileDefaults(opts)
 	default:
 		return opts
 	}
+}
+
+func applyReleaseEvidenceProfileDefaults(opts Options) Options {
+	opts.SenderBaseURL = ""
+	return opts
 }
 
 func applyPrivateCoordinationProfileDefaults(opts Options) Options {

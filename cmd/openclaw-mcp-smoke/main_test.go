@@ -578,6 +578,28 @@ func TestRunSmokeReleaseEvidenceProfileAcceptsRealEvidenceWithDelivery(t *testin
 	assertCheck(t, report, "a2a_main_delivery", checkStatusSkipped)
 }
 
+func TestRunSmokeReleaseEvidenceProfileSkipsLiveSenderChecks(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+	opts := validProfileEvidenceOptions(t)
+	opts.Profile = profileReleaseEvidence
+	opts.ConfigPath = configPath
+	opts.DBPath = filepath.Join(dir, "sender.db")
+	opts.SenderBaseURL = "http://127.0.0.1:1"
+
+	report, err := RunSmoke(context.Background(), opts)
+	if err != nil {
+		t.Fatalf("run smoke: %v", err)
+	}
+
+	assertCheck(t, report, "sender_health", checkStatusSkipped)
+	assertCheck(t, report, "sender_ready", checkStatusSkipped)
+	assertCheck(t, report, "sender_stats", checkStatusSkipped)
+	if report.Status != reportStatusOK {
+		t.Fatalf("expected release-evidence report ok, got %+v", report)
+	}
+}
+
 func TestRunSmokeReleaseEvidenceProfileRequiresAllResultPaths(t *testing.T) {
 	_, err := RunSmoke(context.Background(), Options{Profile: profileReleaseEvidence})
 	if err == nil {
