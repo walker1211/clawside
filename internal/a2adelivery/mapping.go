@@ -16,6 +16,10 @@ var firstVersionTargetAgentToBot = map[string]string{
 	"archivist":  "archivist",
 	"guardian":   "guardian",
 	"closer":     "closer",
+	"worker":     "main",
+	"upstream":   "main",
+	"downstream": "main",
+	"reviewer":   "main",
 }
 
 type TargetAgentBotResolver struct {
@@ -38,7 +42,7 @@ func NewTargetAgentBotResolver(config string) (*TargetAgentBotResolver, error) {
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("target_agent mapping %q must use target=bot", pair)
 		}
-		targetAgent := deliveryrules.NormalizeBotName(parts[0])
+		targetAgent := normalizeTargetAgentName(parts[0])
 		bot := deliveryrules.NormalizeBotName(parts[1])
 		if targetAgent == "" || bot == "" {
 			return nil, fmt.Errorf("target_agent mapping %q must include non-blank target and bot", pair)
@@ -49,12 +53,16 @@ func NewTargetAgentBotResolver(config string) (*TargetAgentBotResolver, error) {
 }
 
 func (r *TargetAgentBotResolver) ResolveBotForTargetAgent(targetAgent string) (string, error) {
-	normalized := deliveryrules.NormalizeBotName(targetAgent)
+	normalized := normalizeTargetAgentName(targetAgent)
 	bot, ok := r.targetAgentToBot[normalized]
 	if !ok {
 		return "", fmt.Errorf("unknown target_agent %q", targetAgent)
 	}
 	return bot, nil
+}
+
+func normalizeTargetAgentName(value string) string {
+	return strings.TrimPrefix(deliveryrules.NormalizeBotName(value), "agent:")
 }
 
 func ResolveBotForTargetAgent(targetAgent string) (string, error) {

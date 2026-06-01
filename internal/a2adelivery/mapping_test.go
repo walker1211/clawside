@@ -15,6 +15,9 @@ func TestResolveBotForTargetAgentKnownMappings(t *testing.T) {
 		{name: "archivist maps 1:1", targetAgent: "archivist", wantBot: "archivist"},
 		{name: "guardian maps 1:1", targetAgent: "guardian", wantBot: "guardian"},
 		{name: "closer maps 1:1", targetAgent: "closer", wantBot: "closer"},
+		{name: "agent worker maps to main", targetAgent: "agent:worker", wantBot: "main"},
+		{name: "agent downstream maps to main", targetAgent: "agent:downstream", wantBot: "main"},
+		{name: "downstream maps to main", targetAgent: "downstream", wantBot: "main"},
 	}
 
 	for _, tc := range tests {
@@ -79,6 +82,23 @@ func TestNewTargetAgentBotResolverOverridesBuiltInMapping(t *testing.T) {
 	}
 	if got != "guardian" {
 		t.Fatalf("expected bot guardian, got %q", got)
+	}
+}
+
+func TestNewTargetAgentBotResolverOverridesOpenClawAgentAlias(t *testing.T) {
+	resolver, err := NewTargetAgentBotResolver("agent:worker=guardian")
+	if err != nil {
+		t.Fatalf("NewTargetAgentBotResolver: %v", err)
+	}
+
+	for _, targetAgent := range []string{"worker", "agent:worker"} {
+		got, err := resolver.ResolveBotForTargetAgent(targetAgent)
+		if err != nil {
+			t.Fatalf("expected configured override for %q, got error: %v", targetAgent, err)
+		}
+		if got != "guardian" {
+			t.Fatalf("expected bot guardian for %q, got %q", targetAgent, got)
+		}
 	}
 }
 
