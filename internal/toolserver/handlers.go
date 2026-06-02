@@ -8,6 +8,7 @@ import (
 
 	"github.com/walker1211/clawside/internal/a2adelivery"
 	"github.com/walker1211/clawside/internal/deliveryrules"
+	"github.com/walker1211/clawside/internal/openclawevents"
 	"github.com/walker1211/clawside/internal/orchestrator"
 )
 
@@ -104,6 +105,14 @@ type HandoffProgressInput struct {
 	Actor          ActorRefInput `json:"actor"`
 	ArtifactCount  int           `json:"artifact_count,omitempty"`
 	ReviewDecision string        `json:"review_decision,omitempty"`
+}
+
+type OpenClawEventIngestInput struct {
+	Events []openclawevents.Event `json:"events"`
+}
+
+type OpenClawEventIngestOutput struct {
+	Summary openclawevents.IngestSummary `json:"summary"`
 }
 
 type WorkflowStatusInput struct {
@@ -460,6 +469,52 @@ func (h *Handlers) HandleHandoffProgress(ctx context.Context, input HandoffProgr
 		ArtifactCount:  input.ArtifactCount,
 		ReviewDecision: orchestrator.ReviewDecision(strings.TrimSpace(input.ReviewDecision)),
 	})
+}
+
+func (h *Handlers) HandleOpenClawEventIngest(ctx context.Context, input OpenClawEventIngestInput) (OpenClawEventIngestOutput, error) {
+	summary := openclawevents.IngestSummary{Results: make([]openclawevents.IngestResult, 0, len(input.Events))}
+	for index, event := range input.Events {
+		summary.Processed++
+		result := openclawevents.IngestResult{
+			Index:      index,
+			WorkflowID: strings.TrimSpace(event.WorkflowID),
+			HandoffID:  strings.TrimSpace(event.HandoffID),
+			Agent:      strings.TrimSpace(event.Agent),
+		}
+
+		request, ignored, err := openclawevents.MapEvent(event)
+		if err != nil {
+			summary.Failed++
+			result.Status = openclawevents.StatusFailed
+			result.Reason = err.Error()
+			summary.Results = append(summary.Results, result)
+			continue
+		}
+		if ignored {
+			summary.Ignored++
+			result.Status = openclawevents.StatusIgnored
+			result.Reason = "ignored event"
+			summary.Results = append(summary.Results, result)
+			continue
+		}
+
+		_, err = h.svc.ApplyProtocolAction(ctx, request)
+		if err != nil {
+			summary.Failed++
+			result.Status = openclawevents.StatusFailed
+			result.Reason = err.Error()
+			summary.Results = append(summary.Results, result)
+			continue
+		}
+		summary.Applied++
+		result.Status = openclawevents.StatusApplied
+		result.WorkflowID = request.WorkflowID
+		result.HandoffID = request.HandoffID
+		result.Agent = request.Actor.ID
+		result.Action = string(request.Action)
+		summary.Results = append(summary.Results, result)
+	}
+	return OpenClawEventIngestOutput{Summary: summary}, nil
 }
 
 func (h *Handlers) HandleWorkflowStatus(ctx context.Context, input WorkflowStatusInput) (orchestrator.WorkflowView, error) {

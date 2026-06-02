@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/walker1211/clawside/internal/a2adelivery"
+	"github.com/walker1211/clawside/internal/openclawevents"
 	"github.com/walker1211/clawside/internal/orchestrator"
 
 	_ "modernc.org/sqlite"
@@ -126,6 +127,60 @@ func TestHandleBlockedWorkReportsDependencyReason(t *testing.T) {
 	}
 	if len(blocked.Items[0].Reasons) != 1 || blocked.Items[0].Reasons[0].Code != "dependency_incomplete" || blocked.Items[0].Reasons[0].DependencyHandoffID != root.Handoff.ID {
 		t.Fatalf("expected dependency reason, got %+v", blocked.Items[0].Reasons)
+	}
+}
+
+func TestHandleOpenClawEventIngestAppliesLifecycleEvents(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	ctx := context.Background()
+	created, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
+		WorkflowKind: "openclaw_event_bridge_test",
+		Sender:       ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "main"},
+		Receiver:     ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "planner"},
+		TaskKind:     string(orchestrator.TaskGeneric),
+		Intent:       "plan the work",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+
+	out, err := h.HandleOpenClawEventIngest(ctx, OpenClawEventIngestInput{Events: []openclawevents.Event{
+		{Type: "openclaw.trace", Event: "started", HandoffID: created.Handoff.ID, Agent: "planner"},
+		{Type: openclawevents.AgentEventType, Event: "received", WorkflowID: created.Workflow.ID, HandoffID: created.Handoff.ID, Agent: "agent:planner"},
+		{Type: openclawevents.AgentEventType, Event: "claimed", WorkflowID: created.Workflow.ID, HandoffID: created.Handoff.ID, Agent: "planner"},
+		{Type: openclawevents.AgentEventType, Event: "started", WorkflowID: created.Workflow.ID, HandoffID: created.Handoff.ID, Agent: "planner"},
+		{Type: openclawevents.AgentEventType, Event: "checkpointed", WorkflowID: created.Workflow.ID, HandoffID: created.Handoff.ID, Agent: "planner"},
+		{Type: openclawevents.AgentEventType, Event: "completed", WorkflowID: created.Workflow.ID, HandoffID: created.Handoff.ID, Agent: "planner"},
+	}})
+	if err != nil {
+		t.Fatalf("HandleOpenClawEventIngest: %v", err)
+	}
+	if out.Summary.Processed != 6 || out.Summary.Applied != 5 || out.Summary.Ignored != 1 || out.Summary.Failed != 0 {
+		t.Fatalf("unexpected summary: %+v", out.Summary)
+	}
+
+	got, err := h.HandleHandoffGet(ctx, HandoffGetInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleHandoffGet: %v", err)
+	}
+	if got.Handoff.State != orchestrator.StateCompleted {
+		t.Fatalf("expected completed handoff, got %s", got.Handoff.State)
+	}
+}
+
+func TestHandleOpenClawEventIngestReportsFailedEvents(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	out, err := h.HandleOpenClawEventIngest(context.Background(), OpenClawEventIngestInput{Events: []openclawevents.Event{
+		{Type: openclawevents.AgentEventType, Event: "started", Agent: "planner"},
+	}})
+	if err != nil {
+		t.Fatalf("HandleOpenClawEventIngest: %v", err)
+	}
+	if out.Summary.Processed != 1 || out.Summary.Applied != 0 || out.Summary.Failed != 1 {
+		t.Fatalf("unexpected summary: %+v", out.Summary)
+	}
+	if len(out.Summary.Results) != 1 || out.Summary.Results[0].Status != openclawevents.StatusFailed || out.Summary.Results[0].Reason != "handoff_id is required" {
+		t.Fatalf("unexpected result: %+v", out.Summary.Results)
 	}
 }
 

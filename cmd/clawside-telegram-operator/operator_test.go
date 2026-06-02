@@ -198,6 +198,34 @@ func TestOperatorPollingLoopHandlesAuthorizedPrivateCommand(t *testing.T) {
 	}
 }
 
+func TestOperatorPollingLoopRoutesAuthorizedPrivateTextToAgentBridge(t *testing.T) {
+	op, _ := newTestOperator(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	bridge := &fakeTelegramInboundAgentBridge{response: "planner ACK: received"}
+	op.inboundAgentBridge = bridge
+	fake := &fakeTelegramAPI{
+		batches: [][]telegramUpdate{{{
+			UpdateID: 10,
+			Message:  &telegramMessage{MessageID: 7, Chat: telegramChat{ID: 123, Type: "private"}, From: &telegramUser{ID: 1001}, Text: "planner ACK test"},
+		}}},
+		cancelOnSend: cancel,
+	}
+
+	if err := runOperatorLoop(ctx, operatorConfig{Token: "secret-token", BotName: "planner", AllowUserIDs: map[int64]struct{}{1001: {}}}, fake, op, time.Second); err != nil {
+		t.Fatalf("run loop: %v", err)
+	}
+	if len(bridge.inputs) != 1 {
+		t.Fatalf("expected one agent bridge call, got %#v", bridge.inputs)
+	}
+	input := bridge.inputs[0]
+	if input.TargetAgent != "planner" || input.Text != "planner ACK test" || input.ChatID != 123 || input.FromUserID != 1001 || input.ReplyToMessageID != 7 {
+		t.Fatalf("unexpected agent bridge input: %#v", input)
+	}
+	if len(fake.sent) != 1 || fake.sent[0].ChatID != 123 || fake.sent[0].Text != "planner ACK: received" || fake.sent[0].ReplyToMessageID == nil || *fake.sent[0].ReplyToMessageID != 7 {
+		t.Fatalf("unexpected sent messages: %#v", fake.sent)
+	}
+}
+
 func TestOperatorPollingLoopEnforcesAllowlistAndPrivateChat(t *testing.T) {
 	cases := map[string]telegramUpdate{
 		"unauthorized user": {UpdateID: 10, Message: &telegramMessage{MessageID: 7, Chat: telegramChat{ID: 123, Type: "private"}, From: &telegramUser{ID: 2002}, Text: "/health"}},
@@ -301,6 +329,17 @@ func (f *fakeTelegramAPI) sendMessage(ctx context.Context, token string, req tel
 		f.cancelOnSend()
 	}
 	return nil
+}
+
+type fakeTelegramInboundAgentBridge struct {
+	inputs   []telegramInboundAgentInput
+	response string
+	err      error
+}
+
+func (f *fakeTelegramInboundAgentBridge) Run(ctx context.Context, input telegramInboundAgentInput) (string, error) {
+	f.inputs = append(f.inputs, input)
+	return f.response, f.err
 }
 
 func newTestOperator(t *testing.T) (*operator, *toolserver.Handlers) {

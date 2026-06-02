@@ -24,6 +24,8 @@ const (
 	operatorBotEnvName     = "CLAWSIDE_TELEGRAM_OPERATOR_BOT"
 	operatorDBPathEnvName  = "CLAWSIDE_TELEGRAM_OPERATOR_DB_PATH"
 	operatorBaseURLEnvName = "CLAWSIDE_TELEGRAM_OPERATOR_BASE_URL"
+	openClawCommandEnvName = "OPENCLAW_COMMAND"
+	openClawArgsEnvName    = "OPENCLAW_ARGS"
 )
 
 type options struct {
@@ -31,7 +33,10 @@ type options struct {
 	DBPath          string
 	BotName         string
 	TelegramBaseURL string
+	OpenClawCommand string
+	OpenClawArgs    []string
 	PollTimeout     time.Duration
+	AgentTimeout    time.Duration
 }
 
 var runOperatorLoopFunc = runOperatorLoop
@@ -73,7 +78,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	svc := orchestrator.NewService(store, nil)
 	handlers := toolserver.NewHandlers(svc, store, nil)
-	op := &operator{handlers: handlers}
+	op := &operator{handlers: handlers, inboundAgentBridge: newOpenClawTelegramInboundAgentBridge(opts)}
 	client := newTelegramClient(opts.TelegramBaseURL, nil)
 	if _, err := fmt.Fprintf(stdout, "clawside Telegram operator polling with bot %s\n", cfg.BotName); err != nil {
 		return err
@@ -104,7 +109,10 @@ Options:
   --db PATH                 SQLite truth-plane DB path; overrides config database_path
   --bot NAME                Telegram bot name; defaults to CLAWSIDE_TELEGRAM_OPERATOR_BOT
   --telegram-base-url URL   Telegram API base URL; defaults to CLAWSIDE_TELEGRAM_OPERATOR_BASE_URL or https://api.telegram.org
+  --openclaw-command CMD    OpenClaw CLI command for non-command inbound text; use only with a bot not already polled by OpenClaw
+  --openclaw-arg ARG        OpenClaw command argument; repeat for multiple args
   --poll-timeout DURATION   Telegram getUpdates long-poll timeout (default: 30s)
+  --agent-timeout DURATION  OpenClaw agent command timeout (default: 30s)
   help, --help, -h          Show this help.
 
 Supported commands:
@@ -124,6 +132,7 @@ func resolveOptions(args []string) (options, error) {
 		DBPath:          strings.TrimSpace(os.Getenv(operatorDBPathEnvName)),
 		TelegramBaseURL: envOrDefault(operatorBaseURLEnvName, defaultTelegramBaseURL),
 		PollTimeout:     30 * time.Second,
+		AgentTimeout:    30 * time.Second,
 	}
 	fs := flag.NewFlagSet("clawside-telegram-operator", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -131,7 +140,10 @@ func resolveOptions(args []string) (options, error) {
 	fs.StringVar(&opts.DBPath, "db", opts.DBPath, "SQLite truth-plane DB path")
 	fs.StringVar(&opts.BotName, "bot", opts.BotName, "Telegram bot name")
 	fs.StringVar(&opts.TelegramBaseURL, "telegram-base-url", opts.TelegramBaseURL, "Telegram API base URL")
+	fs.StringVar(&opts.OpenClawCommand, "openclaw-command", opts.OpenClawCommand, "OpenClaw CLI command for non-command inbound text")
+	fs.Var((*operatorRepeatedStringFlag)(&opts.OpenClawArgs), "openclaw-arg", "OpenClaw command argument; repeat for multiple args")
 	fs.DurationVar(&opts.PollTimeout, "poll-timeout", opts.PollTimeout, "Telegram long-poll timeout")
+	fs.DurationVar(&opts.AgentTimeout, "agent-timeout", opts.AgentTimeout, "OpenClaw agent command timeout")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -139,6 +151,8 @@ func resolveOptions(args []string) (options, error) {
 	opts.DBPath = strings.TrimSpace(opts.DBPath)
 	opts.BotName = strings.TrimSpace(opts.BotName)
 	opts.TelegramBaseURL = strings.TrimRight(strings.TrimSpace(opts.TelegramBaseURL), "/")
+	opts.OpenClawCommand = strings.TrimSpace(opts.OpenClawCommand)
+	opts.OpenClawArgs = compactOperatorOpenClawArgs(opts.OpenClawArgs)
 	if opts.ConfigPath == "" {
 		return options{}, fmt.Errorf("config is required")
 	}
@@ -147,6 +161,9 @@ func resolveOptions(args []string) (options, error) {
 	}
 	if opts.PollTimeout <= 0 {
 		return options{}, fmt.Errorf("poll-timeout must be positive")
+	}
+	if opts.AgentTimeout <= 0 {
+		return options{}, fmt.Errorf("agent-timeout must be positive")
 	}
 	return opts, nil
 }
@@ -167,4 +184,26 @@ func envOrDefault(name string, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+type operatorRepeatedStringFlag []string
+
+func (f *operatorRepeatedStringFlag) String() string {
+	return fmt.Sprint([]string(*f))
+}
+
+func (f *operatorRepeatedStringFlag) Set(value string) error {
+	*f = append(*f, value)
+	return nil
+}
+
+func compactOperatorOpenClawArgs(values []string) []string {
+	var out []string
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }

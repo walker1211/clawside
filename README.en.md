@@ -258,7 +258,9 @@ Before making any public-readiness or release claim, keep verification read-only
 
 ### Private Telegram operator entrypoint
 
-`cmd/clawside-telegram-operator` is a separate inbound long-polling operator for private dogfood. It opens the same truth-plane SQLite DB, reads the configured Telegram bot token and allowlist, accepts only allowlisted Telegram users in a private chat, and replies with bounded hand-written summaries.
+`cmd/clawside-telegram-operator` is a separate inbound long-polling operator for private dogfood. It opens the same truth-plane SQLite DB, reads the configured Telegram bot token and allowlist, accepts only allowlisted Telegram users in a private chat, and replies to fixed slash commands with bounded hand-written summaries. Non-command text bridging to OpenClaw is an explicit test-only mode; enable it with `--openclaw-command` only for a bot that is not already being polled by the OpenClaw gateway.
+
+When OpenClaw already owns agent communication and Telegram inbound, keep that ownership in OpenClaw. Report agent lifecycle back into clawside through the `openclaw_event_ingest` MCP tool or `cmd/openclaw-event-bridge`; do not run clawside Telegram polling for a bot that OpenClaw is already polling.
 
 Help is available without config, DB, network, or sender auth:
 
@@ -361,6 +363,7 @@ Do not remove `--verify-only`, create a release, make the repository public, cha
 - `cmd/clawside-dogfood-seed/`: local private dogfood seed CLI for generating review handoffs for Telegram approval.
 - `cmd/openclaw-mcp-smoke/`: local smoke verifier for OpenClaw consuming the clawside MCP v1 surface.
 - `cmd/openclaw-dispatch/`: local helper that adapts `handoff_dispatch adapter=openclaw` requests to an OpenClaw-compatible CLI command.
+- `cmd/openclaw-event-bridge/`: local JSONL ingest bridge for OpenClaw agent lifecycle events.
 - `cmd/openclaw-tool-results-extract/`: local read-only CLI for extracting clawside tool structured results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-extract/`: local read-only CLI for extracting minimal truth-plane handoff/workflow/watch/ownership validation results from OpenClaw trajectory.
 - `cmd/openclaw-truth-plane-progression-extract/`: local read-only CLI for extracting completed handoff progression validation results from OpenClaw trajectory.

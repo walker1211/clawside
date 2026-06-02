@@ -261,6 +261,10 @@ func TestTelegramOperatorLifecycleScripts(t *testing.T) {
 		"CLAWSIDE_TELEGRAM_OPERATOR_BOT",
 		"CLAWSIDE_TELEGRAM_OPERATOR_DB_PATH",
 		"CLAWSIDE_TELEGRAM_OPERATOR_BASE_URL",
+		"--openclaw-command",
+		"--openclaw-arg",
+		"--agent-timeout",
+		"COMMAND+=(--openclaw-command \"$OPENCLAW_COMMAND\")",
 	} {
 		assertFileContains(t, "scripts/start_telegram_operator.sh", want)
 	}

@@ -213,6 +213,15 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return handlers.HandleHandoffProgress(ctx, args)
 	}))
 
+	openClawEventIngestTool := mcp.NewTool("openclaw_event_ingest",
+		mcp.WithDescription("Ingest OpenClaw or agent lifecycle events into the clawside truth-plane. This only applies explicit lifecycle events; it does not poll Telegram, launch runtimes, open sessions, run commands, or send messages."),
+		mcp.WithInputSchema[toolserver.OpenClawEventIngestInput](),
+		mcp.WithOutputSchema[toolserver.OpenClawEventIngestOutput](),
+	)
+	s.AddTool(openClawEventIngestTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.OpenClawEventIngestInput) (toolserver.OpenClawEventIngestOutput, error) {
+		return handlers.HandleOpenClawEventIngest(ctx, args)
+	}))
+
 	workflowStatusTool := mcp.NewTool("workflow_status",
 		mcp.WithDescription("Get workflow status and projected handoffs"),
 		mcp.WithInputSchema[toolserver.WorkflowStatusInput](),

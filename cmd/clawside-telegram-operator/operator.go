@@ -11,7 +11,20 @@ import (
 )
 
 type operator struct {
-	handlers *toolserver.Handlers
+	handlers           *toolserver.Handlers
+	inboundAgentBridge telegramInboundAgentBridge
+}
+
+type telegramInboundAgentBridge interface {
+	Run(ctx context.Context, input telegramInboundAgentInput) (string, error)
+}
+
+type telegramInboundAgentInput struct {
+	TargetAgent      string
+	Text             string
+	ChatID           int64
+	FromUserID       int64
+	ReplyToMessageID int64
 }
 
 type operatorCommandKind string
@@ -94,7 +107,16 @@ func processTelegramUpdate(ctx context.Context, cfg operatorConfig, client teleg
 		return
 	}
 	text := strings.TrimSpace(message.Text)
+	if text == "" {
+		return
+	}
+	replyTo := message.MessageID
 	if !strings.HasPrefix(text, "/") {
+		responseText, ok := op.handleInboundAgentText(ctx, cfg, text, *message)
+		if !ok {
+			return
+		}
+		_ = client.sendMessage(ctx, cfg.Token, telegramSendMessageRequest{ChatID: message.Chat.ID, Text: responseText, ReplyToMessageID: &replyTo})
 		return
 	}
 	cmd, err := parseOperatorCommand(text)
@@ -102,8 +124,28 @@ func processTelegramUpdate(ctx context.Context, cfg operatorConfig, client teleg
 	if err == nil {
 		responseText = op.handleCommand(ctx, cmd, *message.From)
 	}
-	replyTo := message.MessageID
 	_ = client.sendMessage(ctx, cfg.Token, telegramSendMessageRequest{ChatID: message.Chat.ID, Text: responseText, ReplyToMessageID: &replyTo})
+}
+
+func (o *operator) handleInboundAgentText(ctx context.Context, cfg operatorConfig, text string, message telegramMessage) (string, bool) {
+	if o.inboundAgentBridge == nil || strings.TrimSpace(cfg.BotName) == "" || message.From == nil {
+		return "", false
+	}
+	response, err := o.inboundAgentBridge.Run(ctx, telegramInboundAgentInput{
+		TargetAgent:      cfg.BotName,
+		Text:             text,
+		ChatID:           message.Chat.ID,
+		FromUserID:       message.From.ID,
+		ReplyToMessageID: message.MessageID,
+	})
+	if err != nil {
+		return "operation failed", true
+	}
+	response = strings.TrimSpace(response)
+	if response == "" {
+		return "agent returned empty response", true
+	}
+	return response, true
 }
 
 func (o *operator) handleCommand(ctx context.Context, cmd operatorCommand, from telegramUser) string {

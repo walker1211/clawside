@@ -17,7 +17,7 @@ import (
 )
 
 var documentedV1ToolGroups = map[string][]string{
-	"handoff lifecycle":       {"handoff_create", "handoff_get", "handoff_dispatch", "handoff_progress"},
+	"handoff lifecycle":       {"handoff_create", "handoff_get", "handoff_dispatch", "handoff_progress", "openclaw_event_ingest"},
 	"workflow query":          {"workflow_status", "workflow_list"},
 	"agent coordination":      {"agent_register", "agent_list", "next_work", "blocked_work"},
 	"collaboration templates": {"collaboration_template_list", "collaboration_template_apply"},
@@ -150,6 +150,77 @@ func TestServerListsDocumentedV1Tools(t *testing.T) {
 				t.Fatalf("expected %s tool %s in %v", group, want, names)
 			}
 		}
+	}
+}
+
+func TestServerCallOpenClawEventIngestAdvancesHandoff(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	created, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_create", Arguments: map[string]any{
+		"workflow_kind": "openclaw_event_ingest_mcp",
+		"sender":        map[string]any{"type": "agent", "id": "main"},
+		"receiver":      map[string]any{"type": "agent", "id": "planner"},
+		"task_kind":     "generic_task",
+		"intent":        "plan the work",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_create): %v", err)
+	}
+	if created.IsError {
+		t.Fatalf("expected handoff_create success")
+	}
+	handoffID := extractHandoffID(t, created)
+	workflowID := extractWorkflowID(t, created)
+
+	ingested, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "openclaw_event_ingest", Arguments: map[string]any{
+		"events": []map[string]any{
+			{"type": "openclaw.trace", "event": "started", "workflow_id": workflowID, "handoff_id": handoffID, "agent": "planner"},
+			{"type": "openclaw.agent.event", "event": "received", "workflow_id": workflowID, "handoff_id": handoffID, "agent": "agent:planner"},
+			{"type": "openclaw.agent.event", "event": "claimed", "workflow_id": workflowID, "handoff_id": handoffID, "agent": "planner"},
+			{"type": "openclaw.agent.event", "event": "started", "workflow_id": workflowID, "handoff_id": handoffID, "agent": "planner"},
+			{"type": "openclaw.agent.event", "event": "checkpointed", "workflow_id": workflowID, "handoff_id": handoffID, "agent": "planner"},
+			{"type": "openclaw.agent.event", "event": "completed", "workflow_id": workflowID, "handoff_id": handoffID, "agent": "planner"},
+		},
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(openclaw_event_ingest): %v", err)
+	}
+	if ingested.IsError {
+		t.Fatalf("expected openclaw_event_ingest success")
+	}
+	var ingestPayload struct {
+		Summary struct {
+			Processed int `json:"processed"`
+			Applied   int `json:"applied"`
+			Ignored   int `json:"ignored"`
+			Failed    int `json:"failed"`
+		} `json:"summary"`
+	}
+	decodeStructuredContent(t, ingested, &ingestPayload)
+	if ingestPayload.Summary.Processed != 6 || ingestPayload.Summary.Applied != 5 || ingestPayload.Summary.Ignored != 1 || ingestPayload.Summary.Failed != 0 {
+		t.Fatalf("unexpected ingest summary: %+v", ingestPayload.Summary)
+	}
+
+	got, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "handoff_get", Arguments: map[string]any{"handoff_id": handoffID}}})
+	if err != nil {
+		t.Fatalf("CallTool(handoff_get): %v", err)
+	}
+	if got.IsError {
+		t.Fatalf("expected handoff_get success")
+	}
+	var handoffPayload struct {
+		Handoff struct {
+			State string `json:"state"`
+		} `json:"handoff"`
+	}
+	decodeStructuredContent(t, got, &handoffPayload)
+	if handoffPayload.Handoff.State != "completed" {
+		t.Fatalf("expected completed handoff, got %q", handoffPayload.Handoff.State)
 	}
 }
 

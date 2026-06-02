@@ -57,6 +57,20 @@ func TestConfigBuilderScriptLoadsDotEnvSenderAuthKey(t *testing.T) {
 	assertCapturedContains(t, capture, "/configs/config.toml")
 }
 
+func TestDotEnvDoesNotLoadOpenClawAgentBridgeEnv(t *testing.T) {
+	repo := newTempRepoWithDotEnvScript(t, "scripts/config_builder.sh")
+	writeFile(t, filepath.Join(repo, ".env"), strings.Join([]string{
+		"OPENCLAW_COMMAND=openclaw-fixture",
+		"OPENCLAW_ARGS=--profile,dev",
+		"",
+	}, "\n"))
+
+	capture := runScriptWithFakeGo(t, repo, "scripts/config_builder.sh", nil, "--input", "/tmp/openclaw.json")
+
+	assertCapturedEnv(t, capture, "OPENCLAW_COMMAND=")
+	assertCapturedEnv(t, capture, "OPENCLAW_ARGS=")
+}
+
 func TestVerifyOpenClawMCPScriptLoadsDotEnvDefaults(t *testing.T) {
 	repo := newTempRepoWithDotEnvScript(t, "scripts/verify_openclaw_mcp.sh")
 	writeFile(t, filepath.Join(repo, ".env"), strings.Join([]string{
@@ -94,6 +108,8 @@ func runScriptWithFakeGo(t *testing.T, repo string, script string, extraEnv []st
 set -euo pipefail
 {
   printf 'SENDER_AUTH_KEY=%s\n' "${SENDER_AUTH_KEY-}"
+  printf 'OPENCLAW_COMMAND=%s\n' "${OPENCLAW_COMMAND-}"
+  printf 'OPENCLAW_ARGS=%s\n' "${OPENCLAW_ARGS-}"
   printf 'ARGS=%s\n' "$*"
 } > "$CAPTURE_FILE"
 `)
@@ -104,7 +120,7 @@ set -euo pipefail
 	capturePath := filepath.Join(t.TempDir(), "capture.txt")
 	cmd := exec.Command(filepath.Join(repo, script), args...)
 	cmd.Dir = repo
-	cmd.Env = append(envWithout(os.Environ(), "SENDER_AUTH_KEY", "SENDER_BASE_URL", "CLAWSIDE_DB_PATH", "CLAWSIDE_SENDER_BASE_URL", "CLAWSIDE_TARGET_AGENT_BOT_MAP", "CAPTURE_FILE", "PATH"), extraEnv...)
+	cmd.Env = append(envWithout(os.Environ(), "SENDER_AUTH_KEY", "SENDER_BASE_URL", "CLAWSIDE_DB_PATH", "CLAWSIDE_SENDER_BASE_URL", "CLAWSIDE_TARGET_AGENT_BOT_MAP", "OPENCLAW_COMMAND", "OPENCLAW_ARGS", "CAPTURE_FILE", "PATH"), extraEnv...)
 	cmd.Env = append(cmd.Env, "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"), "CAPTURE_FILE="+capturePath)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

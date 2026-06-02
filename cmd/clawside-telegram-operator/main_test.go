@@ -27,6 +27,9 @@ func TestRunHelpDoesNotRequireConfigOrAuth(t *testing.T) {
 				"--db",
 				"--bot",
 				"--telegram-base-url",
+				"--openclaw-command",
+				"--openclaw-arg",
+				"--agent-timeout",
 				"CLAWSIDE_TELEGRAM_OPERATOR_BOT",
 			} {
 				if !strings.Contains(out, want) {
@@ -56,6 +59,8 @@ func TestResolveOptionsUsesOperatorEnvFallbacks(t *testing.T) {
 	t.Setenv(operatorBotEnvName, "guardian")
 	t.Setenv(operatorDBPathEnvName, "./truth.db")
 	t.Setenv(operatorBaseURLEnvName, "http://127.0.0.1:9999/")
+	t.Setenv(openClawCommandEnvName, "openclaw-fixture")
+	t.Setenv(openClawArgsEnvName, "--profile,dev")
 
 	opts, err := resolveOptions(nil)
 	if err != nil {
@@ -63,6 +68,9 @@ func TestResolveOptionsUsesOperatorEnvFallbacks(t *testing.T) {
 	}
 	if opts.BotName != "guardian" || opts.DBPath != "./truth.db" || opts.TelegramBaseURL != "http://127.0.0.1:9999" {
 		t.Fatalf("unexpected options: %#v", opts)
+	}
+	if opts.OpenClawCommand != "" || len(opts.OpenClawArgs) != 0 {
+		t.Fatalf("expected OpenClaw bridge to require explicit flags, got %#v", opts)
 	}
 }
 
@@ -100,10 +108,12 @@ func TestRunWiresOperatorLoopWithoutSenderAuth(t *testing.T) {
 	t.Setenv("SENDER_AUTH_KEY", "sender-secret")
 	oldRunLoop := runOperatorLoopFunc
 	var captured operatorConfig
+	var capturedOperator *operator
 	var called bool
 	runOperatorLoopFunc = func(ctx context.Context, cfg operatorConfig, client telegramAPI, op *operator, pollTimeout time.Duration) error {
 		called = true
 		captured = cfg
+		capturedOperator = op
 		return nil
 	}
 	defer func() { runOperatorLoopFunc = oldRunLoop }()
@@ -118,5 +128,29 @@ func TestRunWiresOperatorLoopWithoutSenderAuth(t *testing.T) {
 	}
 	if captured.Token != "123456:telegram-secret" || captured.DBPath != dbPath {
 		t.Fatalf("unexpected captured config: %#v", captured)
+	}
+	if capturedOperator.inboundAgentBridge != nil {
+		t.Fatalf("expected inbound bridge to stay disabled without OpenClaw command")
+	}
+}
+
+func TestRunWiresInboundAgentBridgeWhenOpenClawCommandConfigured(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "truth.db")
+	configPath := writeOperatorConfig(t, minimalOperatorConfig(dbPath))
+	oldRunLoop := runOperatorLoopFunc
+	var capturedOperator *operator
+	runOperatorLoopFunc = func(ctx context.Context, cfg operatorConfig, client telegramAPI, op *operator, pollTimeout time.Duration) error {
+		capturedOperator = op
+		return nil
+	}
+	defer func() { runOperatorLoopFunc = oldRunLoop }()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	if err := run([]string{"--config", configPath, "--bot", "guardian", "--openclaw-command", "openclaw-fixture", "--openclaw-arg", "--profile", "--openclaw-arg", "dev"}, &stdout, &stderr); err != nil {
+		t.Fatalf("run operator: %v", err)
+	}
+	if capturedOperator == nil || capturedOperator.inboundAgentBridge == nil {
+		t.Fatalf("expected inbound agent bridge to be wired")
 	}
 }

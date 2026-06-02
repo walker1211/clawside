@@ -13,6 +13,9 @@ POLL_TIMEOUT="5s"
 DB_PATH="${CLAWSIDE_TELEGRAM_OPERATOR_DB_PATH:-${CLAWSIDE_DB_PATH:-}}"
 BOT_NAME="${CLAWSIDE_TELEGRAM_OPERATOR_BOT:-}"
 TELEGRAM_BASE_URL="${CLAWSIDE_TELEGRAM_OPERATOR_BASE_URL:-}"
+OPENCLAW_COMMAND=""
+OPENCLAW_ARGS=()
+AGENT_TIMEOUT=""
 OPERATOR_READY_TIMEOUT_SECONDS=5
 
 usage() {
@@ -25,6 +28,9 @@ usage() {
   printf '  --db PATH                 SQLite truth-plane DB path\n'
   printf '  --bot NAME                Telegram bot name\n'
   printf '  --telegram-base-url URL   Telegram API base URL\n'
+  printf '  --openclaw-command CMD    Enable non-command text bridge; use only with a bot not already polled by OpenClaw\n'
+  printf '  --openclaw-arg ARG        OpenClaw command argument; repeat for multiple args\n'
+  printf '  --agent-timeout DURATION  OpenClaw agent command timeout\n'
   printf '  --poll-timeout DURATION   Telegram getUpdates timeout (default: 5s)\n'
   printf '  help, --help, -h          Show this help\n'
 }
@@ -103,6 +109,30 @@ while [[ $# -gt 0 ]]; do
       TELEGRAM_BASE_URL="$2"
       shift 2
       ;;
+    --openclaw-command)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      OPENCLAW_COMMAND="$2"
+      shift 2
+      ;;
+    --openclaw-arg)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      OPENCLAW_ARGS+=("$2")
+      shift 2
+      ;;
+    --agent-timeout)
+      if [[ $# -lt 2 ]]; then
+        usage >&2
+        exit 1
+      fi
+      AGENT_TIMEOUT="$2"
+      shift 2
+      ;;
     --poll-timeout)
       if [[ $# -lt 2 ]]; then
         usage >&2
@@ -148,6 +178,15 @@ if [[ -n "$DB_PATH" ]]; then
 fi
 if [[ -n "$TELEGRAM_BASE_URL" ]]; then
   COMMAND+=(--telegram-base-url "$TELEGRAM_BASE_URL")
+fi
+if [[ -n "$OPENCLAW_COMMAND" ]]; then
+  COMMAND+=(--openclaw-command "$OPENCLAW_COMMAND")
+fi
+for openclaw_arg in "${OPENCLAW_ARGS[@]}"; do
+  COMMAND+=(--openclaw-arg "$openclaw_arg")
+done
+if [[ -n "$AGENT_TIMEOUT" ]]; then
+  COMMAND+=(--agent-timeout "$AGENT_TIMEOUT")
 fi
 
 : > "$LOG_FILE"

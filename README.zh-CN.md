@@ -258,7 +258,9 @@ Repeatable real-export workflow 把真实 OpenClaw rerun 固化为可重复流�
 
 ### Private Telegram operator entrypoint
 
-`cmd/clawside-telegram-operator` 是独立的 inbound 长轮询 operator，用于 private dogfood。它打开同一个 truth-plane SQLite DB，读取已配置的 Telegram bot token 和 allowlist，只接受 allowlist 中 Telegram 用户的 private chat，并返回有界的手写摘要。
+`cmd/clawside-telegram-operator` 是独立的 inbound 长轮询 operator，用于 private dogfood。它打开同一个 truth-plane SQLite DB，读取已配置的 Telegram bot token 和 allowlist，只接受 allowlist 中 Telegram 用户的 private chat，并对固定 slash commands 返回有界的手写摘要。普通文本到 OpenClaw 的 bridge 是显式测试模式；只有在该 bot 没有同时被 OpenClaw gateway polling 时，才通过 `--openclaw-command` 启用。
+
+当 OpenClaw 已经拥有 agent communication 和 Telegram inbound 时，应继续由 OpenClaw 持有这条链路。agent lifecycle 通过 `openclaw_event_ingest` MCP tool 或 `cmd/openclaw-event-bridge` 回写到 clawside；不要让 clawside Telegram polling 已经由 OpenClaw polling 的 bot。
 
 help 不需要 config、DB、网络或 sender auth：
 
@@ -361,6 +363,7 @@ go run ./cmd/openclaw-release-evidence-bundle \
 - `cmd/clawside-dogfood-seed/`：本地 private dogfood seed CLI，用于生成可在 Telegram 中审批的 review handoff
 - `cmd/openclaw-mcp-smoke/`：OpenClaw 消费 clawside MCP v1 surface 的本地 smoke verifier
 - `cmd/openclaw-dispatch/`：把 `handoff_dispatch adapter=openclaw` 请求适配到 OpenClaw-compatible CLI command 的本地 helper
+- `cmd/openclaw-event-bridge/`：本地 JSONL ingest bridge，用于回写 OpenClaw agent lifecycle events
 - `cmd/openclaw-tool-results-extract/`：从 OpenClaw trajectory 提取 clawside tool structured result 的本地只读 CLI
 - `cmd/openclaw-truth-plane-extract/`：从 OpenClaw trajectory 提取最小 truth-plane handoff/workflow/watch/ownership 验收结果的本地只读 CLI
 - `cmd/openclaw-truth-plane-progression-extract/`：从 OpenClaw trajectory 提取完整 handoff progression 验收结果的本地只读 CLI
