@@ -83,6 +83,7 @@ var expectedV1Tools = []string{
 	"handoff_get",
 	"handoff_dispatch",
 	"handoff_progress",
+	"openclaw_event_ingest",
 	"workflow_status",
 	"workflow_list",
 	"agent_register",
