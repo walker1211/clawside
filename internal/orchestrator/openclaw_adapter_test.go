@@ -28,6 +28,30 @@ func TestOpenClawAdapterMapsAcceptedJSONToTransportAccepted(t *testing.T) {
 	}
 }
 
+func TestOpenClawAdapterParsesLifecycleEventsFromAcceptedJSON(t *testing.T) {
+	adapter := NewOpenClawAdapter(fakeRunner{
+		stdout: []byte(`{"status":"accepted","external_id":"msg-1","events":[{"event":"received","agent":"writer","artifact_count":1}]}`),
+	})
+
+	result, err := adapter.Dispatch(context.Background(), DispatchRequest{
+		Command: "./scripts/openclaw-dispatch",
+		Target:  "agent:writer",
+		Message: "hello",
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if result.TransportStatus != TransportAccepted {
+		t.Fatalf("expected accepted transport status, got %s", result.TransportStatus)
+	}
+	if len(result.LifecycleEvents) != 1 {
+		t.Fatalf("expected one lifecycle event, got %+v", result.LifecycleEvents)
+	}
+	if result.LifecycleEvents[0].Event != "received" || result.LifecycleEvents[0].Agent != "writer" || result.LifecycleEvents[0].ArtifactCount != 1 {
+		t.Fatalf("unexpected lifecycle event: %+v", result.LifecycleEvents[0])
+	}
+}
+
 func TestOpenClawAdapterMapsDeadlineExceededToTimeout(t *testing.T) {
 	adapter := NewOpenClawAdapter(fakeRunner{err: context.DeadlineExceeded})
 

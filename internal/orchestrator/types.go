@@ -179,11 +179,21 @@ type DispatchRequest struct {
 	Payload map[string]any `json:"payload,omitempty"`
 }
 
+type DispatchLifecycleEvent struct {
+	Event          string `json:"event"`
+	Agent          string `json:"agent,omitempty"`
+	WorkflowID     string `json:"workflow_id,omitempty"`
+	HandoffID      string `json:"handoff_id,omitempty"`
+	ArtifactCount  int    `json:"artifact_count,omitempty"`
+	ReviewDecision string `json:"review_decision,omitempty"`
+}
+
 type DispatchResult struct {
-	TransportStatus TransportStatus `json:"transport_status"`
-	ExternalID      string          `json:"external_id,omitempty"`
-	Stdout          string          `json:"stdout,omitempty"`
-	Stderr          string          `json:"stderr,omitempty"`
+	TransportStatus TransportStatus          `json:"transport_status"`
+	ExternalID      string                   `json:"external_id,omitempty"`
+	Stdout          string                   `json:"stdout,omitempty"`
+	Stderr          string                   `json:"stderr,omitempty"`
+	LifecycleEvents []DispatchLifecycleEvent `json:"events,omitempty"`
 }
 
 type ObserverHint struct {

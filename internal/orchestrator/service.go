@@ -1115,8 +1115,84 @@ func (s *Service) DispatchHandoff(ctx context.Context, input DispatchHandoffInpu
 			return DispatchHandoffResult{}, err
 		}
 		events = append(events, transportResultEvent)
+		if adapterResult.TransportStatus == TransportAccepted {
+			for _, lifecycleEvent := range adapterResult.LifecycleEvents {
+				request, err := dispatchLifecycleProtocolRequest(handoff, input, lifecycleEvent)
+				if err != nil {
+					return DispatchHandoffResult{}, err
+				}
+				protocolResult, err := s.ApplyProtocolAction(ctx, request)
+				if err != nil {
+					return DispatchHandoffResult{}, err
+				}
+				events = append(events, protocolResult.Event)
+			}
+		}
 	}
 	return DispatchHandoffResult{Attempt: attempt, Events: events}, nil
+}
+
+func dispatchLifecycleProtocolRequest(handoff Handoff, input DispatchHandoffInput, event DispatchLifecycleEvent) (ProtocolRequest, error) {
+	action, err := dispatchLifecycleProtocolAction(event.Event)
+	if err != nil {
+		return ProtocolRequest{}, err
+	}
+	agentID := normalizeDispatchLifecycleAgent(event.Agent)
+	if agentID == "" {
+		agentID = normalizeDispatchLifecycleAgent(input.Target)
+	}
+	if agentID == "" {
+		return ProtocolRequest{}, fmt.Errorf("dispatch lifecycle event requires agent")
+	}
+	workflowID := strings.TrimSpace(event.WorkflowID)
+	if workflowID == "" {
+		workflowID = handoff.WorkflowID
+	}
+	handoffID := strings.TrimSpace(event.HandoffID)
+	if handoffID == "" {
+		handoffID = handoff.ID
+	}
+	return ProtocolRequest{
+		Action:         action,
+		WorkflowID:     workflowID,
+		HandoffID:      handoffID,
+		Actor:          ActorRef{Type: ActorAgent, ID: agentID},
+		ArtifactCount:  event.ArtifactCount,
+		ReviewDecision: ReviewDecision(strings.TrimSpace(event.ReviewDecision)),
+	}, nil
+}
+
+func dispatchLifecycleProtocolAction(value string) (ProtocolAction, error) {
+	switch strings.TrimSpace(value) {
+	case "received":
+		return ProtocolActionReceive, nil
+	case "claimed":
+		return ProtocolActionClaim, nil
+	case "started":
+		return ProtocolActionStart, nil
+	case "checkpointed":
+		return ProtocolActionCheckpoint, nil
+	case "submitted":
+		return ProtocolActionSubmit, nil
+	case "reviewed":
+		return ProtocolActionReview, nil
+	case "approved":
+		return ProtocolActionApprove, nil
+	case "revision_required":
+		return ProtocolActionRequestRevision, nil
+	case "completed":
+		return ProtocolActionComplete, nil
+	case "failed":
+		return ProtocolActionFail, nil
+	default:
+		return "", fmt.Errorf("unsupported dispatch lifecycle event %q", strings.TrimSpace(value))
+	}
+}
+
+func normalizeDispatchLifecycleAgent(value string) string {
+	value = strings.TrimSpace(value)
+	value = strings.TrimPrefix(value, "agent:")
+	return strings.TrimSpace(value)
 }
 
 func (s *Service) UpdateWatch(ctx context.Context, input UpdateWatchInput) (Watch, error) {

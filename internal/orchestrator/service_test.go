@@ -818,6 +818,37 @@ func TestServiceDispatchHandoffWithOpenClawAdapterRecordsTransportAccepted(t *te
 	}
 }
 
+func TestServiceDispatchHandoffWithOpenClawLifecycleEventAdvancesToReceived(t *testing.T) {
+	runner := &captureRunner{stdout: []byte(`{"status":"accepted","external_id":"msg-1","events":[{"event":"received","agent":"writer"}]}`)}
+	svc := newTestService(t)
+	svc.openclawAdapter = NewOpenClawAdapter(runner)
+	created := mustCreateTestHandoff(t, svc)
+
+	result, err := svc.DispatchHandoff(context.Background(), DispatchHandoffInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+		Command:   "./scripts/openclaw-dispatch",
+		Message:   "hello",
+	})
+	if err != nil {
+		t.Fatalf("DispatchHandoff: %v", err)
+	}
+	if len(result.Events) != 3 {
+		t.Fatalf("expected transport and lifecycle events, got %+v", result.Events)
+	}
+	if result.Events[0].Type != EventTransportRequested || result.Events[1].Type != EventTransportAccepted || result.Events[2].Type != EventReceived {
+		t.Fatalf("unexpected event order: %+v", result.Events)
+	}
+	if result.Events[2].ProducerActor.Type != ActorAgent || result.Events[2].ProducerActor.ID != "writer" {
+		t.Fatalf("expected writer lifecycle actor, got %+v", result.Events[2].ProducerActor)
+	}
+	got := loadHandoffRow(t, svc.store.db, created.Handoff.ID)
+	if got.State != StateReceived {
+		t.Fatalf("expected received handoff state, got %s", got.State)
+	}
+}
+
 func TestServiceDispatchHandoffRejectsUnconfiguredOpenClawBeforePersisting(t *testing.T) {
 	svc := newTestService(t)
 	created := mustCreateTestHandoff(t, svc)

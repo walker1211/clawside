@@ -50,6 +50,24 @@ func TestDispatchSpawnPassesRequestAndMapsAcceptedExternalID(t *testing.T) {
 	}
 }
 
+func TestDispatchAcceptedOutputIncludesReceivedLifecycleEvent(t *testing.T) {
+	runner := &fakeRunner{stdout: []byte(`{"session_id":"openclaw-session-123"}`)}
+
+	result, err := Dispatch(context.Background(), runner, Options{
+		OpenClawCommand: "openclaw",
+		Mode:            ModeSessionsSpawn,
+	}, orchestrator.DispatchRequest{Target: "agent:writer", Message: "draft release notes"})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if len(result.Events) != 1 {
+		t.Fatalf("expected one lifecycle event, got %+v", result.Events)
+	}
+	if result.Events[0].Event != "received" || result.Events[0].Agent != "writer" {
+		t.Fatalf("unexpected lifecycle event: %+v", result.Events[0])
+	}
+}
+
 func TestDispatchAgentModeUsesOpenClawAgentFlags(t *testing.T) {
 	runner := &fakeRunner{stdout: []byte(`{"session_id":"agent-session-789"}`)}
 

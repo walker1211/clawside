@@ -19,8 +19,10 @@ func TestRunHelpDoesNotRequireOpenClawCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("help returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "openclaw-dispatch") || !strings.Contains(stdout.String(), "--openclaw-command") {
-		t.Fatalf("unexpected help output:\nstdout=%s\nstderr=%s", stdout.String(), stderr.String())
+	for _, want := range []string{"openclaw-dispatch", "--openclaw-command", "events", "received"} {
+		if !strings.Contains(stdout.String(), want) {
+			t.Fatalf("expected help output to contain %q:\nstdout=%s\nstderr=%s", want, stdout.String(), stderr.String())
+		}
 	}
 }
 
@@ -40,6 +42,9 @@ func TestRunUsesEnvironmentOpenClawCommand(t *testing.T) {
 	result := decodeAdapterOutput(t, stdout.Bytes())
 	if result.Status != "accepted" || result.ExternalID != "env-session-123" {
 		t.Fatalf("unexpected adapter output: %+v\nstdout=%s", result, stdout.String())
+	}
+	if len(result.Events) != 1 || result.Events[0].Event != "received" || result.Events[0].Agent != "writer" {
+		t.Fatalf("expected received lifecycle event, got %+v", result.Events)
 	}
 	capturedData, capturedErr := os.ReadFile(filepath.Join(dir, "stdin.json"))
 	captured := mustBytes(t, capturedData, capturedErr)
@@ -116,6 +121,10 @@ printf '%s' '` + stdoutJSON + `'
 type adapterOutputForTest struct {
 	Status     string `json:"status"`
 	ExternalID string `json:"external_id"`
+	Events     []struct {
+		Event string `json:"event"`
+		Agent string `json:"agent"`
+	} `json:"events"`
 }
 
 func decodeAdapterOutput(t *testing.T, data []byte) adapterOutputForTest {

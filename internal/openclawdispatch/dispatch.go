@@ -31,8 +31,9 @@ type Options struct {
 }
 
 type AdapterOutput struct {
-	Status     orchestrator.TransportStatus `json:"status"`
-	ExternalID string                       `json:"external_id,omitempty"`
+	Status     orchestrator.TransportStatus          `json:"status"`
+	ExternalID string                                `json:"external_id,omitempty"`
+	Events     []orchestrator.DispatchLifecycleEvent `json:"events,omitempty"`
 }
 
 func Dispatch(ctx context.Context, runner Runner, opts Options, req orchestrator.DispatchRequest) (AdapterOutput, error) {
@@ -68,7 +69,13 @@ func Dispatch(ctx context.Context, runner Runner, opts Options, req orchestrator
 	if externalID == "" {
 		return AdapterOutput{Status: orchestrator.TransportRejected}, nil
 	}
-	return AdapterOutput{Status: orchestrator.TransportAccepted, ExternalID: externalID}, nil
+	return AdapterOutput{
+		Status:     orchestrator.TransportAccepted,
+		ExternalID: externalID,
+		Events: []orchestrator.DispatchLifecycleEvent{
+			{Event: "received", Agent: agentTarget(req.Target)},
+		},
+	}, nil
 }
 
 func normalizedMode(mode Mode) (Mode, error) {

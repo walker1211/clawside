@@ -78,7 +78,7 @@ func wantsHelp(args []string) bool {
 func writeUsage(w io.Writer) error {
 	_, err := fmt.Fprint(w, `usage: openclaw-dispatch [--openclaw-command COMMAND] [--openclaw-arg ARG] [--mode MODE] [--timeout DURATION]
 
-Reads an orchestrator DispatchRequest JSON from stdin, invokes an OpenClaw-compatible command, and writes {"status":"accepted|rejected|timeout","external_id":"..."} JSON to stdout.
+Reads an orchestrator DispatchRequest JSON from stdin, invokes an OpenClaw-compatible command, and writes {"status":"accepted|rejected|timeout","external_id":"...","events":[{"event":"received","agent":"..."}]} JSON to stdout when dispatch is accepted.
 
 Options:
   --openclaw-command COMMAND  OpenClaw CLI or compatible command; falls back to OPENCLAW_COMMAND

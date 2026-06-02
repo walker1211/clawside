@@ -39,14 +39,16 @@ func (a *OpenClawAdapter) Dispatch(ctx context.Context, req DispatchRequest) (Di
 	}
 
 	var payload struct {
-		Status     string `json:"status"`
-		ExternalID string `json:"external_id"`
+		Status          string                   `json:"status"`
+		ExternalID      string                   `json:"external_id"`
+		LifecycleEvents []DispatchLifecycleEvent `json:"events"`
 	}
 	if decodeErr := json.Unmarshal(stdout, &payload); decodeErr != nil {
 		result.TransportStatus = TransportRejected
 		return result, nil
 	}
 	result.ExternalID = payload.ExternalID
+	result.LifecycleEvents = append([]DispatchLifecycleEvent(nil), payload.LifecycleEvents...)
 	switch payload.Status {
 	case string(TransportAccepted):
 		result.TransportStatus = TransportAccepted
