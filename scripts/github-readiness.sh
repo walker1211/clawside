@@ -74,7 +74,8 @@ if [[ -z "${DEFAULT_BRANCH:-}" || "$DEFAULT_BRANCH" == "null" ]]; then
 fi
 
 printf 'Checking GitHub public readiness for %s on %s\n' "$REPO_SLUG" "$DEFAULT_BRANCH"
-if [[ "${VISIBILITY:-}" != "public" ]]; then
+VISIBILITY_LOWER="$(printf '%s' "${VISIBILITY:-}" | tr '[:upper:]' '[:lower:]')"
+if [[ "${VISIBILITY_LOWER:-}" != "public" ]]; then
   warn 'repository is not public; some checks may require public visibility or a paid GitHub plan'
 fi
 
