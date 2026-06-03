@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -88,6 +89,125 @@ func TestDispatchAgentModeUsesOpenClawAgentFlags(t *testing.T) {
 	}
 	if len(runner.stdin) != 0 {
 		t.Fatalf("expected agent mode to use CLI flags instead of stdin, got %s", string(runner.stdin))
+	}
+}
+
+func TestDispatchAgentTurnModeEmitsFullLifecycleOnSuccess(t *testing.T) {
+	runner := &fakeRunner{stdout: []byte(`{"runId":"agent-turn-123"}`)}
+
+	result, err := Dispatch(context.Background(), runner, Options{
+		OpenClawCommand: "openclaw",
+		OpenClawArgs:    []string{"--profile", "dev"},
+		Mode:            ModeAgentTurn,
+	}, orchestrator.DispatchRequest{Target: "agent:seer", Message: "inspect player 2"})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.Status != orchestrator.TransportAccepted || result.ExternalID != "agent-turn-123" {
+		t.Fatalf("expected accepted agent turn, got %+v", result)
+	}
+	wantArgs := []string{"--profile", "dev", "agent", "--json", "--agent", "seer", "--message", "inspect player 2"}
+	if !reflect.DeepEqual(runner.args, wantArgs) {
+		t.Fatalf("expected args %+v, got %+v", wantArgs, runner.args)
+	}
+	wantEvents := []orchestrator.DispatchLifecycleEvent{
+		{Event: "received", Agent: "seer"},
+		{Event: "claimed", Agent: "seer"},
+		{Event: "started", Agent: "seer"},
+		{Event: "checkpointed", Agent: "seer"},
+		{Event: "completed", Agent: "seer"},
+	}
+	if !reflect.DeepEqual(result.Events, wantEvents) {
+		t.Fatalf("expected lifecycle events %+v, got %+v", wantEvents, result.Events)
+	}
+}
+
+func TestDispatchAgentTurnModeAttachesReplyTextToCompletedLifecycleEvent(t *testing.T) {
+	runner := &fakeRunner{stdout: []byte(`{"runId":"agent-turn-123","status":"ok","result":{"payloads":[{"text":"Seer says player 2 is safe","mediaUrl":null}],"meta":{"finalAssistantVisibleText":"fallback text","systemPromptReport":{"injectedWorkspaceFiles":[{"path":"/Users/private/.openclaw/workspace/AGENTS.md"}]}}}}`)}
+
+	result, err := Dispatch(context.Background(), runner, Options{OpenClawCommand: "openclaw", Mode: ModeAgentTurn}, orchestrator.DispatchRequest{Target: "agent:seer", Message: "inspect player 2"})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.Events[4].Event != "completed" {
+		t.Fatalf("expected terminal completed event, got %+v", result.Events[4])
+	}
+	if result.Events[4].Payload["reply_text"] != "Seer says player 2 is safe" {
+		t.Fatalf("expected completed reply_text payload, got %+v", result.Events[4].Payload)
+	}
+	for _, event := range result.Events[:4] {
+		if len(event.Payload) != 0 {
+			t.Fatalf("expected non-terminal event payload to be empty, got %+v", event)
+		}
+	}
+	if strings.Contains(fmt.Sprint(result.Events[4].Payload), "/Users/private") || strings.Contains(fmt.Sprint(result.Events[4].Payload), "systemPromptReport") {
+		t.Fatalf("reply payload leaked OpenClaw metadata: %+v", result.Events[4].Payload)
+	}
+}
+
+func TestDispatchAgentTurnModeAttachesReplyTextToFailedLifecycleEvent(t *testing.T) {
+	runner := &fakeRunner{stdout: []byte(`{"runId":"turn-fail-123","status":"failed","result":{"meta":{"finalAssistantVisibleText":"I could not inspect that player"}}}`), err: errors.New("exit status 1")}
+
+	result, err := Dispatch(context.Background(), runner, Options{OpenClawCommand: "openclaw", Mode: ModeAgentTurn}, orchestrator.DispatchRequest{Target: "agent:seer"})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.Events[3].Event != "failed" {
+		t.Fatalf("expected terminal failed event, got %+v", result.Events[3])
+	}
+	if result.Events[3].Payload["reply_text"] != "I could not inspect that player" {
+		t.Fatalf("expected failed reply_text payload, got %+v", result.Events[3].Payload)
+	}
+}
+
+func TestDispatchAgentTurnModeMapsDeadlineExceededToTimeout(t *testing.T) {
+	runner := &fakeRunner{err: context.DeadlineExceeded}
+
+	result, err := Dispatch(context.Background(), runner, Options{OpenClawCommand: "openclaw", Mode: ModeAgentTurn}, orchestrator.DispatchRequest{Target: "agent:seer"})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.Status != orchestrator.TransportTimeout {
+		t.Fatalf("expected timeout, got %+v", result)
+	}
+	if len(result.Events) != 0 {
+		t.Fatalf("expected no lifecycle events on timeout, got %+v", result.Events)
+	}
+}
+
+func TestDispatchAgentTurnModeRejectsFailureWithoutExternalID(t *testing.T) {
+	runner := &fakeRunner{stdout: []byte(`{"status":"failed"}`), err: errors.New("exit status 1")}
+
+	result, err := Dispatch(context.Background(), runner, Options{OpenClawCommand: "openclaw", Mode: ModeAgentTurn}, orchestrator.DispatchRequest{Target: "agent:seer"})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.Status != orchestrator.TransportRejected {
+		t.Fatalf("expected rejected, got %+v", result)
+	}
+	if len(result.Events) != 0 {
+		t.Fatalf("expected no lifecycle events without external id, got %+v", result.Events)
+	}
+}
+
+func TestDispatchAgentTurnModeEmitsFailedLifecycleWhenCommandFailsWithExternalID(t *testing.T) {
+	runner := &fakeRunner{stdout: []byte(`{"runId":"turn-fail-123","status":"failed"}`), err: errors.New("exit status 1")}
+
+	result, err := Dispatch(context.Background(), runner, Options{OpenClawCommand: "openclaw", Mode: ModeAgentTurn}, orchestrator.DispatchRequest{Target: "agent:seer"})
+	if err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	if result.Status != orchestrator.TransportAccepted || result.ExternalID != "turn-fail-123" {
+		t.Fatalf("expected accepted failed turn with external id, got %+v", result)
+	}
+	wantEvents := []orchestrator.DispatchLifecycleEvent{
+		{Event: "received", Agent: "seer"},
+		{Event: "claimed", Agent: "seer"},
+		{Event: "started", Agent: "seer"},
+		{Event: "failed", Agent: "seer"},
+	}
+	if !reflect.DeepEqual(result.Events, wantEvents) {
+		t.Fatalf("expected lifecycle events %+v, got %+v", wantEvents, result.Events)
 	}
 }
 

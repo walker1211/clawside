@@ -849,6 +849,113 @@ func TestServiceDispatchHandoffWithOpenClawLifecycleEventAdvancesToReceived(t *t
 	}
 }
 
+func TestServiceDispatchHandoffWithOpenClawLifecycleEventsAdvancesToCompleted(t *testing.T) {
+	runner := &captureRunner{stdout: []byte(`{"status":"accepted","external_id":"turn-1","events":[{"event":"received"},{"event":"claimed"},{"event":"started"},{"event":"checkpointed"},{"event":"completed","payload":{"reply_text":"the village is quiet"}}]}`)}
+	svc := newTestService(t)
+	svc.openclawAdapter = NewOpenClawAdapter(runner)
+	created := mustCreateTestHandoff(t, svc)
+
+	result, err := svc.DispatchHandoff(context.Background(), DispatchHandoffInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+		Command:   "./scripts/openclaw-dispatch",
+		Message:   "complete turn",
+	})
+	if err != nil {
+		t.Fatalf("DispatchHandoff: %v", err)
+	}
+	wantEvents := []EventType{EventTransportRequested, EventTransportAccepted, EventReceived, EventClaimed, EventStarted, EventCheckpointed, EventCompleted}
+	if len(result.Events) != len(wantEvents) {
+		t.Fatalf("expected events %+v, got %+v", wantEvents, result.Events)
+	}
+	for i, want := range wantEvents {
+		if result.Events[i].Type != want {
+			t.Fatalf("expected event %d to be %s, got %+v", i, want, result.Events[i])
+		}
+	}
+	if result.Events[2].ProducerActor.Type != ActorAgent || result.Events[2].ProducerActor.ID != "writer" {
+		t.Fatalf("expected lifecycle actor to fall back to dispatch target, got %+v", result.Events[2].ProducerActor)
+	}
+	if result.Events[6].Payload["reply_text"] != "the village is quiet" {
+		t.Fatalf("expected completed event payload reply_text, got %+v", result.Events[6].Payload)
+	}
+	timeline, err := svc.store.ListEvents(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("ListEvents: %v", err)
+	}
+	if completed := eventOfType(timeline, EventCompleted); completed.Payload["reply_text"] != "the village is quiet" {
+		t.Fatalf("expected persisted completed payload reply_text, got %+v", completed.Payload)
+	}
+	got := loadHandoffRow(t, svc.store.db, created.Handoff.ID)
+	if got.State != StateCompleted {
+		t.Fatalf("expected completed handoff state, got %s", got.State)
+	}
+}
+
+func TestServiceDispatchHandoffWithOpenClawCompletedLifecycleUnblocksDependency(t *testing.T) {
+	runner := &captureRunner{stdout: []byte(`{"status":"accepted","external_id":"turn-1","events":[{"event":"received","agent":"upstream"},{"event":"claimed","agent":"upstream"},{"event":"started","agent":"upstream"},{"event":"checkpointed","agent":"upstream"},{"event":"completed","agent":"upstream"}]}`)}
+	svc := newTestService(t)
+	svc.openclawAdapter = NewOpenClawAdapter(runner)
+	ctx := context.Background()
+	mustRegisterTestAgent(t, svc, "upstream", []string{"planning"}, []string{"project://swarm/upstream"}, []TaskKind{TaskGeneric})
+	mustRegisterTestAgent(t, svc, "downstream", []string{"acting"}, []string{"project://swarm/downstream"}, []TaskKind{TaskGeneric})
+
+	upstream, err := svc.CreateHandoff(ctx, CreateHandoffInput{
+		WorkflowKind:                  "agent_swarm",
+		Sender:                        ActorRef{Type: ActorAgent, ID: "planner"},
+		Receiver:                      ActorRef{Type: ActorAgent, ID: "upstream"},
+		TaskKind:                      TaskGeneric,
+		Intent:                        "prepare night result",
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    "project://swarm/upstream",
+	})
+	if err != nil {
+		t.Fatalf("CreateHandoff: %v", err)
+	}
+	downstream, err := svc.AppendHandoff(ctx, AppendHandoffInput{
+		WorkflowID: upstream.Workflow.ID,
+		Handoff: CreateHandoffInput{
+			Sender:                        ActorRef{Type: ActorAgent, ID: "upstream"},
+			Receiver:                      ActorRef{Type: ActorAgent, ID: "downstream"},
+			TaskKind:                      TaskGeneric,
+			Intent:                        "consume night result",
+			DependsOnHandoffIDs:           []string{upstream.Handoff.ID},
+			RequiredForWorkflowCompletion: true,
+			PayloadRef:                    "project://swarm/downstream",
+		},
+	})
+	if err != nil {
+		t.Fatalf("AppendHandoff: %v", err)
+	}
+
+	blocked, err := svc.NextWork(ctx, WorkQuery{AgentID: "downstream"})
+	if err != nil {
+		t.Fatalf("NextWork blocked downstream: %v", err)
+	}
+	if len(blocked) != 0 {
+		t.Fatalf("expected downstream to be blocked before upstream completion, got %+v", blocked)
+	}
+
+	if _, err := svc.DispatchHandoff(ctx, DispatchHandoffInput{
+		HandoffID: upstream.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:upstream",
+		Command:   "./scripts/openclaw-dispatch",
+		Message:   "run upstream turn",
+	}); err != nil {
+		t.Fatalf("DispatchHandoff upstream: %v", err)
+	}
+
+	next, err := svc.NextWork(ctx, WorkQuery{AgentID: "downstream"})
+	if err != nil {
+		t.Fatalf("NextWork downstream: %v", err)
+	}
+	if len(next) != 1 || next[0].Handoff.ID != downstream.Handoff.ID {
+		t.Fatalf("expected downstream next work after upstream completion, got %+v", next)
+	}
+}
+
 func TestServiceDispatchHandoffRejectsUnconfiguredOpenClawBeforePersisting(t *testing.T) {
 	svc := newTestService(t)
 	created := mustCreateTestHandoff(t, svc)
@@ -1687,6 +1794,15 @@ func mustDispatchTestHandoff(t *testing.T, svc *Service, handoffID string) Dispa
 		t.Fatalf("DispatchHandoff: %v", err)
 	}
 	return result
+}
+
+func eventOfType(events []EventRecord, eventType EventType) EventRecord {
+	for _, event := range events {
+		if event.Type == eventType {
+			return event
+		}
+	}
+	return EventRecord{}
 }
 
 func mustRecordAcceptedEvent(t *testing.T, svc *Service, created CreateHandoffResult, eventType EventType, subject ActorRef) EventRecord {

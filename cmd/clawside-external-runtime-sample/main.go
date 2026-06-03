@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"strings"
 
+	"github.com/walker1211/clawside/internal/openclawdispatch"
 	"github.com/walker1211/clawside/internal/orchestrator"
 	"github.com/walker1211/clawside/internal/toolserver"
 	_ "modernc.org/sqlite"
@@ -29,14 +31,18 @@ type options struct {
 }
 
 type sampleResult struct {
-	WorkflowID             string
-	UpstreamHandoffID      string
-	DownstreamHandoffID    string
-	DependencyGateVerified bool
-	ReviewGateVerified     bool
-	DownstreamReady        bool
-	WorkflowStatus         string
-	EvidenceSummaryReady   bool
+	WorkflowID                   string
+	UpstreamHandoffID            string
+	DownstreamHandoffID          string
+	DependencyGateVerified       bool
+	ReviewGateVerified           bool
+	DownstreamReady              bool
+	WorkflowStatus               string
+	EvidenceSummaryReady         bool
+	AgentTurnUpstreamHandoffID   string
+	AgentTurnDownstreamHandoffID string
+	AgentTurnGateVerified        bool
+	AgentTurnDownstreamReady     bool
 }
 
 func main() {
@@ -108,7 +114,9 @@ func runSample(ctx context.Context, opts options) (sampleResult, error) {
 		return sampleResult{}, fmt.Errorf("open truth plane: %w", err)
 	}
 	service := orchestrator.NewService(store, nil)
+	service.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(sampleAgentTurnAdapterRunner{}))
 	handlers := toolserver.NewHandlers(service, store, nil)
+	handlers.SetOpenClawDispatchDefaults("sample-openclaw-dispatch", []string{"--mode", "agent_turn"})
 
 	if err := registerSampleAgents(ctx, handlers); err != nil {
 		return sampleResult{}, err
@@ -138,6 +146,10 @@ func runSample(ctx context.Context, opts options) (sampleResult, error) {
 	if err := completeDownstream(ctx, handlers, workflowID, downstreamID); err != nil {
 		return sampleResult{}, err
 	}
+	agentTurn, err := runAgentTurnGate(ctx, handlers)
+	if err != nil {
+		return sampleResult{}, err
+	}
 	workflow, err := handlers.HandleWorkflowStatus(ctx, toolserver.WorkflowStatusInput{WorkflowID: workflowID})
 	if err != nil {
 		return sampleResult{}, fmt.Errorf("workflow status: %w", err)
@@ -152,14 +164,18 @@ func runSample(ctx context.Context, opts options) (sampleResult, error) {
 	}
 
 	return sampleResult{
-		WorkflowID:             workflowID,
-		UpstreamHandoffID:      upstreamID,
-		DownstreamHandoffID:    downstreamID,
-		DependencyGateVerified: dependencyGateVerified,
-		ReviewGateVerified:     true,
-		DownstreamReady:        downstreamReady,
-		WorkflowStatus:         string(workflow.Workflow.Status),
-		EvidenceSummaryReady:   evidenceReady,
+		WorkflowID:                   workflowID,
+		UpstreamHandoffID:            upstreamID,
+		DownstreamHandoffID:          downstreamID,
+		DependencyGateVerified:       dependencyGateVerified,
+		ReviewGateVerified:           true,
+		DownstreamReady:              downstreamReady,
+		WorkflowStatus:               string(workflow.Workflow.Status),
+		EvidenceSummaryReady:         evidenceReady,
+		AgentTurnUpstreamHandoffID:   agentTurn.upstreamID,
+		AgentTurnDownstreamHandoffID: agentTurn.downstreamID,
+		AgentTurnGateVerified:        agentTurn.dependencyGateVerified,
+		AgentTurnDownstreamReady:     agentTurn.downstreamReady,
 	}, nil
 }
 
@@ -219,6 +235,76 @@ func createSampleHandoffs(ctx context.Context, handlers *toolserver.Handlers) (t
 	})
 	if err != nil {
 		return toolserver.HandoffCreateOutput{}, toolserver.HandoffCreateOutput{}, fmt.Errorf("create downstream handoff: %w", err)
+	}
+	return upstream, downstream, nil
+}
+
+type agentTurnGateResult struct {
+	upstreamID             string
+	downstreamID           string
+	dependencyGateVerified bool
+	downstreamReady        bool
+}
+
+func runAgentTurnGate(ctx context.Context, handlers *toolserver.Handlers) (agentTurnGateResult, error) {
+	upstream, downstream, err := createAgentTurnHandoffs(ctx, handlers)
+	if err != nil {
+		return agentTurnGateResult{}, err
+	}
+	workflowID := upstream.Workflow.ID
+	upstreamID := upstream.Handoff.ID
+	downstreamID := downstream.Handoff.ID
+	dependencyGateVerified := blockedWorkHasDependency(ctx, handlers, downstreamAgentID, downstreamProjectRef, workflowID, downstreamID, upstreamID)
+	if !dependencyGateVerified {
+		return agentTurnGateResult{}, fmt.Errorf("agent_turn downstream dependency gate was not verified")
+	}
+	dispatch, err := handlers.HandleHandoffDispatch(ctx, toolserver.HandoffDispatchInput{
+		HandoffID: upstreamID,
+		Adapter:   "openclaw",
+		Target:    "agent:" + upstreamAgentID,
+		Message:   "sample synchronous agent turn",
+	})
+	if err != nil {
+		return agentTurnGateResult{}, fmt.Errorf("dispatch agent_turn upstream handoff: %w", err)
+	}
+	if !dispatchEventsContain(dispatch.Events, orchestrator.EventCompleted) {
+		return agentTurnGateResult{}, fmt.Errorf("agent_turn dispatch did not complete upstream")
+	}
+	downstreamReady := workItemsContainHandoff(mustNextWork(ctx, handlers, downstreamAgentID, downstreamProjectRef, workflowID), downstreamID)
+	if !downstreamReady {
+		return agentTurnGateResult{}, fmt.Errorf("agent_turn downstream work is not available")
+	}
+	return agentTurnGateResult{upstreamID: upstreamID, downstreamID: downstreamID, dependencyGateVerified: dependencyGateVerified, downstreamReady: downstreamReady}, nil
+}
+
+func createAgentTurnHandoffs(ctx context.Context, handlers *toolserver.Handlers) (toolserver.HandoffCreateOutput, toolserver.HandoffCreateOutput, error) {
+	upstream, err := handlers.HandleHandoffCreate(ctx, toolserver.HandoffCreateInput{
+		WorkflowKind:                  workflowKind + "_agent_turn",
+		Sender:                        toolserver.ActorRefInput{Type: "system", ID: "external-runtime-sample"},
+		Receiver:                      toolserver.ActorRefInput{Type: "agent", ID: upstreamAgentID},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "sample agent_turn upstream task",
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    upstreamProjectRef,
+	})
+	if err != nil {
+		return toolserver.HandoffCreateOutput{}, toolserver.HandoffCreateOutput{}, fmt.Errorf("create agent_turn upstream handoff: %w", err)
+	}
+	upstreamID := upstream.Handoff.ID
+	downstream, err := handlers.HandleHandoffCreate(ctx, toolserver.HandoffCreateInput{
+		WorkflowKind:                  workflowKind + "_agent_turn",
+		WorkflowID:                    upstream.Workflow.ID,
+		Sender:                        toolserver.ActorRefInput{Type: "agent", ID: upstreamAgentID},
+		Receiver:                      toolserver.ActorRefInput{Type: "agent", ID: downstreamAgentID},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "sample agent_turn downstream task",
+		ParentHandoffID:               &upstreamID,
+		DependsOnHandoffIDs:           []string{upstreamID},
+		RequiredForWorkflowCompletion: true,
+		PayloadRef:                    downstreamProjectRef,
+	})
+	if err != nil {
+		return toolserver.HandoffCreateOutput{}, toolserver.HandoffCreateOutput{}, fmt.Errorf("create agent_turn downstream handoff: %w", err)
 	}
 	return upstream, downstream, nil
 }
@@ -312,7 +398,43 @@ func evidenceSummaryContainsWorkflow(summary orchestrator.CoordinationEvidenceSu
 	return false
 }
 
+func dispatchEventsContain(events []orchestrator.EventRecord, eventType orchestrator.EventType) bool {
+	for _, event := range events {
+		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+type sampleAgentTurnAdapterRunner struct{}
+
+func (sampleAgentTurnAdapterRunner) Run(ctx context.Context, command string, args []string, stdin []byte) ([]byte, []byte, error) {
+	var req orchestrator.DispatchRequest
+	if err := json.Unmarshal(stdin, &req); err != nil {
+		return nil, nil, fmt.Errorf("decode sample dispatch request: %w", err)
+	}
+	result, err := openclawdispatch.Dispatch(ctx, sampleOpenClawAgentRunner{}, openclawdispatch.Options{
+		OpenClawCommand: "sample-openclaw",
+		Mode:            openclawdispatch.ModeAgentTurn,
+	}, req)
+	if err != nil {
+		return nil, nil, err
+	}
+	data, err := json.Marshal(result)
+	if err != nil {
+		return nil, nil, fmt.Errorf("encode sample dispatch result: %w", err)
+	}
+	return data, nil, nil
+}
+
+type sampleOpenClawAgentRunner struct{}
+
+func (sampleOpenClawAgentRunner) Run(ctx context.Context, command string, args []string, stdin []byte) ([]byte, []byte, error) {
+	return []byte(`{"runId":"sample-agent-turn","result":{"payloads":[{"text":"agent_turn sample reply"}]}}`), nil, nil
+}
+
 func writeSummary(w io.Writer, result sampleResult) error {
-	_, err := fmt.Fprintf(w, "workflow_id=%s\nupstream_handoff_id=%s\ndownstream_handoff_id=%s\ndependency_gate_verified=%t\nreview_gate_verified=%t\ndownstream_ready=%t\nworkflow_status=%s\nevidence_summary_ready=%t\n", result.WorkflowID, result.UpstreamHandoffID, result.DownstreamHandoffID, result.DependencyGateVerified, result.ReviewGateVerified, result.DownstreamReady, result.WorkflowStatus, result.EvidenceSummaryReady)
+	_, err := fmt.Fprintf(w, "workflow_id=%s\nupstream_handoff_id=%s\ndownstream_handoff_id=%s\ndependency_gate_verified=%t\nreview_gate_verified=%t\ndownstream_ready=%t\nworkflow_status=%s\nevidence_summary_ready=%t\nagent_turn_upstream_handoff_id=%s\nagent_turn_downstream_handoff_id=%s\nagent_turn_gate_verified=%t\nagent_turn_downstream_ready=%t\n", result.WorkflowID, result.UpstreamHandoffID, result.DownstreamHandoffID, result.DependencyGateVerified, result.ReviewGateVerified, result.DownstreamReady, result.WorkflowStatus, result.EvidenceSummaryReady, result.AgentTurnUpstreamHandoffID, result.AgentTurnDownstreamHandoffID, result.AgentTurnGateVerified, result.AgentTurnDownstreamReady)
 	return err
 }

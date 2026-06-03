@@ -1159,6 +1159,7 @@ func dispatchLifecycleProtocolRequest(handoff Handoff, input DispatchHandoffInpu
 		Actor:          ActorRef{Type: ActorAgent, ID: agentID},
 		ArtifactCount:  event.ArtifactCount,
 		ReviewDecision: ReviewDecision(strings.TrimSpace(event.ReviewDecision)),
+		Payload:        event.Payload,
 	}, nil
 }
 

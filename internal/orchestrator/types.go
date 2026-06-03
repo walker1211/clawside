@@ -180,12 +180,13 @@ type DispatchRequest struct {
 }
 
 type DispatchLifecycleEvent struct {
-	Event          string `json:"event"`
-	Agent          string `json:"agent,omitempty"`
-	WorkflowID     string `json:"workflow_id,omitempty"`
-	HandoffID      string `json:"handoff_id,omitempty"`
-	ArtifactCount  int    `json:"artifact_count,omitempty"`
-	ReviewDecision string `json:"review_decision,omitempty"`
+	Event          string         `json:"event"`
+	Agent          string         `json:"agent,omitempty"`
+	WorkflowID     string         `json:"workflow_id,omitempty"`
+	HandoffID      string         `json:"handoff_id,omitempty"`
+	ArtifactCount  int            `json:"artifact_count,omitempty"`
+	ReviewDecision string         `json:"review_decision,omitempty"`
+	Payload        map[string]any `json:"payload,omitempty"`
 }
 
 type DispatchResult struct {

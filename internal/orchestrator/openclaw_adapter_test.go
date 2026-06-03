@@ -30,7 +30,7 @@ func TestOpenClawAdapterMapsAcceptedJSONToTransportAccepted(t *testing.T) {
 
 func TestOpenClawAdapterParsesLifecycleEventsFromAcceptedJSON(t *testing.T) {
 	adapter := NewOpenClawAdapter(fakeRunner{
-		stdout: []byte(`{"status":"accepted","external_id":"msg-1","events":[{"event":"received","agent":"writer","artifact_count":1}]}`),
+		stdout: []byte(`{"status":"accepted","external_id":"msg-1","events":[{"event":"received","agent":"writer","artifact_count":1,"payload":{"reply_text":"hello from writer"}}]}`),
 	})
 
 	result, err := adapter.Dispatch(context.Background(), DispatchRequest{
@@ -49,6 +49,9 @@ func TestOpenClawAdapterParsesLifecycleEventsFromAcceptedJSON(t *testing.T) {
 	}
 	if result.LifecycleEvents[0].Event != "received" || result.LifecycleEvents[0].Agent != "writer" || result.LifecycleEvents[0].ArtifactCount != 1 {
 		t.Fatalf("unexpected lifecycle event: %+v", result.LifecycleEvents[0])
+	}
+	if result.LifecycleEvents[0].Payload["reply_text"] != "hello from writer" {
+		t.Fatalf("expected lifecycle payload to include reply_text, got %+v", result.LifecycleEvents[0].Payload)
 	}
 }
 

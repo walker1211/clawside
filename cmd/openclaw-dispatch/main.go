@@ -83,7 +83,7 @@ Reads an orchestrator DispatchRequest JSON from stdin, invokes an OpenClaw-compa
 Options:
   --openclaw-command COMMAND  OpenClaw CLI or compatible command; falls back to OPENCLAW_COMMAND
   --openclaw-arg ARG          OpenClaw command argument; repeat for multiple args
-  --mode MODE                 sessions_spawn, sessions_send, or agent (default: sessions_spawn)
+  --mode MODE                 sessions_spawn, sessions_send, agent, or agent_turn (default: sessions_spawn)
   --timeout DURATION          OpenClaw command timeout (default: 30s)
   help, --help, -h            Show this help
 `)

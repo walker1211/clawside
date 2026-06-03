@@ -60,6 +60,33 @@ func TestMapEventMapsLifecycleEventsToProtocolRequests(t *testing.T) {
 	}
 }
 
+func TestMapEventCoversDispatchTurnLifecycleNames(t *testing.T) {
+	turnEvents := []struct {
+		event      orchestrator.DispatchLifecycleEvent
+		wantAction orchestrator.ProtocolAction
+	}{
+		{event: orchestrator.DispatchLifecycleEvent{Event: "received"}, wantAction: orchestrator.ProtocolActionReceive},
+		{event: orchestrator.DispatchLifecycleEvent{Event: "claimed"}, wantAction: orchestrator.ProtocolActionClaim},
+		{event: orchestrator.DispatchLifecycleEvent{Event: "started"}, wantAction: orchestrator.ProtocolActionStart},
+		{event: orchestrator.DispatchLifecycleEvent{Event: "checkpointed"}, wantAction: orchestrator.ProtocolActionCheckpoint},
+		{event: orchestrator.DispatchLifecycleEvent{Event: "completed"}, wantAction: orchestrator.ProtocolActionComplete},
+		{event: orchestrator.DispatchLifecycleEvent{Event: "failed"}, wantAction: orchestrator.ProtocolActionFail},
+	}
+
+	for _, tc := range turnEvents {
+		request, ignored, err := MapEvent(Event{Type: AgentEventType, Event: tc.event.Event, WorkflowID: "wf_turn", HandoffID: "hf_turn", Agent: "agent:seer"})
+		if err != nil {
+			t.Fatalf("map %s: %v", tc.event.Event, err)
+		}
+		if ignored {
+			t.Fatalf("expected %s to be mapped", tc.event.Event)
+		}
+		if request.Action != tc.wantAction {
+			t.Fatalf("expected %s to map to %s, got %s", tc.event.Event, tc.wantAction, request.Action)
+		}
+	}
+}
+
 func TestMapEventIgnoresUnrelatedOpenClawEvents(t *testing.T) {
 	request, ignored, err := MapEvent(Event{Type: "openclaw.trace", Event: "started", HandoffID: "hf_123", Agent: "planner"})
 	if err != nil {

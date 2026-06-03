@@ -19,7 +19,7 @@ func TestRunHelpDoesNotRequireOpenClawCommand(t *testing.T) {
 	if err != nil {
 		t.Fatalf("help returned error: %v", err)
 	}
-	for _, want := range []string{"openclaw-dispatch", "--openclaw-command", "events", "received"} {
+	for _, want := range []string{"openclaw-dispatch", "--openclaw-command", "agent_turn", "events", "received"} {
 		if !strings.Contains(stdout.String(), want) {
 			t.Fatalf("expected help output to contain %q:\nstdout=%s\nstderr=%s", want, stdout.String(), stderr.String())
 		}
@@ -50,6 +50,36 @@ func TestRunUsesEnvironmentOpenClawCommand(t *testing.T) {
 	captured := mustBytes(t, capturedData, capturedErr)
 	if !strings.Contains(string(captured), "hello from env") {
 		t.Fatalf("expected request stdin to reach fixture command, got %s", string(captured))
+	}
+}
+
+func TestRunAgentTurnModeOutputsFullLifecycleEvents(t *testing.T) {
+	dir := t.TempDir()
+	scriptPath := writeOpenClawFixtureCommand(t, dir, `{"runId":"turn-session-123","result":{"payloads":[{"text":"seer sees a villager"}]}}`)
+	stdin := dispatchRequestReader(t, orchestrator.DispatchRequest{Target: "agent:seer", Message: "inspect player 2"})
+	stdout := new(bytes.Buffer)
+	stderr := new(bytes.Buffer)
+
+	err := run([]string{"--openclaw-command", scriptPath, "--mode", "agent_turn"}, stdin, stdout, stderr)
+	if err != nil {
+		t.Fatalf("run: %v\nstderr=%s", err, stderr.String())
+	}
+
+	result := decodeAdapterOutput(t, stdout.Bytes())
+	if result.Status != "accepted" || result.ExternalID != "turn-session-123" {
+		t.Fatalf("unexpected adapter output: %+v\nstdout=%s", result, stdout.String())
+	}
+	wantEvents := []string{"received", "claimed", "started", "checkpointed", "completed"}
+	if len(result.Events) != len(wantEvents) {
+		t.Fatalf("expected lifecycle events %+v, got %+v", wantEvents, result.Events)
+	}
+	for i, want := range wantEvents {
+		if result.Events[i].Event != want || result.Events[i].Agent != "seer" {
+			t.Fatalf("expected event %d to be %s for seer, got %+v", i, want, result.Events[i])
+		}
+	}
+	if result.Events[4].Payload["reply_text"] != "seer sees a villager" {
+		t.Fatalf("expected completed reply_text payload, got %+v", result.Events[4].Payload)
 	}
 }
 
@@ -122,8 +152,9 @@ type adapterOutputForTest struct {
 	Status     string `json:"status"`
 	ExternalID string `json:"external_id"`
 	Events     []struct {
-		Event string `json:"event"`
-		Agent string `json:"agent"`
+		Event   string         `json:"event"`
+		Agent   string         `json:"agent"`
+		Payload map[string]any `json:"payload"`
 	} `json:"events"`
 }
 

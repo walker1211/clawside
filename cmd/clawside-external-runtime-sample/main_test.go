@@ -97,6 +97,8 @@ func TestRunCompletesTruthPlaneOnlyExternalRuntimeSample(t *testing.T) {
 		"downstream_ready=true",
 		"workflow_status=completed",
 		"evidence_summary_ready=true",
+		"agent_turn_gate_verified=true",
+		"agent_turn_downstream_ready=true",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got:\n%s", want, out)
@@ -105,8 +107,10 @@ func TestRunCompletesTruthPlaneOnlyExternalRuntimeSample(t *testing.T) {
 
 	upstreamID := outputValue(t, out, "upstream_handoff_id")
 	downstreamID := outputValue(t, out, "downstream_handoff_id")
-	if upstreamID == "" || downstreamID == "" {
-		t.Fatalf("expected upstream and downstream IDs in output:\n%s", out)
+	agentTurnUpstreamID := outputValue(t, out, "agent_turn_upstream_handoff_id")
+	agentTurnDownstreamID := outputValue(t, out, "agent_turn_downstream_handoff_id")
+	if upstreamID == "" || downstreamID == "" || agentTurnUpstreamID == "" || agentTurnDownstreamID == "" {
+		t.Fatalf("expected upstream, downstream, and agent_turn IDs in output:\n%s", out)
 	}
 
 	store := openSampleStore(t, dbPath)
@@ -152,6 +156,39 @@ func TestRunCompletesTruthPlaneOnlyExternalRuntimeSample(t *testing.T) {
 		if !eventsContain(upstreamTimeline, eventType) {
 			t.Fatalf("expected upstream timeline to contain %s, got %#v", eventType, upstreamTimeline)
 		}
+	}
+	agentTurnUpstream, err := store.LoadHandoff(context.Background(), agentTurnUpstreamID)
+	if err != nil {
+		t.Fatalf("load agent_turn upstream handoff: %v", err)
+	}
+	if agentTurnUpstream.State != orchestrator.StateCompleted {
+		t.Fatalf("expected completed agent_turn upstream handoff, got %s", agentTurnUpstream.State)
+	}
+	agentTurnTimeline, err := store.ListEvents(context.Background(), agentTurnUpstreamID)
+	if err != nil {
+		t.Fatalf("list agent_turn upstream events: %v", err)
+	}
+	for _, eventType := range []orchestrator.EventType{
+		orchestrator.EventTransportRequested,
+		orchestrator.EventReceived,
+		orchestrator.EventClaimed,
+		orchestrator.EventStarted,
+		orchestrator.EventCheckpointed,
+		orchestrator.EventCompleted,
+	} {
+		if !eventsContain(agentTurnTimeline, eventType) {
+			t.Fatalf("expected agent_turn timeline to contain %s, got %#v", eventType, agentTurnTimeline)
+		}
+	}
+	signals, err := store.ListObservedSignalsByHandoff(context.Background(), agentTurnUpstreamID)
+	if err != nil {
+		t.Fatalf("list agent_turn observed signals: %v", err)
+	}
+	if !observedSignalsContain(signals, orchestrator.ObservedSignalTransportAccepted) {
+		t.Fatalf("expected agent_turn observed signals to contain transport_accepted, got %#v", signals)
+	}
+	if completed := sampleEventOfType(agentTurnTimeline, orchestrator.EventCompleted); completed.Payload["reply_text"] != "agent_turn sample reply" {
+		t.Fatalf("expected agent_turn completed reply_text payload, got %+v", completed.Payload)
 	}
 }
 
@@ -214,6 +251,24 @@ func outputValue(t *testing.T, value string, key string) string {
 func eventsContain(events []orchestrator.EventRecord, eventType orchestrator.EventType) bool {
 	for _, event := range events {
 		if event.Type == eventType {
+			return true
+		}
+	}
+	return false
+}
+
+func sampleEventOfType(events []orchestrator.EventRecord, eventType orchestrator.EventType) orchestrator.EventRecord {
+	for _, event := range events {
+		if event.Type == eventType {
+			return event
+		}
+	}
+	return orchestrator.EventRecord{}
+}
+
+func observedSignalsContain(signals []orchestrator.ObservedSignal, kind orchestrator.ObservedSignalKind) bool {
+	for _, signal := range signals {
+		if signal.Kind == kind {
 			return true
 		}
 	}
