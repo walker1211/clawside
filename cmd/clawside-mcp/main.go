@@ -495,6 +495,15 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 		return mcp.NewToolResultStructured(job, "Fetched sender job"), nil
 	}))
 
+	a2aAgentTurnTool := mcp.NewTool("a2a_agent_turn",
+		mcp.WithDescription("Ask an OpenClaw agent for one request/reply turn and return reply_text from the completed lifecycle event; does not use the sender bridge"),
+		mcp.WithInputSchema[toolserver.A2AAgentTurnInput](),
+		mcp.WithOutputSchema[toolserver.A2AAgentTurnOutput](),
+	)
+	s.AddTool(a2aAgentTurnTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.A2AAgentTurnInput) (toolserver.A2AAgentTurnOutput, error) {
+		return handlers.HandleA2AAgentTurn(ctx, args)
+	}))
+
 	a2aDeliverTool := mcp.NewTool("a2a_deliver",
 		mcp.WithDescription("Deliver an A2A message through the sender bridge"),
 		mcp.WithInputSchema[toolserver.A2ADeliverInput](),

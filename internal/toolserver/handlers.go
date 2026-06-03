@@ -98,6 +98,19 @@ type HandoffDispatchInput struct {
 	Message   string   `json:"message,omitempty"`
 }
 
+type A2AAgentTurnInput struct {
+	TargetAgent string `json:"target_agent"`
+	Message     string `json:"message"`
+}
+
+type A2AAgentTurnOutput struct {
+	ReplyText string                       `json:"reply_text"`
+	Workflow  orchestrator.Workflow        `json:"workflow"`
+	Handoff   orchestrator.Handoff         `json:"handoff"`
+	Attempt   orchestrator.DispatchAttempt `json:"attempt"`
+	Events    []orchestrator.EventRecord   `json:"events"`
+}
+
 type HandoffProgressInput struct {
 	Action         string        `json:"action"`
 	WorkflowID     string        `json:"workflow_id,omitempty"`
@@ -454,6 +467,64 @@ func (h *Handlers) HandleHandoffDispatch(ctx context.Context, input HandoffDispa
 		Args:      args,
 		Message:   input.Message,
 	})
+}
+
+func (h *Handlers) HandleA2AAgentTurn(ctx context.Context, input A2AAgentTurnInput) (A2AAgentTurnOutput, error) {
+	targetAgent := strings.TrimSpace(input.TargetAgent)
+	message := strings.TrimSpace(input.Message)
+	if targetAgent == "" {
+		return A2AAgentTurnOutput{}, fmt.Errorf("target_agent is required")
+	}
+	if message == "" {
+		return A2AAgentTurnOutput{}, fmt.Errorf("message is required")
+	}
+	if h.openClawCommand == "" {
+		return A2AAgentTurnOutput{}, fmt.Errorf("openclaw dispatch defaults are not configured")
+	}
+
+	target := normalizeA2AAgentTurnTarget(targetAgent)
+	receiverID := normalizeA2AAgentTurnReceiverID(targetAgent)
+	created, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
+		WorkflowKind:                  "a2a_agent_turn",
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "main"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: receiverID},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        message,
+		RequiredForWorkflowCompletion: true,
+		DeliveryTargetRef:             target,
+	})
+	if err != nil {
+		return A2AAgentTurnOutput{}, err
+	}
+
+	dispatch, err := h.HandleHandoffDispatch(ctx, HandoffDispatchInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    target,
+		Message:   message,
+	})
+	if err != nil {
+		return A2AAgentTurnOutput{}, err
+	}
+	replyText, err := completedReplyText(dispatch.Events)
+	if err != nil {
+		return A2AAgentTurnOutput{}, err
+	}
+	handoff, err := h.store.LoadHandoff(ctx, created.Handoff.ID)
+	if err != nil {
+		return A2AAgentTurnOutput{}, err
+	}
+	workflow, err := h.store.LoadWorkflow(ctx, created.Workflow.ID)
+	if err != nil {
+		return A2AAgentTurnOutput{}, err
+	}
+	return A2AAgentTurnOutput{
+		ReplyText: replyText,
+		Workflow:  workflow,
+		Handoff:   handoff,
+		Attempt:   dispatch.Attempt,
+		Events:    dispatch.Events,
+	}, nil
 }
 
 func (h *Handlers) HandleHandoffProgress(ctx context.Context, input HandoffProgressInput) (orchestrator.ProtocolResult, error) {
@@ -1024,6 +1095,41 @@ func requireHandoffID(raw string) (string, error) {
 		return "", fmt.Errorf("handoff_id is required")
 	}
 	return handoffID, nil
+}
+
+func normalizeA2AAgentTurnTarget(targetAgent string) string {
+	targetAgent = strings.TrimSpace(targetAgent)
+	if strings.HasPrefix(targetAgent, "agent:") {
+		return targetAgent
+	}
+	return "agent:" + targetAgent
+}
+
+func normalizeA2AAgentTurnReceiverID(targetAgent string) string {
+	targetAgent = strings.TrimSpace(targetAgent)
+	if receiverID, ok := strings.CutPrefix(targetAgent, "agent:"); ok {
+		return receiverID
+	}
+	return targetAgent
+}
+
+func completedReplyText(events []orchestrator.EventRecord) (string, error) {
+	for index := len(events) - 1; index >= 0; index-- {
+		event := events[index]
+		if event.Type != orchestrator.EventCompleted {
+			continue
+		}
+		value, ok := event.Payload["reply_text"]
+		if !ok {
+			return "", fmt.Errorf("completed event payload reply_text is required")
+		}
+		replyText, ok := value.(string)
+		if !ok || strings.TrimSpace(replyText) == "" {
+			return "", fmt.Errorf("completed event payload reply_text is required")
+		}
+		return strings.TrimSpace(replyText), nil
+	}
+	return "", fmt.Errorf("completed event payload reply_text is required")
 }
 
 func toArtifactPolicy(input *ArtifactPolicyInput) orchestrator.ArtifactPolicy {

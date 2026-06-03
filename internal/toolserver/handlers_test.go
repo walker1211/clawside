@@ -1643,6 +1643,135 @@ func TestHandleHandoffProgressAppliesProtocolAction(t *testing.T) {
 	}
 }
 
+func TestHandleA2AAgentTurnReturnsReplyText(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	runner := &captureOpenClawRunner{stdout: []byte(`{"status":"accepted","external_id":"turn-1","events":[{"event":"received"},{"event":"claimed"},{"event":"started"},{"event":"checkpointed"},{"event":"completed","payload":{"reply_text":"the answer is yes"}}]}`)}
+	h.svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(runner))
+	h.SetOpenClawDispatchDefaults("/configured/openclaw", []string{"--mode", "agent_turn"})
+
+	result, err := h.HandleA2AAgentTurn(context.Background(), A2AAgentTurnInput{
+		TargetAgent: "writer",
+		Message:     "answer the question",
+	})
+	if err != nil {
+		t.Fatalf("HandleA2AAgentTurn: %v", err)
+	}
+	if result.ReplyText != "the answer is yes" {
+		t.Fatalf("expected reply_text, got %q", result.ReplyText)
+	}
+	if result.Workflow.ID == "" || result.Handoff.ID == "" {
+		t.Fatalf("expected workflow and handoff ids, got workflow=%+v handoff=%+v", result.Workflow, result.Handoff)
+	}
+	if result.Handoff.State != orchestrator.StateCompleted {
+		t.Fatalf("expected completed handoff, got %s", result.Handoff.State)
+	}
+	if result.Attempt.ResultStatus != string(orchestrator.TransportAccepted) || result.Attempt.ExternalID != "turn-1" {
+		t.Fatalf("expected accepted attempt, got %+v", result.Attempt)
+	}
+	if runner.command != "/configured/openclaw" {
+		t.Fatalf("expected configured OpenClaw command, got %q", runner.command)
+	}
+	if !slicesEqualStrings(runner.args, []string{"--mode", "agent_turn"}) {
+		t.Fatalf("expected agent_turn args, got %v", runner.args)
+	}
+	stdin := string(runner.stdin)
+	for _, want := range []string{`"target":"agent:writer"`, `"message":"answer the question"`, `"command":"/configured/openclaw"`} {
+		if !strings.Contains(stdin, want) {
+			t.Fatalf("expected dispatch request stdin to contain %s, got %s", want, stdin)
+		}
+	}
+	completed := toolserverEventOfType(result.Events, orchestrator.EventCompleted)
+	if completed.Payload["reply_text"] != "the answer is yes" {
+		t.Fatalf("expected completed reply_text in dispatch events, got %+v", completed.Payload)
+	}
+
+	got, err := h.HandleHandoffGet(context.Background(), HandoffGetInput{HandoffID: result.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleHandoffGet: %v", err)
+	}
+	persisted := toolserverEventOfType(got.Timeline, orchestrator.EventCompleted)
+	if persisted.Payload["reply_text"] != "the answer is yes" {
+		t.Fatalf("expected persisted reply_text, got %+v", persisted.Payload)
+	}
+}
+
+func TestHandleA2AAgentTurnAcceptsAgentPrefixedTarget(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	runner := &captureOpenClawRunner{stdout: []byte(`{"status":"accepted","external_id":"turn-1","events":[{"event":"received"},{"event":"claimed"},{"event":"started"},{"event":"checkpointed"},{"event":"completed","payload":{"reply_text":"ok"}}]}`)}
+	h.svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(runner))
+	h.SetOpenClawDispatchDefaults("/configured/openclaw", []string{"--mode", "agent_turn"})
+
+	result, err := h.HandleA2AAgentTurn(context.Background(), A2AAgentTurnInput{
+		TargetAgent: "agent:writer",
+		Message:     "hello",
+	})
+	if err != nil {
+		t.Fatalf("HandleA2AAgentTurn: %v", err)
+	}
+	if result.Handoff.ReceiverActor.ID != "writer" {
+		t.Fatalf("expected receiver id writer, got %+v", result.Handoff.ReceiverActor)
+	}
+	if result.Handoff.DeliveryTargetRef != "agent:writer" {
+		t.Fatalf("expected delivery target agent:writer, got %q", result.Handoff.DeliveryTargetRef)
+	}
+	if strings.Contains(string(runner.stdin), "agent:agent:writer") {
+		t.Fatalf("expected normalized target, got stdin %s", string(runner.stdin))
+	}
+}
+
+func TestHandleA2AAgentTurnRejectsBlankInput(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	h.SetOpenClawDispatchDefaults("/configured/openclaw", []string{"--mode", "agent_turn"})
+
+	if _, err := h.HandleA2AAgentTurn(context.Background(), A2AAgentTurnInput{TargetAgent: "", Message: "hello"}); err == nil {
+		t.Fatalf("expected blank target_agent error")
+	}
+	if _, err := h.HandleA2AAgentTurn(context.Background(), A2AAgentTurnInput{TargetAgent: "writer", Message: ""}); err == nil {
+		t.Fatalf("expected blank message error")
+	}
+}
+
+func TestHandleA2AAgentTurnRejectsMissingOpenClawDefaultsBeforeCreatingHandoff(t *testing.T) {
+	h, db := newTestHandlersWithDB(t, nil)
+
+	_, err := h.HandleA2AAgentTurn(context.Background(), A2AAgentTurnInput{
+		TargetAgent: "writer",
+		Message:     "answer the question",
+	})
+	if err == nil {
+		t.Fatalf("expected missing OpenClaw defaults error")
+	}
+	if !strings.Contains(err.Error(), "openclaw dispatch defaults are not configured") {
+		t.Fatalf("expected missing defaults error, got %v", err)
+	}
+	rows, err := db.QueryContext(context.Background(), "select id from handoffs")
+	if err != nil {
+		t.Fatalf("query handoffs: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Fatalf("expected no handoff to be created when OpenClaw defaults are missing")
+	}
+}
+
+func TestHandleA2AAgentTurnRejectsMissingReplyText(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	runner := &captureOpenClawRunner{stdout: []byte(`{"status":"accepted","external_id":"turn-1","events":[{"event":"received"},{"event":"claimed"},{"event":"started"},{"event":"checkpointed"},{"event":"completed","payload":{}}]}`)}
+	h.svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(runner))
+	h.SetOpenClawDispatchDefaults("/configured/openclaw", []string{"--mode", "agent_turn"})
+
+	_, err := h.HandleA2AAgentTurn(context.Background(), A2AAgentTurnInput{
+		TargetAgent: "writer",
+		Message:     "answer the question",
+	})
+	if err == nil {
+		t.Fatalf("expected missing reply_text error")
+	}
+	if !strings.Contains(err.Error(), "completed event payload reply_text is required") {
+		t.Fatalf("expected missing reply_text error, got %v", err)
+	}
+}
+
 func TestHandleA2ADeliverReturnsStructuredResult(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -1819,6 +1948,27 @@ func TestHandleSenderJobListRejectsInvalidFilterBeforeCallingSender(t *testing.T
 	if called {
 		t.Fatalf("sender was called for invalid limit")
 	}
+}
+
+func toolserverEventOfType(events []orchestrator.EventRecord, eventType orchestrator.EventType) orchestrator.EventRecord {
+	for _, event := range events {
+		if event.Type == eventType {
+			return event
+		}
+	}
+	return orchestrator.EventRecord{}
+}
+
+func slicesEqualStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
 
 func newTestHandlers(t *testing.T, client *a2adelivery.SenderClient) *Handlers {
