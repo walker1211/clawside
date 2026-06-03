@@ -2309,7 +2309,8 @@ func TestReadmeDocumentsPrivateDogfoodRehearsal(t *testing.T) {
 			"A2A readiness",
 			"MCP private coordination rehearsal",
 			"GitHub readiness",
-			"expected red",
+			"exit 0",
+			"public-ready",
 			"private-coordination",
 			"--private-multi-project-dogfood-smoke",
 		}
@@ -2514,27 +2515,27 @@ func TestPrivateOpenClawExternalRuntimeEvidenceClosureDocsAndExamples(t *testing
 	}
 }
 
-func TestReadmeKeepsReleaseDeferredAndPublicDocsSanitized(t *testing.T) {
+func TestReadmeDocumentsPublicReadinessAndKeepsDocsSanitized(t *testing.T) {
 	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
 		content := readTextFile(t, path)
 		wantTokens := []string{"./scripts/github-readiness.sh <owner>/<repo>"}
 		if path == "README.zh-CN.md" {
 			wantTokens = append(wantTokens,
-				"Release 继续暂缓",
-				"不要把仓库设为 public",
-				"不要修改 GitHub 设置",
-				"不要创建 release",
-				"不要创建或推送 tag",
-				"明确授权",
+				"Public readiness",
+				"secret scanning",
+				"push protection",
+				"private vulnerability reporting",
+				"branch protection",
+				"code scanning",
 			)
 		} else {
 			wantTokens = append(wantTokens,
-				"Release remains deferred",
-				"do not make the repository public",
-				"do not change GitHub settings",
-				"do not create a release",
-				"do not create or push a tag",
-				"explicit authorization",
+				"Public readiness",
+				"secret scanning",
+				"push protection",
+				"private vulnerability reporting",
+				"branch protection",
+				"code scanning",
 			)
 		}
 		for _, want := range wantTokens {
