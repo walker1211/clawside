@@ -46,16 +46,33 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 | 最终 private/local closure checklist | `./scripts/final_closure_checklist.sh --external-runtime-evidence ./external-runtime-evidence.json --evidence-bundle ./release-evidence/<bundle-dir> --tag v0.0.0-dry-run --repo <owner>/<repo>` |
 | A2A compatibility 和外部 client readiness | `./scripts/verify_clawside_a2a.sh` |
 | MCP tool surface 和 OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
+| 真实异步多 agent OpenClaw A2A smoke | `go run ./cmd/openclaw-mcp-smoke --json --multi-agent-a2a-smoke --a2a-agent researcher --a2a-agent planner --a2a-agent engineer --a2a-rounds 1 --a2a-poll-timeout 180s --openclaw-gateway-preflight` |
 | 多项目 upstream/downstream/reviewer rehearsal | `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json` |
 | 外部 runtime trajectory evidence dogfood | `./scripts/verify_openclaw_mcp.sh --profile external-runtime-evidence --sender-base-url "" --mcp-command "" --openclaw-external-runtime-evidence ./external-runtime-evidence.json --json` |
 | Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
-| 仓库切 public 前的 GitHub readiness | `./scripts/github-readiness.sh <owner>/<repo>` |
+| GitHub public readiness 复核 | `./scripts/github-readiness.sh <owner>/<repo>` |
+
+### 真实多 agent A2A smoke
+
+本地 sender、MCP server 配置和 OpenClaw gateway 可用后，可以运行这条 smoke。它会对每个目标 agent 调用一次 `a2a_agent_turn_start`，然后只用同一个 handoff 调 `a2a_agent_turn_result` 轮询，最终记录 compact status 和 `reply_text`。它不调用 `a2a_deliver`、同步 `a2a_agent_turn` 或 `handoff_dispatch`。
+
+```bash
+go run ./cmd/openclaw-mcp-smoke \
+  --json \
+  --multi-agent-a2a-smoke \
+  --a2a-agent researcher \
+  --a2a-agent planner \
+  --a2a-agent engineer \
+  --a2a-rounds 1 \
+  --a2a-poll-timeout 180s \
+  --openclaw-gateway-preflight
+```
 
 ### 当前集成状态
 
 - **Private dogfood rehearsal**：当前 private dogfood 路径已记录为可重复的本地演练。它是 Clawside truth-plane / MCP sidecar 的私有操作证据，不是公开 release evidence。
-- **External swarm/runtime integration guide**：本文档补齐外部 runtime 如何自己启动 worker，并把 Clawside 当作 coordination sidecar 使用的顺序。
-- **Release 继续暂缓**：除非获得明确授权，不要把仓库设为 public，不要修改 GitHub 设置，不要创建 release，也不要创建或推送 tag。public-readiness 检查保持只读：`./scripts/github-readiness.sh <owner>/<repo>`。
+- **External swarm/runtime integration guide**：本文档说明外部 runtime 如何自己启动 worker，并把 Clawside 当作 coordination sidecar 使用。
+- **Public readiness**：public release 相关变更前后都运行 `./scripts/github-readiness.sh <owner>/<repo>`，复核 secret scanning、push protection、private vulnerability reporting、branch protection 或 ruleset，以及 code scanning。
 
 ### Private dogfood rehearsal sequence
 
@@ -68,12 +85,12 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 ./scripts/github-readiness.sh <owner>/<repo>
 ```
 
-仓库仍为 private 时的预期结果：
+预期结果：
 
 - `./scripts/ci-local.sh clean`：local clean CI 应该为 green。
 - `./scripts/verify_clawside_a2a.sh`：A2A readiness 应该为 green。
 - `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`：MCP private coordination rehearsal 应该为 green。
-- `./scripts/github-readiness.sh <owner>/<repo>`：仓库仍为 private 或 GitHub settings 未启用时，GitHub readiness 可以是 expected red；除非该脚本 exit 0，否则不要宣称仓库 public-ready。
+- `./scripts/github-readiness.sh <owner>/<repo>`：该脚本应 exit 0，才能宣称仓库 public-ready。
 
 这条 rehearsal 覆盖当前 truth-plane bridge 行为：agent registry、symbolic `project://...` refs、`next_work`、`blocked_work`、reviewer gates、dependency gates、`workflow_status` 和 `coordination_evidence_summary`。`private-coordination` profile 会展开为 `--multi-agent-coordination-smoke`、`--collaboration-template-smoke`、`--external-runtime-smoke` 和 `--private-multi-project-dogfood-smoke` 背后的 truth-plane-only coordination checks，并禁用 sender checks 和 delivery。它不调用 `message/send` 或 `message/stream`，不触发 sender 或 Telegram delivery，也不接受 runtime launch fields。
 

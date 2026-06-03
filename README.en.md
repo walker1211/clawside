@@ -46,16 +46,33 @@ Which verifier should I run?
 | Final private/local closure checklist | `./scripts/final_closure_checklist.sh --external-runtime-evidence ./external-runtime-evidence.json --evidence-bundle ./release-evidence/<bundle-dir> --tag v0.0.0-dry-run --repo <owner>/<repo>` |
 | A2A compatibility and external client readiness | `./scripts/verify_clawside_a2a.sh` |
 | MCP tool surface and OpenClaw sidecar smoke | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh` |
+| Live async multi-agent OpenClaw A2A smoke | `go run ./cmd/openclaw-mcp-smoke --json --multi-agent-a2a-smoke --a2a-agent researcher --a2a-agent planner --a2a-agent engineer --a2a-rounds 1 --a2a-poll-timeout 180s --openclaw-gateway-preflight` |
 | Multi-project upstream/downstream/reviewer rehearsal | `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json` |
 | External runtime trajectory evidence dogfood | `./scripts/verify_openclaw_mcp.sh --profile external-runtime-evidence --sender-base-url "" --mcp-command "" --openclaw-external-runtime-evidence ./external-runtime-evidence.json --json` |
 | Release-grade evidence verification | `SENDER_AUTH_KEY=<local-sender-key> ./scripts/verify_openclaw_mcp.sh --profile release-evidence` |
-| GitHub public readiness before opening the repository | `./scripts/github-readiness.sh <owner>/<repo>` |
+| GitHub public readiness review | `./scripts/github-readiness.sh <owner>/<repo>` |
+
+### Live multi-agent A2A smoke
+
+Use this smoke after the local sender, MCP server configuration, and OpenClaw gateway are available. The check starts one async turn per target agent with `a2a_agent_turn_start`, then polls the same handoff with `a2a_agent_turn_result` until it records a compact final status and `reply_text`. It does not call `a2a_deliver`, synchronous `a2a_agent_turn`, or `handoff_dispatch`.
+
+```bash
+go run ./cmd/openclaw-mcp-smoke \
+  --json \
+  --multi-agent-a2a-smoke \
+  --a2a-agent researcher \
+  --a2a-agent planner \
+  --a2a-agent engineer \
+  --a2a-rounds 1 \
+  --a2a-poll-timeout 180s \
+  --openclaw-gateway-preflight
+```
 
 ### Current integration status
 
 - **Private dogfood rehearsal:** the current private dogfood path is documented as a repeatable local rehearsal. Treat it as private operational evidence for Clawside's truth-plane / MCP sidecar behavior, not as public release evidence.
-- **External swarm/runtime integration guide:** this README now documents how an external runtime launches its own workers and uses Clawside as a coordination sidecar.
-- **Release remains deferred:** until there is explicit authorization, do not make the repository public, do not change GitHub settings, do not create a release, and do not create or push a tag. Keep public-readiness checks read-only with `./scripts/github-readiness.sh <owner>/<repo>`.
+- **External swarm/runtime integration guide:** this README documents how an external runtime launches its own workers and uses Clawside as a coordination sidecar.
+- **Public readiness:** use `./scripts/github-readiness.sh <owner>/<repo>` before and after public release changes to verify secret scanning, push protection, private vulnerability reporting, branch protection or rulesets, and code scanning.
 
 ### Private dogfood rehearsal sequence
 
@@ -68,12 +85,12 @@ Use this sequence to rehearse the private runtime path without publishing releas
 ./scripts/github-readiness.sh <owner>/<repo>
 ```
 
-Expected results while the repository remains private:
+Expected results:
 
 - `./scripts/ci-local.sh clean`: local clean CI should be green.
 - `./scripts/verify_clawside_a2a.sh`: A2A readiness should be green.
 - `./scripts/verify_openclaw_mcp.sh --profile private-coordination --json`: MCP private coordination rehearsal should be green.
-- `./scripts/github-readiness.sh <owner>/<repo>`: GitHub readiness can be expected red while the repository is private or required GitHub settings are disabled; do not report the repository as public-ready until this script exits 0.
+- `./scripts/github-readiness.sh <owner>/<repo>`: GitHub readiness should exit 0 before reporting the repository as public-ready.
 
 The rehearsal covers the current truth-plane bridge behavior: agent registry, symbolic `project://...` references, `next_work`, `blocked_work`, reviewer gates, dependency gates, `workflow_status`, and `coordination_evidence_summary`. The `private-coordination` profile expands to the truth-plane-only coordination checks behind `--multi-agent-coordination-smoke`, `--collaboration-template-smoke`, `--external-runtime-smoke`, and `--private-multi-project-dogfood-smoke`, with sender checks and delivery disabled. It does not call `message/send` or `message/stream`, does not trigger sender or Telegram delivery, and does not accept runtime launch fields.
 
