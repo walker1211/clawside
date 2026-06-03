@@ -458,6 +458,20 @@ func TestGitHubReadinessPassesWithRequiredSettings(t *testing.T) {
 	}
 }
 
+func TestGitHubReadinessTreatsUppercasePublicAsPublic(t *testing.T) {
+	repo := newTempGitRepoWithScript(t, "scripts/github-readiness.sh")
+	env := fakeGitHubReadinessEnv(t, "pass-uppercase-public")
+
+	stdout, stderr, err := runScriptWithEnv(t, repo, "scripts/github-readiness.sh", env, "example/clawside")
+	if err != nil {
+		t.Fatalf("expected github-readiness.sh to pass: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	output := stdout + stderr
+	if strings.Contains(output, "WARN repository is not public") {
+		t.Fatalf("expected uppercase PUBLIC visibility to be treated as public, got:\n%s", output)
+	}
+}
+
 func TestGitHubReadinessFailsSafelyForPrivateUnavailableSettings(t *testing.T) {
 	repo := newTempGitRepoWithScript(t, "scripts/github-readiness.sh")
 	env := fakeGitHubReadinessEnv(t, "private-unavailable")
@@ -495,21 +509,23 @@ args="$*"
 if [[ "$args" == repo\ view* ]]; then
   if [[ "$mode" == "pass" ]]; then
     printf 'example/clawside\tmain\tpublic\n'
+  elif [[ "$mode" == "pass-uppercase-public" ]]; then
+    printf 'example/clawside\tmain\tPUBLIC\n'
   else
     printf 'example/clawside\tmain\tprivate\n'
   fi
   exit 0
 fi
 if [[ "$args" == *security_and_analysis.secret_scanning_push_protection.status* ]]; then
-  if [[ "$mode" == "pass" ]]; then printf 'enabled\n'; else printf 'unavailable\n'; fi
+  if [[ "$mode" == "pass" || "$mode" == "pass-uppercase-public" ]]; then printf 'enabled\n'; else printf 'unavailable\n'; fi
   exit 0
 fi
 if [[ "$args" == *security_and_analysis.secret_scanning.status* ]]; then
-  if [[ "$mode" == "pass" ]]; then printf 'enabled\n'; else printf 'unavailable\n'; fi
+  if [[ "$mode" == "pass" || "$mode" == "pass-uppercase-public" ]]; then printf 'enabled\n'; else printf 'unavailable\n'; fi
   exit 0
 fi
 if [[ "$args" == *private-vulnerability-reporting* ]]; then
-  if [[ "$mode" == "pass" ]]; then
+  if [[ "$mode" == "pass" || "$mode" == "pass-uppercase-public" ]]; then
     printf 'true\n'
   else
     printf 'ghp_private_secret_1234567890 /Users/example/private\n' >&2
@@ -518,7 +534,7 @@ if [[ "$args" == *private-vulnerability-reporting* ]]; then
   exit 0
 fi
 if [[ "$args" == *'/branches/main/protection'* ]]; then
-  if [[ "$mode" == "pass" ]]; then
+  if [[ "$mode" == "pass" || "$mode" == "pass-uppercase-public" ]]; then
     printf 'Test\n'
   else
     printf 'ghp_private_secret_1234567890 /Users/example/private\n' >&2
@@ -527,11 +543,11 @@ if [[ "$args" == *'/branches/main/protection'* ]]; then
   exit 0
 fi
 if [[ "$args" == *'rulesets?includes_parents=true'* ]]; then
-  if [[ "$mode" == "pass" ]]; then printf 'Test\n'; else printf 'ghp_private_secret_1234567890 /Users/example/private\n' >&2; exit 1; fi
+  if [[ "$mode" == "pass" || "$mode" == "pass-uppercase-public" ]]; then printf 'Test\n'; else printf 'ghp_private_secret_1234567890 /Users/example/private\n' >&2; exit 1; fi
   exit 0
 fi
 if [[ "$args" == *'code-scanning/alerts?state=open&per_page=1'* ]]; then
-  if [[ "$mode" == "pass" ]]; then printf '0\n'; else printf 'ghp_private_secret_1234567890 /Users/example/private\n' >&2; exit 1; fi
+  if [[ "$mode" == "pass" || "$mode" == "pass-uppercase-public" ]]; then printf '0\n'; else printf 'ghp_private_secret_1234567890 /Users/example/private\n' >&2; exit 1; fi
   exit 0
 fi
 printf 'unexpected gh call: %s\n' "$args" >&2
