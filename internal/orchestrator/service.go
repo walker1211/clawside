@@ -1086,10 +1086,11 @@ func (s *Service) DispatchHandoff(ctx context.Context, input DispatchHandoffInpu
 		if err != nil {
 			return DispatchHandoffResult{}, err
 		}
+		persistCtx := context.WithoutCancel(ctx)
 		attempt.ResultStatus = string(adapterResult.TransportStatus)
 		attempt.ExternalID = adapterResult.ExternalID
 		attempt.FinishedAt = s.now().UTC()
-		if err := s.store.SaveDispatchAttemptStatus(ctx, attempt); err != nil {
+		if err := s.store.SaveDispatchAttemptStatus(persistCtx, attempt); err != nil {
 			return DispatchHandoffResult{}, err
 		}
 		transportResultEvent := EventRecord{
@@ -1111,7 +1112,7 @@ func (s *Service) DispatchHandoff(ctx context.Context, input DispatchHandoffInpu
 		default:
 			transportResultEvent.Type = EventTransportRejected
 		}
-		if err := s.RecordObservedSignal(ctx, RecordObserverHintInput{Event: transportResultEvent}); err != nil {
+		if err := s.RecordObservedSignal(persistCtx, RecordObserverHintInput{Event: transportResultEvent}); err != nil {
 			return DispatchHandoffResult{}, err
 		}
 		events = append(events, transportResultEvent)

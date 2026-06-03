@@ -496,12 +496,30 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	}))
 
 	a2aAgentTurnTool := mcp.NewTool("a2a_agent_turn",
-		mcp.WithDescription("Ask an OpenClaw agent for one request/reply turn and return reply_text from the completed lifecycle event; does not use the sender bridge"),
+		mcp.WithDescription("Ask an OpenClaw agent for one synchronous request/reply turn; Telegram main sessions should prefer a2a_agent_turn_start and a2a_agent_turn_result to avoid blocking"),
 		mcp.WithInputSchema[toolserver.A2AAgentTurnInput](),
 		mcp.WithOutputSchema[toolserver.A2AAgentTurnOutput](),
 	)
 	s.AddTool(a2aAgentTurnTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.A2AAgentTurnInput) (toolserver.A2AAgentTurnOutput, error) {
 		return handlers.HandleA2AAgentTurn(ctx, args)
+	}))
+
+	a2aAgentTurnStartTool := mcp.NewTool("a2a_agent_turn_start",
+		mcp.WithDescription("Start an OpenClaw agent request/reply turn asynchronously and immediately return workflow_id and handoff_id; use a2a_agent_turn_result to read reply_text"),
+		mcp.WithInputSchema[toolserver.A2AAgentTurnStartInput](),
+		mcp.WithOutputSchema[toolserver.A2AAgentTurnStartOutput](),
+	)
+	s.AddTool(a2aAgentTurnStartTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.A2AAgentTurnStartInput) (toolserver.A2AAgentTurnStartOutput, error) {
+		return handlers.HandleA2AAgentTurnStart(ctx, args)
+	}))
+
+	a2aAgentTurnResultTool := mcp.NewTool("a2a_agent_turn_result",
+		mcp.WithDescription("Read an asynchronous OpenClaw agent turn result from clawside truth-plane by handoff_id; returns pending or completed with reply_text"),
+		mcp.WithInputSchema[toolserver.A2AAgentTurnResultInput](),
+		mcp.WithOutputSchema[toolserver.A2AAgentTurnResultOutput](),
+	)
+	s.AddTool(a2aAgentTurnResultTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.A2AAgentTurnResultInput) (toolserver.A2AAgentTurnResultOutput, error) {
+		return handlers.HandleA2AAgentTurnResult(ctx, args)
 	}))
 
 	a2aDeliverTool := mcp.NewTool("a2a_deliver",

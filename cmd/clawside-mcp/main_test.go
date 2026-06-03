@@ -25,7 +25,7 @@ var documentedV1ToolGroups = map[string][]string{
 	"watch ownership":         {"watch_list", "watch_run", "watch_update", "ownership_get", "ownership_update"},
 	"repair divergence":       {"repair_list", "repair_invalidate_event", "repair_backfill_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_record", "divergence_list"},
 	"sender observability":    {"sender_health", "sender_ready", "sender_stats", "sender_job_list", "sender_job_get"},
-	"a2a delivery":            {"a2a_agent_turn", "a2a_deliver"},
+	"a2a delivery":            {"a2a_agent_turn", "a2a_agent_turn_start", "a2a_agent_turn_result", "a2a_deliver"},
 }
 
 var documentedNoInputV1Tools = []string{"workflow_list", "collaboration_template_list", "sender_health", "sender_ready", "sender_stats"}
@@ -1084,6 +1084,104 @@ printf '{"status":"accepted","external_id":"turn-123","events":[{"event":"receiv
 	for _, forbidden := range []string{"workflow", "handoff", "attempt", "events", "external_id", "stdout", "stderr", "sender_job", "delivery_job"} {
 		if _, ok := outputMap[forbidden]; ok {
 			t.Fatalf("expected a2a_agent_turn output to omit top-level %q, got %s", forbidden, output)
+		}
+	}
+	capturedArgs := readTestFile(t, argsPath)
+	if capturedArgs != "--mode\nagent_turn\n" {
+		t.Fatalf("expected agent_turn OpenClaw args, got %q", capturedArgs)
+	}
+}
+
+func TestServerCallA2AAgentTurnStartAndResultReturnsReplyText(t *testing.T) {
+	tempDir := t.TempDir()
+	payloadPath := filepath.Join(tempDir, "payload.json")
+	argsPath := filepath.Join(tempDir, "args.txt")
+	scriptPath := writeMCPDispatchScript(t, `#!/bin/sh
+cat > "`+payloadPath+`"
+printf '%s\n' "$@" > "`+argsPath+`"
+printf '{"status":"accepted","external_id":"turn-async-123","events":[{"event":"received"},{"event":"claimed"},{"event":"started"},{"event":"checkpointed"},{"event":"completed","payload":{"reply_text":"async seer result"}}]}'
+`)
+	dbPath := filepath.Join(tempDir, "clawside.db")
+	c := newTestMCPClient(t, dbPath, "--openclaw-command", scriptPath, "--openclaw-args", "--mode,agent_turn")
+	defer c.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	startResult, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "a2a_agent_turn_start", Arguments: map[string]any{
+		"target_agent": "seer",
+		"message":      "inspect player 9",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(a2a_agent_turn_start): %v", err)
+	}
+	if startResult.IsError {
+		t.Fatalf("expected a2a_agent_turn_start success")
+	}
+	var started struct {
+		Status       string `json:"status"`
+		WorkflowID   string `json:"workflow_id"`
+		HandoffID    string `json:"handoff_id"`
+		HandoffState string `json:"handoff_state"`
+	}
+	decodeStructuredContent(t, startResult, &started)
+	if started.Status != "pending" || started.WorkflowID == "" || started.HandoffID == "" || started.HandoffState != "created" {
+		t.Fatalf("expected pending start summary, got %+v", started)
+	}
+	startOutput := structuredContentJSON(t, startResult)
+	var startMap map[string]any
+	if err := json.Unmarshal([]byte(startOutput), &startMap); err != nil {
+		t.Fatalf("decode start output map: %v", err)
+	}
+	for _, forbidden := range []string{"reply_text", "workflow", "handoff", "attempt", "events", "external_id", "stdout", "stderr"} {
+		if _, ok := startMap[forbidden]; ok {
+			t.Fatalf("expected a2a_agent_turn_start output to omit top-level %q, got %s", forbidden, startOutput)
+		}
+	}
+
+	var payload struct {
+		Status              string `json:"status"`
+		ReplyText           string `json:"reply_text"`
+		WorkflowID          string `json:"workflow_id"`
+		HandoffID           string `json:"handoff_id"`
+		HandoffState        string `json:"handoff_state"`
+		AttemptResultStatus string `json:"attempt_result_status"`
+		ExternalIDPresent   bool   `json:"external_id_present"`
+	}
+	deadline := time.After(10 * time.Second)
+	for {
+		result, err := c.CallTool(ctx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "a2a_agent_turn_result", Arguments: map[string]any{
+			"handoff_id": started.HandoffID,
+		}}})
+		if err != nil {
+			t.Fatalf("CallTool(a2a_agent_turn_result): %v", err)
+		}
+		if result.IsError {
+			t.Fatalf("expected a2a_agent_turn_result success")
+		}
+		decodeStructuredContent(t, result, &payload)
+		if payload.Status == "completed" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("expected completed result, got %+v", payload)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if payload.ReplyText != "async seer result" {
+		t.Fatalf("expected reply_text, got %+v", payload)
+	}
+	if payload.WorkflowID != started.WorkflowID || payload.HandoffID != started.HandoffID || payload.HandoffState != "completed" {
+		t.Fatalf("expected completed handoff summary, got %+v", payload)
+	}
+	if payload.AttemptResultStatus != "accepted" || !payload.ExternalIDPresent {
+		t.Fatalf("expected accepted attempt summary, got %+v", payload)
+	}
+	capturedPayload := readTestFile(t, payloadPath)
+	for _, want := range []string{`"target":"agent:seer"`, `"message":"inspect player 9"`, `"command":"` + scriptPath + `"`} {
+		if !strings.Contains(capturedPayload, want) {
+			t.Fatalf("expected captured payload to contain %s, got %s", want, capturedPayload)
 		}
 	}
 	capturedArgs := readTestFile(t, argsPath)

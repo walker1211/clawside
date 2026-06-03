@@ -1690,6 +1690,283 @@ func TestHandleA2AAgentTurnReturnsReplyText(t *testing.T) {
 	}
 }
 
+func TestHandleA2AAgentTurnStartReturnsPendingThenResultReturnsReplyText(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	runner := newBlockingOpenClawRunner([]byte(`{"status":"accepted","external_id":"turn-async","events":[{"event":"received"},{"event":"claimed"},{"event":"started"},{"event":"checkpointed"},{"event":"completed","payload":{"reply_text":"async answer"}}]}`))
+	h.svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(runner))
+	h.SetOpenClawDispatchDefaults("/configured/openclaw", []string{"--mode", "agent_turn"})
+
+	started, err := h.HandleA2AAgentTurnStart(context.Background(), A2AAgentTurnStartInput{
+		TargetAgent: "writer",
+		Message:     "answer later",
+	})
+	if err != nil {
+		t.Fatalf("HandleA2AAgentTurnStart: %v", err)
+	}
+	if started.Status != "pending" {
+		t.Fatalf("expected pending start status, got %+v", started)
+	}
+	if started.WorkflowID == "" || started.HandoffID == "" {
+		t.Fatalf("expected workflow and handoff ids, got %+v", started)
+	}
+	if started.HandoffState != string(orchestrator.StateCreated) {
+		t.Fatalf("expected created handoff at start, got %+v", started)
+	}
+
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatalf("expected async dispatch to start")
+	}
+	pending, err := h.HandleA2AAgentTurnResult(context.Background(), A2AAgentTurnResultInput{HandoffID: started.HandoffID})
+	if err != nil {
+		t.Fatalf("HandleA2AAgentTurnResult pending: %v", err)
+	}
+	if pending.Status != "pending" || pending.ReplyText != "" {
+		t.Fatalf("expected pending result without reply_text, got %+v", pending)
+	}
+	if pending.AttemptResultStatus != string(orchestrator.TransportRequested) {
+		t.Fatalf("expected requested attempt while dispatch is blocked, got %+v", pending)
+	}
+
+	close(runner.release)
+	select {
+	case <-runner.done:
+	case <-time.After(time.Second):
+		t.Fatalf("expected async dispatch to finish")
+	}
+	var completed A2AAgentTurnResultOutput
+	deadline := time.After(time.Second)
+	for {
+		completed, err = h.HandleA2AAgentTurnResult(context.Background(), A2AAgentTurnResultInput{HandoffID: started.HandoffID})
+		if err != nil {
+			t.Fatalf("HandleA2AAgentTurnResult completed: %v", err)
+		}
+		if completed.Status == "completed" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("expected completed reply, got %+v", completed)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if completed.ReplyText != "async answer" {
+		t.Fatalf("expected completed reply, got %+v", completed)
+	}
+	if completed.HandoffState != string(orchestrator.StateCompleted) {
+		t.Fatalf("expected completed handoff, got %+v", completed)
+	}
+	if completed.AttemptResultStatus != string(orchestrator.TransportAccepted) || !completed.ExternalIDPresent {
+		t.Fatalf("expected accepted attempt summary, got %+v", completed)
+	}
+	if runner.command != "/configured/openclaw" {
+		t.Fatalf("expected configured OpenClaw command, got %q", runner.command)
+	}
+	if !slicesEqualStrings(runner.args, []string{"--mode", "agent_turn"}) {
+		t.Fatalf("expected agent_turn args, got %v", runner.args)
+	}
+	if strings.Contains(string(runner.stdin), "agent:agent:writer") {
+		t.Fatalf("expected normalized target, got stdin %s", string(runner.stdin))
+	}
+}
+
+func TestHandleA2AAgentTurnResultTerminalizesStaleRequestedAttempt(t *testing.T) {
+	currentTime := time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
+	h, db := newTestHandlersWithDB(t, nil)
+	h.setA2AAgentTurnNow(func() time.Time { return currentTime })
+	h.SetA2AAgentTurnDispatchTimeout(time.Minute)
+
+	created, err := h.HandleHandoffCreate(context.Background(), HandoffCreateInput{
+		WorkflowKind:                  "a2a_agent_turn",
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "main"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "writer"},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        "answer later",
+		RequiredForWorkflowCompletion: true,
+		DeliveryTargetRef:             "agent:writer",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffCreate: %v", err)
+	}
+	_, err = h.HandleHandoffDispatch(context.Background(), HandoffDispatchInput{
+		HandoffID: created.Handoff.ID,
+		Adapter:   "openclaw",
+		Target:    "agent:writer",
+		Message:   "answer later",
+	})
+	if err != nil {
+		t.Fatalf("HandleHandoffDispatch: %v", err)
+	}
+
+	currentTime = currentTime.Add(2 * time.Minute)
+	result, err := h.HandleA2AAgentTurnResult(context.Background(), A2AAgentTurnResultInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleA2AAgentTurnResult: %v", err)
+	}
+	if result.Status != "failed" || result.HandoffState != string(orchestrator.StateFailed) {
+		t.Fatalf("expected stale requested attempt to fail handoff, got %+v", result)
+	}
+	if result.AttemptResultStatus != string(orchestrator.TransportTimeout) {
+		t.Fatalf("expected timeout attempt status, got %+v", result)
+	}
+
+	got, err := h.HandleHandoffGet(context.Background(), HandoffGetInput{HandoffID: created.Handoff.ID})
+	if err != nil {
+		t.Fatalf("HandleHandoffGet: %v", err)
+	}
+	if failed := toolserverEventOfType(got.Timeline, orchestrator.EventFailed); failed.Type != orchestrator.EventFailed {
+		t.Fatalf("expected failed event, got %+v", got.Timeline)
+	}
+	signals, err := h.store.ListObservedSignalsByHandoff(context.Background(), created.Handoff.ID)
+	if err != nil {
+		t.Fatalf("ListObservedSignalsByHandoff: %v", err)
+	}
+	if len(signals) != 1 || signals[0].Kind != orchestrator.ObservedSignalTransportTimeout {
+		t.Fatalf("expected transport timeout signal, got %+v", signals)
+	}
+	var status string
+	if err := db.QueryRowContext(context.Background(), "select result_status from dispatch_attempts where handoff_id = ?", created.Handoff.ID).Scan(&status); err != nil {
+		t.Fatalf("query dispatch attempt: %v", err)
+	}
+	if status != string(orchestrator.TransportTimeout) {
+		t.Fatalf("expected persisted timeout status, got %q", status)
+	}
+}
+
+func TestHandleA2AAgentTurnStartTimeoutMarksHandoffFailed(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	runner := newBlockingOpenClawRunner(nil)
+	h.svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(runner))
+	h.SetOpenClawDispatchDefaults("/configured/openclaw", []string{"--mode", "agent_turn"})
+	h.SetA2AAgentTurnDispatchTimeout(10 * time.Millisecond)
+
+	started, err := h.HandleA2AAgentTurnStart(context.Background(), A2AAgentTurnStartInput{
+		TargetAgent: "writer",
+		Message:     "answer later",
+	})
+	if err != nil {
+		t.Fatalf("HandleA2AAgentTurnStart: %v", err)
+	}
+	select {
+	case <-runner.started:
+	case <-time.After(time.Second):
+		t.Fatalf("expected async dispatch to start")
+	}
+	select {
+	case <-runner.done:
+	case <-time.After(time.Second):
+		t.Fatalf("expected async dispatch timeout")
+	}
+
+	var result A2AAgentTurnResultOutput
+	deadline := time.After(time.Second)
+	for {
+		result, err = h.HandleA2AAgentTurnResult(context.Background(), A2AAgentTurnResultInput{HandoffID: started.HandoffID})
+		if err != nil {
+			t.Fatalf("HandleA2AAgentTurnResult: %v", err)
+		}
+		if result.Status == "failed" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("expected failed timeout result, got %+v", result)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if result.HandoffState != string(orchestrator.StateFailed) {
+		t.Fatalf("expected failed handoff state, got %+v", result)
+	}
+	if result.AttemptResultStatus != string(orchestrator.TransportTimeout) {
+		t.Fatalf("expected timeout attempt, got %+v", result)
+	}
+
+	got, err := h.HandleHandoffGet(context.Background(), HandoffGetInput{HandoffID: started.HandoffID})
+	if err != nil {
+		t.Fatalf("HandleHandoffGet: %v", err)
+	}
+	if failed := toolserverEventOfType(got.Timeline, orchestrator.EventFailed); failed.Type != orchestrator.EventFailed {
+		t.Fatalf("expected failed event, got %+v", got.Timeline)
+	}
+	signals, err := h.store.ListObservedSignalsByHandoff(context.Background(), started.HandoffID)
+	if err != nil {
+		t.Fatalf("ListObservedSignalsByHandoff: %v", err)
+	}
+	if len(signals) != 1 || signals[0].Kind != orchestrator.ObservedSignalTransportTimeout {
+		t.Fatalf("expected transport timeout signal, got %+v", signals)
+	}
+}
+
+func TestHandleA2AAgentTurnStartRejectedMarksHandoffFailed(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	runner := &captureOpenClawRunner{stdout: []byte(`{"status":"rejected"}`)}
+	h.svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(runner))
+	h.SetOpenClawDispatchDefaults("/configured/openclaw", []string{"--mode", "agent_turn"})
+
+	started, err := h.HandleA2AAgentTurnStart(context.Background(), A2AAgentTurnStartInput{
+		TargetAgent: "writer",
+		Message:     "answer later",
+	})
+	if err != nil {
+		t.Fatalf("HandleA2AAgentTurnStart: %v", err)
+	}
+
+	var result A2AAgentTurnResultOutput
+	deadline := time.After(time.Second)
+	for {
+		result, err = h.HandleA2AAgentTurnResult(context.Background(), A2AAgentTurnResultInput{HandoffID: started.HandoffID})
+		if err != nil {
+			t.Fatalf("HandleA2AAgentTurnResult: %v", err)
+		}
+		if result.Status == "failed" {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("expected failed rejected result, got %+v", result)
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if result.HandoffState != string(orchestrator.StateFailed) {
+		t.Fatalf("expected failed handoff state, got %+v", result)
+	}
+	if result.AttemptResultStatus != string(orchestrator.TransportRejected) {
+		t.Fatalf("expected rejected attempt, got %+v", result)
+	}
+
+	signals, err := h.store.ListObservedSignalsByHandoff(context.Background(), started.HandoffID)
+	if err != nil {
+		t.Fatalf("ListObservedSignalsByHandoff: %v", err)
+	}
+	if len(signals) != 1 || signals[0].Kind != orchestrator.ObservedSignalTransportRejected {
+		t.Fatalf("expected transport rejected signal, got %+v", signals)
+	}
+}
+
+func TestHandleA2AAgentTurnStartRejectsMissingOpenClawDefaultsBeforeCreatingHandoff(t *testing.T) {
+	h, db := newTestHandlersWithDB(t, nil)
+
+	_, err := h.HandleA2AAgentTurnStart(context.Background(), A2AAgentTurnStartInput{
+		TargetAgent: "writer",
+		Message:     "answer later",
+	})
+	if err == nil {
+		t.Fatalf("expected missing OpenClaw defaults error")
+	}
+	if !strings.Contains(err.Error(), "openclaw dispatch defaults are not configured") {
+		t.Fatalf("expected missing defaults error, got %v", err)
+	}
+	rows, err := db.QueryContext(context.Background(), "select id from handoffs")
+	if err != nil {
+		t.Fatalf("query handoffs: %v", err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		t.Fatalf("expected no handoff to be created when OpenClaw defaults are missing")
+	}
+}
+
 func TestHandleA2AAgentTurnAcceptsAgentPrefixedTarget(t *testing.T) {
 	h := newTestHandlers(t, nil)
 	runner := &captureOpenClawRunner{stdout: []byte(`{"status":"accepted","external_id":"turn-1","events":[{"event":"received"},{"event":"claimed"},{"event":"started"},{"event":"checkpointed"},{"event":"completed","payload":{"reply_text":"ok"}}]}`)}
@@ -1987,10 +2264,13 @@ func newTestHandlersWithDB(t *testing.T, client *a2adelivery.SenderClient) (*Han
 	if err != nil {
 		t.Fatalf("NewStore: %v", err)
 	}
-	svc := orchestrator.NewService(store, func() time.Time {
+	now := func() time.Time {
 		return time.Date(2026, 4, 1, 12, 0, 0, 0, time.UTC)
-	})
-	return NewHandlers(svc, store, client), db
+	}
+	svc := orchestrator.NewService(store, now)
+	h := NewHandlers(svc, store, client)
+	h.setA2AAgentTurnNow(now)
+	return h, db
 }
 
 type captureOpenClawRunner struct {
@@ -2007,6 +2287,39 @@ func (c *captureOpenClawRunner) Run(_ context.Context, command string, args []st
 	c.args = append([]string(nil), args...)
 	c.stdin = append([]byte(nil), stdin...)
 	return c.stdout, c.stderr, c.err
+}
+
+type blockingOpenClawRunner struct {
+	stdout  []byte
+	started chan struct{}
+	release chan struct{}
+	done    chan struct{}
+	command string
+	args    []string
+	stdin   []byte
+}
+
+func newBlockingOpenClawRunner(stdout []byte) *blockingOpenClawRunner {
+	return &blockingOpenClawRunner{
+		stdout:  append([]byte(nil), stdout...),
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+		done:    make(chan struct{}),
+	}
+}
+
+func (b *blockingOpenClawRunner) Run(ctx context.Context, command string, args []string, stdin []byte) ([]byte, []byte, error) {
+	b.command = command
+	b.args = append([]string(nil), args...)
+	b.stdin = append([]byte(nil), stdin...)
+	close(b.started)
+	defer close(b.done)
+	select {
+	case <-b.release:
+		return b.stdout, nil, nil
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	}
 }
 
 func int64Ptr(v int64) *int64 { return &v }

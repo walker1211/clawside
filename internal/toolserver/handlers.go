@@ -12,13 +12,17 @@ import (
 	"github.com/walker1211/clawside/internal/orchestrator"
 )
 
+const defaultA2AAgentTurnDispatchTimeout = 3 * time.Minute
+
 type Handlers struct {
-	svc                    *orchestrator.Service
-	store                  *orchestrator.Store
-	senderClient           *a2adelivery.SenderClient
-	targetAgentBotResolver *a2adelivery.TargetAgentBotResolver
-	openClawCommand        string
-	openClawArgs           []string
+	svc                         *orchestrator.Service
+	store                       *orchestrator.Store
+	senderClient                *a2adelivery.SenderClient
+	targetAgentBotResolver      *a2adelivery.TargetAgentBotResolver
+	openClawCommand             string
+	openClawArgs                []string
+	a2aAgentTurnDispatchTimeout time.Duration
+	now                         func() time.Time
 }
 
 type ActorRefInput struct {
@@ -109,6 +113,32 @@ type A2AAgentTurnOutput struct {
 	HandoffID           string `json:"handoff_id"`
 	HandoffState        string `json:"handoff_state"`
 	AttemptResultStatus string `json:"attempt_result_status"`
+	ExternalIDPresent   bool   `json:"external_id_present"`
+}
+
+type A2AAgentTurnStartInput struct {
+	TargetAgent string `json:"target_agent"`
+	Message     string `json:"message"`
+}
+
+type A2AAgentTurnStartOutput struct {
+	Status       string `json:"status"`
+	WorkflowID   string `json:"workflow_id"`
+	HandoffID    string `json:"handoff_id"`
+	HandoffState string `json:"handoff_state"`
+}
+
+type A2AAgentTurnResultInput struct {
+	HandoffID string `json:"handoff_id"`
+}
+
+type A2AAgentTurnResultOutput struct {
+	Status              string `json:"status"`
+	ReplyText           string `json:"reply_text,omitempty"`
+	WorkflowID          string `json:"workflow_id"`
+	HandoffID           string `json:"handoff_id"`
+	HandoffState        string `json:"handoff_state"`
+	AttemptResultStatus string `json:"attempt_result_status,omitempty"`
 	ExternalIDPresent   bool   `json:"external_id_present"`
 }
 
@@ -353,12 +383,40 @@ func NewHandlers(svc *orchestrator.Service, store *orchestrator.Store, senderCli
 }
 
 func NewHandlersWithTargetAgentBotResolver(svc *orchestrator.Service, store *orchestrator.Store, senderClient *a2adelivery.SenderClient, resolver *a2adelivery.TargetAgentBotResolver) *Handlers {
-	return &Handlers{svc: svc, store: store, senderClient: senderClient, targetAgentBotResolver: resolver}
+	return &Handlers{
+		svc:                         svc,
+		store:                       store,
+		senderClient:                senderClient,
+		targetAgentBotResolver:      resolver,
+		a2aAgentTurnDispatchTimeout: defaultA2AAgentTurnDispatchTimeout,
+		now:                         func() time.Time { return time.Now().UTC() },
+	}
 }
 
 func (h *Handlers) SetOpenClawDispatchDefaults(command string, args []string) {
 	h.openClawCommand = strings.TrimSpace(command)
 	h.openClawArgs = append([]string(nil), args...)
+}
+
+func (h *Handlers) SetA2AAgentTurnDispatchTimeout(timeout time.Duration) {
+	if timeout <= 0 {
+		timeout = defaultA2AAgentTurnDispatchTimeout
+	}
+	h.a2aAgentTurnDispatchTimeout = timeout
+}
+
+func (h *Handlers) setA2AAgentTurnNow(now func() time.Time) {
+	if now == nil {
+		now = func() time.Time { return time.Now().UTC() }
+	}
+	h.now = now
+}
+
+func (h *Handlers) currentTime() time.Time {
+	if h.now == nil {
+		return time.Now().UTC()
+	}
+	return h.now().UTC()
 }
 
 func (h *Handlers) HandleHandoffCreate(ctx context.Context, input HandoffCreateInput) (HandoffCreateOutput, error) {
@@ -471,29 +529,7 @@ func (h *Handlers) HandleHandoffDispatch(ctx context.Context, input HandoffDispa
 }
 
 func (h *Handlers) HandleA2AAgentTurn(ctx context.Context, input A2AAgentTurnInput) (A2AAgentTurnOutput, error) {
-	targetAgent := strings.TrimSpace(input.TargetAgent)
-	message := strings.TrimSpace(input.Message)
-	if targetAgent == "" {
-		return A2AAgentTurnOutput{}, fmt.Errorf("target_agent is required")
-	}
-	if message == "" {
-		return A2AAgentTurnOutput{}, fmt.Errorf("message is required")
-	}
-	if h.openClawCommand == "" {
-		return A2AAgentTurnOutput{}, fmt.Errorf("openclaw dispatch defaults are not configured")
-	}
-
-	target := normalizeA2AAgentTurnTarget(targetAgent)
-	receiverID := normalizeA2AAgentTurnReceiverID(targetAgent)
-	created, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
-		WorkflowKind:                  "a2a_agent_turn",
-		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "main"},
-		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: receiverID},
-		TaskKind:                      string(orchestrator.TaskGeneric),
-		Intent:                        message,
-		RequiredForWorkflowCompletion: true,
-		DeliveryTargetRef:             target,
-	})
+	created, target, message, err := h.createA2AAgentTurnHandoff(ctx, input.TargetAgent, input.Message)
 	if err != nil {
 		return A2AAgentTurnOutput{}, err
 	}
@@ -523,6 +559,195 @@ func (h *Handlers) HandleA2AAgentTurn(ctx context.Context, input A2AAgentTurnInp
 		AttemptResultStatus: dispatch.Attempt.ResultStatus,
 		ExternalIDPresent:   strings.TrimSpace(dispatch.Attempt.ExternalID) != "",
 	}, nil
+}
+
+func (h *Handlers) HandleA2AAgentTurnStart(ctx context.Context, input A2AAgentTurnStartInput) (A2AAgentTurnStartOutput, error) {
+	created, target, message, err := h.createA2AAgentTurnHandoff(ctx, input.TargetAgent, input.Message)
+	if err != nil {
+		return A2AAgentTurnStartOutput{}, err
+	}
+	go h.dispatchA2AAgentTurn(created.Handoff.ID, target, message)
+	return A2AAgentTurnStartOutput{
+		Status:       "pending",
+		WorkflowID:   created.Workflow.ID,
+		HandoffID:    created.Handoff.ID,
+		HandoffState: string(created.Handoff.State),
+	}, nil
+}
+
+func (h *Handlers) HandleA2AAgentTurnResult(ctx context.Context, input A2AAgentTurnResultInput) (A2AAgentTurnResultOutput, error) {
+	handoffID := strings.TrimSpace(input.HandoffID)
+	if handoffID == "" {
+		return A2AAgentTurnResultOutput{}, fmt.Errorf("handoff_id is required")
+	}
+	handoff, err := h.store.LoadHandoff(ctx, handoffID)
+	if err != nil {
+		return A2AAgentTurnResultOutput{}, err
+	}
+	attempts, err := h.store.ListDispatchAttempts(ctx, handoff.ID)
+	if err != nil {
+		return A2AAgentTurnResultOutput{}, err
+	}
+	terminalized, err := h.terminalizeStaleA2AAgentTurn(ctx, handoff, attempts)
+	if err != nil {
+		return A2AAgentTurnResultOutput{}, err
+	}
+	if terminalized {
+		handoff, err = h.store.LoadHandoff(ctx, handoff.ID)
+		if err != nil {
+			return A2AAgentTurnResultOutput{}, err
+		}
+		attempts, err = h.store.ListDispatchAttempts(ctx, handoff.ID)
+		if err != nil {
+			return A2AAgentTurnResultOutput{}, err
+		}
+	}
+	attemptStatus, externalIDPresent := latestAttemptSummary(attempts)
+	status := a2aAgentTurnResultStatus(handoff.State, attemptStatus)
+	output := A2AAgentTurnResultOutput{
+		Status:              status,
+		WorkflowID:          handoff.WorkflowID,
+		HandoffID:           handoff.ID,
+		HandoffState:        string(handoff.State),
+		AttemptResultStatus: attemptStatus,
+		ExternalIDPresent:   externalIDPresent,
+	}
+	if handoff.State == orchestrator.StateCompleted {
+		timeline, err := h.store.ListEvents(ctx, handoff.ID)
+		if err != nil {
+			return A2AAgentTurnResultOutput{}, err
+		}
+		replyText, err := completedReplyText(timeline)
+		if err != nil {
+			return A2AAgentTurnResultOutput{}, err
+		}
+		output.ReplyText = replyText
+	}
+	return output, nil
+}
+
+func (h *Handlers) createA2AAgentTurnHandoff(ctx context.Context, targetAgent, rawMessage string) (HandoffCreateOutput, string, string, error) {
+	targetAgent = strings.TrimSpace(targetAgent)
+	message := strings.TrimSpace(rawMessage)
+	if targetAgent == "" {
+		return HandoffCreateOutput{}, "", "", fmt.Errorf("target_agent is required")
+	}
+	if message == "" {
+		return HandoffCreateOutput{}, "", "", fmt.Errorf("message is required")
+	}
+	if h.openClawCommand == "" {
+		return HandoffCreateOutput{}, "", "", fmt.Errorf("openclaw dispatch defaults are not configured")
+	}
+	target := normalizeA2AAgentTurnTarget(targetAgent)
+	receiverID := normalizeA2AAgentTurnReceiverID(targetAgent)
+	created, err := h.HandleHandoffCreate(ctx, HandoffCreateInput{
+		WorkflowKind:                  "a2a_agent_turn",
+		Sender:                        ActorRefInput{Type: string(orchestrator.ActorAgent), ID: "main"},
+		Receiver:                      ActorRefInput{Type: string(orchestrator.ActorAgent), ID: receiverID},
+		TaskKind:                      string(orchestrator.TaskGeneric),
+		Intent:                        message,
+		RequiredForWorkflowCompletion: true,
+		DeliveryTargetRef:             target,
+	})
+	if err != nil {
+		return HandoffCreateOutput{}, "", "", err
+	}
+	return created, target, message, nil
+}
+
+func (h *Handlers) dispatchA2AAgentTurn(handoffID, target, message string) {
+	ctx, cancel := context.WithTimeout(context.Background(), h.a2aAgentTurnDispatchTimeout)
+	defer cancel()
+	dispatch, err := h.HandleHandoffDispatch(ctx, HandoffDispatchInput{
+		HandoffID: handoffID,
+		Adapter:   "openclaw",
+		Target:    target,
+		Message:   message,
+	})
+	if err != nil {
+		h.failA2AAgentTurnHandoff(context.Background(), handoffID)
+		return
+	}
+	switch orchestrator.TransportStatus(dispatch.Attempt.ResultStatus) {
+	case orchestrator.TransportRejected, orchestrator.TransportTimeout:
+		h.failA2AAgentTurnHandoff(context.Background(), handoffID)
+	}
+}
+
+func (h *Handlers) terminalizeStaleA2AAgentTurn(ctx context.Context, handoff orchestrator.Handoff, attempts []orchestrator.DispatchAttempt) (bool, error) {
+	if !canTerminalizeStaleA2AAgentTurn(handoff.State) || len(attempts) == 0 {
+		return false, nil
+	}
+	attempt := attempts[len(attempts)-1]
+	if orchestrator.TransportStatus(attempt.ResultStatus) != orchestrator.TransportRequested {
+		return false, nil
+	}
+	now := h.currentTime()
+	if now.Before(attempt.RequestedAt.Add(h.a2aAgentTurnDispatchTimeout)) {
+		return false, nil
+	}
+	attempt.ResultStatus = string(orchestrator.TransportTimeout)
+	attempt.FinishedAt = now
+	if err := h.store.SaveDispatchAttemptStatus(ctx, attempt); err != nil {
+		return false, err
+	}
+	if err := h.svc.RecordObservedSignal(ctx, orchestrator.RecordObserverHintInput{Event: orchestrator.EventRecord{
+		ID:                orchestrator.NewID("evt"),
+		WorkflowID:        handoff.WorkflowID,
+		HandoffID:         handoff.ID,
+		Type:              orchestrator.EventTransportTimeout,
+		ProducerEventTime: now,
+		IngestedAt:        now,
+		ProducerActor:     orchestrator.ActorRef{Type: orchestrator.ActorSystem, ID: "adapter"},
+		AttemptID:         attempt.ID,
+	}}); err != nil {
+		return false, err
+	}
+	if err := h.failA2AAgentTurnHandoff(ctx, handoff.ID); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func canTerminalizeStaleA2AAgentTurn(state orchestrator.HandoffState) bool {
+	switch state {
+	case orchestrator.StateCreated, orchestrator.StateDispatched, orchestrator.StateReceived, orchestrator.StateClaimed, orchestrator.StateStarted, orchestrator.StateCheckpointed, orchestrator.StateSubmitted, orchestrator.StateReviewed:
+		return true
+	default:
+		return false
+	}
+}
+
+func (h *Handlers) failA2AAgentTurnHandoff(ctx context.Context, handoffID string) error {
+	_, err := h.HandleHandoffProgress(ctx, HandoffProgressInput{
+		Action:    "fail",
+		HandoffID: handoffID,
+		Actor:     ActorRefInput{Type: string(orchestrator.ActorSystem), ID: "workflow-controller"},
+	})
+	return err
+}
+
+func latestAttemptSummary(attempts []orchestrator.DispatchAttempt) (string, bool) {
+	if len(attempts) == 0 {
+		return "", false
+	}
+	attempt := attempts[len(attempts)-1]
+	return attempt.ResultStatus, strings.TrimSpace(attempt.ExternalID) != ""
+}
+
+func a2aAgentTurnResultStatus(state orchestrator.HandoffState, attemptStatus string) string {
+	switch state {
+	case orchestrator.StateCompleted:
+		return "completed"
+	case orchestrator.StateFailed:
+		return "failed"
+	}
+	switch orchestrator.TransportStatus(attemptStatus) {
+	case orchestrator.TransportRejected, orchestrator.TransportTimeout:
+		return attemptStatus
+	default:
+		return "pending"
+	}
 }
 
 func (h *Handlers) HandleHandoffProgress(ctx context.Context, input HandoffProgressInput) (orchestrator.ProtocolResult, error) {
