@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"sort"
@@ -36,9 +37,14 @@ const (
 	profileExternalRuntimeEvidence = "external-runtime-evidence"
 	profileRelease                 = "release"
 
-	supportedProfileValues = "quick, private-coordination, truth-plane-full, fixtures, release-evidence, external-runtime-evidence, release"
-	defaultFixtureDir      = "testdata/openclaw-smoke/stage0-5"
+	supportedProfileValues    = "quick, private-coordination, truth-plane-full, fixtures, release-evidence, external-runtime-evidence, release"
+	defaultFixtureDir         = "testdata/openclaw-smoke/stage0-5"
+	defaultA2APollTimeout     = 30 * time.Second
+	defaultA2APollInterval    = 200 * time.Millisecond
+	defaultOpenClawCLICommand = "openclaw"
 )
+
+var defaultMultiAgentA2AAgents = []string{"researcher", "planner", "engineer"}
 
 type Options struct {
 	Profile                                  string
@@ -56,6 +62,13 @@ type Options struct {
 	CollaborationTemplateSmoke               bool
 	ExternalRuntimeSmoke                     bool
 	PrivateMultiProjectDogfoodSmoke          bool
+	MultiAgentA2ASmoke                       bool
+	A2AAgents                                []string
+	A2ARounds                                int
+	A2APollTimeout                           time.Duration
+	A2APollInterval                          time.Duration
+	OpenClawGatewayPreflight                 bool
+	OpenClawCLICommand                       string
 	OpenClawCommand                          string
 	OpenClawArgs                             []string
 	OpenClawTarget                           string
@@ -128,6 +141,8 @@ type Report struct {
 	CollaborationTemplateResult      *CollaborationTemplateSmokeResult      `json:"collaboration_template_result,omitempty"`
 	ExternalRuntimeResult            *ExternalRuntimeSmokeResult            `json:"external_runtime_result,omitempty"`
 	PrivateMultiProjectDogfoodResult *PrivateMultiProjectDogfoodSmokeResult `json:"private_multi_project_dogfood_result,omitempty"`
+	MultiAgentA2AResult              *MultiAgentA2ASmokeResult              `json:"multi_agent_a2a_result,omitempty"`
+	OpenClawGatewayPreflightResult   *OpenClawGatewayPreflightResult        `json:"openclaw_gateway_preflight_result,omitempty"`
 	ExternalRuntimeEvidence          *OpenClawExternalRuntimeEvidenceResult `json:"external_runtime_evidence,omitempty"`
 	OpenClawToolCallChecklist        []OpenClawToolCallChecklistEntry       `json:"openclaw_tool_call_checklist,omitempty"`
 	Registration                     RegistrationGuidance                   `json:"registration"`
@@ -214,6 +229,32 @@ type PrivateMultiProjectDogfoodSmokeResult struct {
 	UpstreamFinalState     string `json:"upstream_final_state"`
 	DownstreamFinalState   string `json:"downstream_final_state"`
 	WorkflowFinalStatus    string `json:"workflow_final_status"`
+}
+
+type MultiAgentA2ASmokeResult struct {
+	Agents []string                  `json:"agents"`
+	Rounds int                       `json:"rounds"`
+	Turns  []A2AAgentTurnSmokeResult `json:"turns"`
+}
+
+type A2AAgentTurnSmokeResult struct {
+	TargetAgent         string `json:"target_agent"`
+	Round               int    `json:"round"`
+	WorkflowID          string `json:"workflow_id,omitempty"`
+	HandoffID           string `json:"handoff_id,omitempty"`
+	Status              string `json:"status"`
+	HandoffState        string `json:"handoff_state,omitempty"`
+	AttemptResultStatus string `json:"attempt_result_status,omitempty"`
+	ExternalIDPresent   bool   `json:"external_id_present"`
+	ReplyText           string `json:"reply_text,omitempty"`
+	Duration            string `json:"duration"`
+}
+
+type OpenClawGatewayPreflightResult struct {
+	StatusOK       bool   `json:"status_ok"`
+	StabilityOK    bool   `json:"stability_ok"`
+	StatusError    string `json:"status_error,omitempty"`
+	StabilityError string `json:"stability_error,omitempty"`
 }
 
 func (r *Report) addCheck(check CheckResult) {
@@ -475,6 +516,11 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 		report.ExternalRuntimeEvidence = externalRuntimeEvidence
 	}
 	report.addCheck(externalRuntimeEvidenceCheck)
+	if opts.OpenClawGatewayPreflight {
+		report.addCheck(checkOpenClawGatewayPreflight(ctx, execOpenClawGatewayRunner{}, &report, opts))
+	} else {
+		report.addCheck(skippedCheck("openclaw_gateway_preflight", "set --openclaw-gateway-preflight to run gateway status and stability checks"))
+	}
 	if opts.OpenClawDispatchSmoke {
 		report.addCheck(checkOpenClawDispatch(ctx, mcpClient, &report, opts))
 	}
@@ -492,6 +538,11 @@ func RunSmoke(ctx context.Context, opts Options) (Report, error) {
 	}
 	if opts.PrivateMultiProjectDogfoodSmoke {
 		report.addCheck(checkPrivateMultiProjectDogfood(ctx, mcpClient, &report, opts))
+	}
+	if opts.MultiAgentA2ASmoke {
+		report.addCheck(checkMultiAgentA2A(ctx, mcpClient, &report, opts))
+	} else {
+		report.addCheck(skippedCheck("multi_agent_a2a", "set --multi-agent-a2a-smoke to run async start/result request-reply checks"))
 	}
 	if opts.DeliverMain {
 		report.addCheck(checkA2AMainDelivery(ctx, mcpClient, &report, opts))
@@ -559,6 +610,255 @@ func checkMCPTools(ctx context.Context, client smokeMCPClient, report *Report, s
 		return failedCheck("mcp_tools", fmt.Sprintf("missing tools: %s", strings.Join(missing, ", ")))
 	}
 	return CheckResult{Name: "mcp_tools", Status: checkStatusOK, Detail: fmt.Sprintf("discovered %d expected v1 tools", len(report.Tools))}
+}
+
+type openClawGatewayRunner interface {
+	Run(context.Context, string, ...string) ([]byte, error)
+}
+
+type execOpenClawGatewayRunner struct{}
+
+func (execOpenClawGatewayRunner) Run(ctx context.Context, command string, args ...string) ([]byte, error) {
+	cmd := exec.CommandContext(ctx, command, args...)
+	return cmd.CombinedOutput()
+}
+
+func checkOpenClawGatewayPreflight(ctx context.Context, runner openClawGatewayRunner, report *Report, opts Options) CheckResult {
+	if report.OpenClawGatewayPreflightResult == nil {
+		report.OpenClawGatewayPreflightResult = &OpenClawGatewayPreflightResult{}
+	}
+	command := strings.TrimSpace(opts.OpenClawCLICommand)
+	if command == "" {
+		command = defaultOpenClawCLICommand
+	}
+	if runner == nil {
+		report.OpenClawGatewayPreflightResult.StatusError = "gateway runner is not configured"
+		report.OpenClawGatewayPreflightResult.StabilityError = "gateway runner is not configured"
+		return failedCheck("openclaw_gateway_preflight", "gateway runner is not configured")
+	}
+
+	_, statusErr := runner.Run(ctx, command, "gateway", "status")
+	report.OpenClawGatewayPreflightResult.StatusOK = statusErr == nil
+	if statusErr != nil {
+		report.OpenClawGatewayPreflightResult.StatusError = sanitizeDetail(statusErr.Error(), opts.SenderAuthKey)
+	}
+	_, stabilityErr := runner.Run(ctx, command, "gateway", "stability")
+	report.OpenClawGatewayPreflightResult.StabilityOK = stabilityErr == nil
+	if stabilityErr != nil {
+		report.OpenClawGatewayPreflightResult.StabilityError = sanitizeDetail(stabilityErr.Error(), opts.SenderAuthKey)
+	}
+
+	if statusErr != nil || stabilityErr != nil {
+		parts := make([]string, 0, 2)
+		if statusErr != nil {
+			parts = append(parts, "gateway status failed")
+		}
+		if stabilityErr != nil {
+			parts = append(parts, "gateway stability failed")
+		}
+		return failedCheck("openclaw_gateway_preflight", strings.Join(parts, "; "))
+	}
+	return CheckResult{Name: "openclaw_gateway_preflight", Status: checkStatusOK, Detail: "gateway status and stability ok"}
+}
+
+func checkMultiAgentA2A(ctx context.Context, client smokeMCPClient, report *Report, opts Options) CheckResult {
+	agents := effectiveA2AAgents(opts)
+	rounds := effectiveA2ARounds(opts)
+	result := &MultiAgentA2ASmokeResult{Agents: agents, Rounds: rounds}
+	report.MultiAgentA2AResult = result
+	if client == nil {
+		return failedCheck("multi_agent_a2a", "mcp client is not initialized; configure --mcp-command before using --multi-agent-a2a-smoke")
+	}
+
+	message := strings.TrimSpace(opts.Text)
+	if message == "" {
+		message = "OpenClaw multi-agent A2A smoke test"
+	}
+	failures := make([]string, 0)
+	for round := 1; round <= rounds; round++ {
+		activeIndexes := make([]int, 0, len(agents))
+		startedAtByIndex := make(map[int]time.Time, len(agents))
+		for _, agent := range agents {
+			startedAt := time.Now()
+			turn := A2AAgentTurnSmokeResult{TargetAgent: agent, Round: round}
+			started, err := callStructuredTool(ctx, client, "a2a_agent_turn_start", map[string]any{
+				"target_agent": agent,
+				"message":      formatA2ASmokeMessage(message, agent, round, rounds),
+			}, opts)
+			if err != nil {
+				turn.Status = "failed"
+				turn.Duration = roundedDurationSince(startedAt)
+				result.Turns = append(result.Turns, turn)
+				failures = append(failures, a2ATurnFailureDetail(turn, err.Error()))
+				continue
+			}
+			updateA2ATurnSummary(&turn, started, startedAt)
+			if turn.HandoffID == "" || turn.WorkflowID == "" {
+				turn.Status = firstNonEmpty(turn.Status, "failed")
+				turn.Duration = roundedDurationSince(startedAt)
+				result.Turns = append(result.Turns, turn)
+				failures = append(failures, a2ATurnFailureDetail(turn, "start did not return workflow_id and handoff_id"))
+				continue
+			}
+			idx := len(result.Turns)
+			result.Turns = append(result.Turns, turn)
+			activeIndexes = append(activeIndexes, idx)
+			startedAtByIndex[idx] = startedAt
+		}
+		deadline := time.Now().Add(effectiveA2APollTimeout(opts))
+		for len(activeIndexes) > 0 {
+			nextActive := activeIndexes[:0]
+			for _, idx := range activeIndexes {
+				turn := &result.Turns[idx]
+				polled, err := callStructuredTool(ctx, client, "a2a_agent_turn_result", map[string]any{"handoff_id": turn.HandoffID}, opts)
+				if err != nil {
+					turn.Status = "failed"
+					turn.Duration = roundedDurationSince(startedAtByIndex[idx])
+					failures = append(failures, a2ATurnFailureDetail(*turn, err.Error()))
+					continue
+				}
+				updateA2ATurnSummary(turn, polled, startedAtByIndex[idx])
+				if turnAttemptFailed(*turn) {
+					if turn.Status == "" || turn.Status == "pending" {
+						turn.Status = "failed"
+					}
+					failures = append(failures, a2ATurnFailureDetail(*turn, "terminal attempt result"))
+					continue
+				}
+				switch turn.Status {
+				case "completed":
+					if turn.ReplyText == "" {
+						failures = append(failures, a2ATurnFailureDetail(*turn, "completed without reply_text"))
+					}
+				case "failed", "timeout":
+					failures = append(failures, a2ATurnFailureDetail(*turn, "terminal status"))
+				default:
+					nextActive = append(nextActive, idx)
+				}
+			}
+			activeIndexes = nextActive
+			if len(activeIndexes) == 0 {
+				break
+			}
+			if !time.Now().Before(deadline) {
+				for _, idx := range activeIndexes {
+					turn := &result.Turns[idx]
+					turn.Status = "timeout"
+					turn.Duration = roundedDurationSince(startedAtByIndex[idx])
+					failures = append(failures, a2ATurnFailureDetail(*turn, "poll timeout"))
+				}
+				break
+			}
+			if err := waitA2APollInterval(ctx, opts); err != nil {
+				for _, idx := range activeIndexes {
+					turn := &result.Turns[idx]
+					turn.Status = "failed"
+					turn.Duration = roundedDurationSince(startedAtByIndex[idx])
+					failures = append(failures, a2ATurnFailureDetail(*turn, err.Error()))
+				}
+				break
+			}
+		}
+	}
+	if len(failures) > 0 {
+		return failedCheck("multi_agent_a2a", strings.Join(failures, "; "))
+	}
+	return CheckResult{Name: "multi_agent_a2a", Status: checkStatusOK, Detail: fmt.Sprintf("agents=%s rounds=%d turns=%d", strings.Join(agents, ","), rounds, len(result.Turns))}
+}
+
+func effectiveA2AAgents(opts Options) []string {
+	agents := make([]string, 0, len(opts.A2AAgents))
+	for _, agent := range opts.A2AAgents {
+		trimmed := strings.TrimSpace(agent)
+		if trimmed != "" {
+			agents = append(agents, trimmed)
+		}
+	}
+	if len(agents) == 0 {
+		return append([]string(nil), defaultMultiAgentA2AAgents...)
+	}
+	return agents
+}
+
+func effectiveA2ARounds(opts Options) int {
+	if opts.A2ARounds > 0 {
+		return opts.A2ARounds
+	}
+	return 1
+}
+
+func effectiveA2APollTimeout(opts Options) time.Duration {
+	if opts.A2APollTimeout > 0 {
+		return opts.A2APollTimeout
+	}
+	return defaultA2APollTimeout
+}
+
+func effectiveA2APollInterval(opts Options) time.Duration {
+	if opts.A2APollInterval > 0 {
+		return opts.A2APollInterval
+	}
+	return defaultA2APollInterval
+}
+
+func formatA2ASmokeMessage(message, agent string, round, rounds int) string {
+	if rounds <= 1 {
+		return message
+	}
+	return fmt.Sprintf("%s (round %d/%d, target %s)", message, round, rounds, agent)
+}
+
+func updateA2ATurnSummary(turn *A2AAgentTurnSmokeResult, value map[string]any, startedAt time.Time) {
+	turn.Status = firstNonEmpty(nestedString(value, "status"), turn.Status)
+	turn.WorkflowID = firstNonEmpty(nestedString(value, "workflow_id"), turn.WorkflowID)
+	turn.HandoffID = firstNonEmpty(nestedString(value, "handoff_id"), turn.HandoffID)
+	turn.HandoffState = firstNonEmpty(nestedString(value, "handoff_state"), turn.HandoffState)
+	turn.AttemptResultStatus = firstNonEmpty(nestedString(value, "attempt_result_status"), turn.AttemptResultStatus)
+	turn.ReplyText = firstNonEmpty(nestedString(value, "reply_text"), turn.ReplyText)
+	if externalIDPresent, ok := nestedBool(value, "external_id_present"); ok {
+		turn.ExternalIDPresent = externalIDPresent
+	}
+	turn.Duration = roundedDurationSince(startedAt)
+}
+
+func turnAttemptFailed(turn A2AAgentTurnSmokeResult) bool {
+	switch turn.AttemptResultStatus {
+	case "rejected", "timeout":
+		return true
+	default:
+		return false
+	}
+}
+
+func a2ATurnFailureDetail(turn A2AAgentTurnSmokeResult, reason string) string {
+	status := firstNonEmpty(turn.Status, "unknown")
+	parts := []string{fmt.Sprintf("target=%s round=%d status=%s", turn.TargetAgent, turn.Round, status)}
+	if turn.AttemptResultStatus != "" {
+		parts = append(parts, "attempt="+turn.AttemptResultStatus)
+	}
+	if reason != "" {
+		parts = append(parts, "reason="+reason)
+	}
+	return strings.Join(parts, " ")
+}
+
+func waitA2APollInterval(ctx context.Context, opts Options) error {
+	interval := effectiveA2APollInterval(opts)
+	if interval <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func roundedDurationSince(startedAt time.Time) string {
+	return time.Since(startedAt).Round(time.Millisecond).String()
 }
 
 func checkOpenClawDispatch(ctx context.Context, client smokeMCPClient, report *Report, opts Options) CheckResult {
@@ -2027,6 +2327,22 @@ func nestedString(value map[string]any, path ...string) string {
 	}
 	text, _ := current.(string)
 	return strings.TrimSpace(text)
+}
+
+func nestedBool(value map[string]any, path ...string) (bool, bool) {
+	var current any = value
+	for _, key := range path {
+		currentMap, ok := current.(map[string]any)
+		if !ok {
+			return false, false
+		}
+		current, ok = structuredValue(currentMap, key)
+		if !ok {
+			return false, false
+		}
+	}
+	valueBool, ok := current.(bool)
+	return valueBool, ok
 }
 
 func structuredValue(value map[string]any, key string) (any, bool) {

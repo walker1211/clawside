@@ -265,10 +265,10 @@ func TestCheckRunSmokeReportContract(t *testing.T) {
 	if !strings.Contains(text, `"registration"`) || strings.Contains(text, "registration_guidance") {
 		t.Fatalf("unexpected registration JSON contract: %s", text)
 	}
-	if len(report.Checks) != 19 {
-		t.Fatalf("expected 19 checks, got %+v", report.Checks)
+	if len(report.Checks) != 21 {
+		t.Fatalf("expected 21 checks, got %+v", report.Checks)
 	}
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "coordination_evidence_summary", "openclaw_a2a_contract_results", "openclaw_external_runtime_evidence", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "coordination_evidence_summary", "openclaw_a2a_contract_results", "openclaw_external_runtime_evidence", "openclaw_gateway_preflight", "multi_agent_a2a", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -774,6 +774,141 @@ func TestCheckOpenClawDispatchRunsTruthPlaneLoop(t *testing.T) {
 	}
 	if _, ok := dispatchArgs["command"]; ok {
 		t.Fatalf("dispatch smoke must not pass caller command: %+v", dispatchArgs)
+	}
+}
+
+func TestCheckMultiAgentA2ASmokeRunsStartThenResultForEachAgent(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{"status": "pending", "workflow_id": "wf-researcher", "handoff_id": "hf-researcher", "handoff_state": "created"}),
+		structuredSmokeResult(map[string]any{"status": "pending", "workflow_id": "wf-planner", "handoff_id": "hf-planner", "handoff_state": "created"}),
+		structuredSmokeResult(map[string]any{"status": "pending", "workflow_id": "wf-engineer", "handoff_id": "hf-engineer", "handoff_state": "created"}),
+		structuredSmokeResult(map[string]any{"status": "pending", "workflow_id": "wf-researcher", "handoff_id": "hf-researcher", "handoff_state": "dispatched", "attempt_result_status": "requested"}),
+		structuredSmokeResult(map[string]any{"status": "completed", "workflow_id": "wf-planner", "handoff_id": "hf-planner", "handoff_state": "completed", "attempt_result_status": "accepted", "external_id_present": true, "reply_text": "planner smoke OK"}),
+		structuredSmokeResult(map[string]any{"status": "completed", "workflow_id": "wf-engineer", "handoff_id": "hf-engineer", "handoff_state": "completed", "attempt_result_status": "accepted", "external_id_present": true, "reply_text": "engineer smoke OK"}),
+		structuredSmokeResult(map[string]any{"status": "completed", "workflow_id": "wf-researcher", "handoff_id": "hf-researcher", "handoff_state": "completed", "attempt_result_status": "accepted", "external_id_present": true, "reply_text": "researcher smoke OK"}),
+	}}
+	report := Report{Status: reportStatusOK}
+
+	check := checkMultiAgentA2A(context.Background(), client, &report, Options{
+		MultiAgentA2ASmoke: true,
+		A2AAgents:          []string{"researcher", "planner", "engineer"},
+		A2ARounds:          1,
+	})
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected multi-agent A2A check ok, got %+v", check)
+	}
+	if report.MultiAgentA2AResult == nil {
+		t.Fatalf("expected multi-agent A2A report result")
+	}
+	if len(report.MultiAgentA2AResult.Turns) != 3 {
+		t.Fatalf("expected 3 turn summaries, got %+v", report.MultiAgentA2AResult)
+	}
+	wantReplies := map[string]string{"researcher": "researcher smoke OK", "planner": "planner smoke OK", "engineer": "engineer smoke OK"}
+	for _, turn := range report.MultiAgentA2AResult.Turns {
+		if turn.Status != "completed" || turn.ReplyText != wantReplies[turn.TargetAgent] {
+			t.Fatalf("unexpected turn summary: %+v", turn)
+		}
+	}
+	wantNames := []string{
+		"a2a_agent_turn_start", "a2a_agent_turn_start", "a2a_agent_turn_start",
+		"a2a_agent_turn_result", "a2a_agent_turn_result", "a2a_agent_turn_result", "a2a_agent_turn_result",
+	}
+	if len(client.calls) != len(wantNames) {
+		t.Fatalf("expected calls %+v, got %+v", wantNames, client.calls)
+	}
+	for i, want := range wantNames {
+		if client.calls[i].Params.Name != want {
+			t.Fatalf("call %d: expected %q, got %+v", i, want, client.calls[i])
+		}
+	}
+	resultArgs, ok := client.calls[3].Params.Arguments.(map[string]any)
+	if !ok || resultArgs["handoff_id"] != "hf-researcher" {
+		t.Fatalf("expected first result poll to reuse researcher handoff, got %+v", client.calls[3].Params.Arguments)
+	}
+	for _, call := range client.calls {
+		switch call.Params.Name {
+		case "a2a_agent_turn_start", "a2a_agent_turn_result":
+		default:
+			t.Fatalf("multi-agent A2A smoke must only use async start/result, got %+v", call.Params.Name)
+		}
+	}
+}
+
+func TestCheckMultiAgentA2ASmokeReportsTimeoutOrFailedTerminalState(t *testing.T) {
+	client := &scriptedSmokeMCPClient{results: []*mcp.CallToolResult{
+		structuredSmokeResult(map[string]any{"status": "pending", "workflow_id": "wf-engineer", "handoff_id": "hf-engineer", "handoff_state": "created"}),
+		structuredSmokeResult(map[string]any{"status": "failed", "workflow_id": "wf-engineer", "handoff_id": "hf-engineer", "handoff_state": "failed", "attempt_result_status": "timeout"}),
+	}}
+	report := Report{Status: reportStatusOK}
+
+	check := checkMultiAgentA2A(context.Background(), client, &report, Options{
+		MultiAgentA2ASmoke: true,
+		A2AAgents:          []string{"engineer"},
+		A2ARounds:          1,
+	})
+
+	if check.Status != checkStatusFailed {
+		t.Fatalf("expected failed check, got %+v", check)
+	}
+	if !strings.Contains(check.Detail, "engineer") || !strings.Contains(check.Detail, "failed") || !strings.Contains(check.Detail, "timeout") {
+		t.Fatalf("expected failed detail to include target and terminal status, got %+v", check)
+	}
+	if report.MultiAgentA2AResult == nil || len(report.MultiAgentA2AResult.Turns) != 1 {
+		t.Fatalf("expected failed turn summary, got %+v", report.MultiAgentA2AResult)
+	}
+	turn := report.MultiAgentA2AResult.Turns[0]
+	if turn.TargetAgent != "engineer" || turn.Status != "failed" || turn.AttemptResultStatus != "timeout" {
+		t.Fatalf("unexpected failed turn summary: %+v", turn)
+	}
+}
+
+func TestRunSmokeMultiAgentA2AAddsReportAndCheck(t *testing.T) {
+	dir := t.TempDir()
+	configPath := writeValidSmokeConfig(t, dir)
+
+	report, err := RunSmoke(context.Background(), Options{
+		ConfigPath:            configPath,
+		DBPath:                filepath.Join(dir, "sender.db"),
+		SkipRegistrationCheck: true,
+		MultiAgentA2ASmoke:    true,
+	})
+	if err != nil {
+		t.Fatalf("run smoke: %v", err)
+	}
+
+	assertCheck(t, report, "multi_agent_a2a", checkStatusFailed)
+	if report.MultiAgentA2AResult == nil {
+		t.Fatalf("expected report to include multi-agent A2A result")
+	}
+}
+
+func TestOpenClawGatewayPreflightUsesNonDeepCommands(t *testing.T) {
+	runner := &fakeOpenClawGatewayRunner{}
+	report := Report{Status: reportStatusOK}
+
+	check := checkOpenClawGatewayPreflight(context.Background(), runner, &report, Options{
+		OpenClawGatewayPreflight: true,
+		OpenClawCLICommand:       "openclaw",
+	})
+
+	if check.Status != checkStatusOK {
+		t.Fatalf("expected gateway preflight ok, got %+v", check)
+	}
+	want := []string{"openclaw gateway status", "openclaw gateway stability"}
+	if len(runner.calls) != len(want) {
+		t.Fatalf("expected calls %+v, got %+v", want, runner.calls)
+	}
+	for i := range want {
+		if runner.calls[i] != want[i] {
+			t.Fatalf("call %d: expected %q, got %q", i, want[i], runner.calls[i])
+		}
+		if strings.Contains(runner.calls[i], "status --deep") {
+			t.Fatalf("preflight must not use status --deep: %+v", runner.calls)
+		}
+	}
+	if report.OpenClawGatewayPreflightResult == nil || !report.OpenClawGatewayPreflightResult.StatusOK || !report.OpenClawGatewayPreflightResult.StabilityOK {
+		t.Fatalf("expected compact preflight result, got %+v", report.OpenClawGatewayPreflightResult)
 	}
 }
 
@@ -1903,7 +2038,7 @@ func TestRunReportsMCPRegistrationFromConfig(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "coordination_evidence_summary", "openclaw_a2a_contract_results", "openclaw_external_runtime_evidence", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "coordination_evidence_summary", "openclaw_a2a_contract_results", "openclaw_external_runtime_evidence", "openclaw_gateway_preflight", "multi_agent_a2a", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -1948,7 +2083,7 @@ func TestRunReportsOpenClawToolResultsFromFile(t *testing.T) {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
 	assertCheck(t, report, "openclaw_tool_results", checkStatusOK)
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "coordination_evidence_summary", "openclaw_a2a_contract_results", "openclaw_external_runtime_evidence", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "coordination_evidence_summary", "openclaw_a2a_contract_results", "openclaw_external_runtime_evidence", "openclaw_gateway_preflight", "multi_agent_a2a", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -1994,7 +2129,7 @@ func TestRunReportsOpenClawTruthPlaneResultsFromFile(t *testing.T) {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
 	assertCheck(t, report, "openclaw_truth_plane_results", checkStatusOK)
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "coordination_evidence_summary", "openclaw_a2a_contract_results", "openclaw_external_runtime_evidence", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "coordination_evidence_summary", "openclaw_a2a_contract_results", "openclaw_external_runtime_evidence", "openclaw_gateway_preflight", "multi_agent_a2a", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -2040,7 +2175,7 @@ func TestRunReportsOpenClawTruthPlaneProgressionResultsFromFile(t *testing.T) {
 		t.Fatalf("unmarshal report: %v\n%s", err, stdout.String())
 	}
 	assertCheck(t, report, "openclaw_truth_plane_progression_results", checkStatusOK)
-	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "coordination_evidence_summary", "openclaw_a2a_contract_results", "openclaw_external_runtime_evidence", "a2a_main_delivery"}
+	wantNames := []string{"config", "sender_health", "sender_ready", "sender_stats", "mcp_tools", "mcp_registration", "openclaw_tool_results", "openclaw_truth_plane_results", "openclaw_truth_plane_progression_results", "openclaw_truth_plane_mutation_results", "openclaw_truth_plane_repair_results", "openclaw_truth_plane_reopen_results", "openclaw_truth_plane_continuity_results", "openclaw_truth_plane_divergence_results", "openclaw_truth_plane_delivery_results", "coordination_evidence_summary", "openclaw_a2a_contract_results", "openclaw_external_runtime_evidence", "openclaw_gateway_preflight", "multi_agent_a2a", "a2a_main_delivery"}
 	for i, want := range wantNames {
 		if report.Checks[i].Name != want {
 			t.Fatalf("check %d: expected %q, got %+v", i, want, report.Checks[i])
@@ -2224,6 +2359,15 @@ func (c *scriptedSmokeMCPClient) CallTool(ctx context.Context, req mcp.CallToolR
 
 func structuredSmokeResult(value map[string]any) *mcp.CallToolResult {
 	return &mcp.CallToolResult{StructuredContent: value}
+}
+
+type fakeOpenClawGatewayRunner struct {
+	calls []string
+}
+
+func (r *fakeOpenClawGatewayRunner) Run(_ context.Context, command string, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, strings.TrimSpace(command+" "+strings.Join(args, " ")))
+	return []byte("ok"), nil
 }
 
 type fakeSmokeMCPClient struct {
