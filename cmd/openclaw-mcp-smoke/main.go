@@ -31,6 +31,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 
 	var mcpArgs repeatedStringFlag
 	var openClawArgs repeatedStringFlag
+	var a2aAgents repeatedStringFlag
 	var jsonOnly bool
 	fs := flag.NewFlagSet("openclaw-mcp-smoke", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -49,6 +50,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 	fs.BoolVar(&defaults.CollaborationTemplateSmoke, "collaboration-template-smoke", false, "run a durable collaboration template smoke through MCP")
 	fs.BoolVar(&defaults.ExternalRuntimeSmoke, "external-runtime-smoke", false, "run an external runtime-owned coordination loop through MCP without launching workers")
 	fs.BoolVar(&defaults.PrivateMultiProjectDogfoodSmoke, "private-multi-project-dogfood-smoke", false, "run a truth-plane-only private multi-project dogfood smoke through MCP with no runtime/delivery")
+	fs.BoolVar(&defaults.MultiAgentA2ASmoke, "multi-agent-a2a-smoke", false, "run async OpenClaw A2A request/reply smoke through a2a_agent_turn_start/result only; does not call a2a_deliver")
+	fs.Var(&a2aAgents, "a2a-agent", "OpenClaw A2A target agent for --multi-agent-a2a-smoke; repeat for multiple agents; defaults to researcher, planner, engineer")
+	fs.IntVar(&defaults.A2ARounds, "a2a-rounds", defaults.A2ARounds, "number of async A2A smoke rounds to run")
+	fs.DurationVar(&defaults.A2APollTimeout, "a2a-poll-timeout", defaults.A2APollTimeout, "maximum time to poll each A2A smoke round")
+	fs.DurationVar(&defaults.A2APollInterval, "a2a-poll-interval", defaults.A2APollInterval, "interval between pending a2a_agent_turn_result polls")
+	fs.BoolVar(&defaults.OpenClawGatewayPreflight, "openclaw-gateway-preflight", false, "run non-deep OpenClaw gateway status and stability preflight before live A2A smoke")
+	fs.StringVar(&defaults.OpenClawCLICommand, "openclaw-cli-command", defaults.OpenClawCLICommand, "OpenClaw CLI command for --openclaw-gateway-preflight")
 	fs.StringVar(&defaults.OpenClawCommand, "openclaw-command", defaults.OpenClawCommand, "server-authorized OpenClaw dispatch command passed to clawside-mcp")
 	fs.Var(&openClawArgs, "openclaw-arg", "argument for the configured OpenClaw dispatch command; repeat for multiple args")
 	fs.StringVar(&defaults.OpenClawTarget, "openclaw-target", defaults.OpenClawTarget, "OpenClaw dispatch target for --openclaw-dispatch-smoke; accepts agent:<id> or <id>")
@@ -87,6 +95,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if len(openClawArgs) > 0 {
 		defaults.OpenClawArgs = []string(openClawArgs)
 	}
+	if len(a2aAgents) > 0 {
+		defaults.A2AAgents = []string(a2aAgents)
+	}
 	profile, err := normalizedProfile(defaults.Profile)
 	if err != nil {
 		return err
@@ -96,7 +107,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return errors.New("chat-id is required when --deliver-main is set")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	timeout := 45 * time.Second
+	if defaults.MultiAgentA2ASmoke {
+		timeout = 30*time.Second + time.Duration(effectiveA2ARounds(defaults))*effectiveA2APollTimeout(defaults)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	report, err := RunSmoke(ctx, defaults)
@@ -150,6 +165,10 @@ func defaultOptions(cwd string) (Options, error) {
 		SenderBaseURL:      "http://127.0.0.1:8787",
 		SenderAuthKey:      os.Getenv("SENDER_AUTH_KEY"),
 		MCPCommand:         mcpCommand,
+		A2ARounds:          1,
+		A2APollTimeout:     defaultA2APollTimeout,
+		A2APollInterval:    time.Second,
+		OpenClawCLICommand: defaultOpenClawCLICommand,
 		OpenClawFixtureDir: fixtureDir,
 		Text:               "OpenClaw MCP smoke test",
 	}, nil
