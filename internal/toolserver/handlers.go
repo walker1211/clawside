@@ -104,11 +104,12 @@ type A2AAgentTurnInput struct {
 }
 
 type A2AAgentTurnOutput struct {
-	ReplyText string                       `json:"reply_text"`
-	Workflow  orchestrator.Workflow        `json:"workflow"`
-	Handoff   orchestrator.Handoff         `json:"handoff"`
-	Attempt   orchestrator.DispatchAttempt `json:"attempt"`
-	Events    []orchestrator.EventRecord   `json:"events"`
+	ReplyText           string `json:"reply_text"`
+	WorkflowID          string `json:"workflow_id"`
+	HandoffID           string `json:"handoff_id"`
+	HandoffState        string `json:"handoff_state"`
+	AttemptResultStatus string `json:"attempt_result_status"`
+	ExternalIDPresent   bool   `json:"external_id_present"`
 }
 
 type HandoffProgressInput struct {
@@ -514,16 +515,13 @@ func (h *Handlers) HandleA2AAgentTurn(ctx context.Context, input A2AAgentTurnInp
 	if err != nil {
 		return A2AAgentTurnOutput{}, err
 	}
-	workflow, err := h.store.LoadWorkflow(ctx, created.Workflow.ID)
-	if err != nil {
-		return A2AAgentTurnOutput{}, err
-	}
 	return A2AAgentTurnOutput{
-		ReplyText: replyText,
-		Workflow:  workflow,
-		Handoff:   handoff,
-		Attempt:   dispatch.Attempt,
-		Events:    dispatch.Events,
+		ReplyText:           replyText,
+		WorkflowID:          created.Workflow.ID,
+		HandoffID:           handoff.ID,
+		HandoffState:        string(handoff.State),
+		AttemptResultStatus: dispatch.Attempt.ResultStatus,
+		ExternalIDPresent:   strings.TrimSpace(dispatch.Attempt.ExternalID) != "",
 	}, nil
 }
 

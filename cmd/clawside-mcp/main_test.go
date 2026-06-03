@@ -1049,38 +1049,25 @@ printf '{"status":"accepted","external_id":"turn-123","events":[{"event":"receiv
 	}
 
 	var payload struct {
-		ReplyText string `json:"reply_text"`
-		Workflow  struct {
-			ID string `json:"id"`
-		} `json:"workflow"`
-		Handoff struct {
-			ID    string `json:"id"`
-			State string `json:"state"`
-		} `json:"handoff"`
-		Attempt struct {
-			ResultStatus string `json:"result_status"`
-			ExternalID   string `json:"external_id"`
-		} `json:"attempt"`
-		Events []struct {
-			Type    string         `json:"type"`
-			Payload map[string]any `json:"payload"`
-		} `json:"events"`
+		ReplyText           string `json:"reply_text"`
+		WorkflowID          string `json:"workflow_id"`
+		HandoffID           string `json:"handoff_id"`
+		HandoffState        string `json:"handoff_state"`
+		AttemptResultStatus string `json:"attempt_result_status"`
+		ExternalIDPresent   bool   `json:"external_id_present"`
 	}
 	decodeStructuredContent(t, result, &payload)
 	if payload.ReplyText != "seer sees a villager" {
 		t.Fatalf("expected reply_text, got %q", payload.ReplyText)
 	}
-	if payload.Workflow.ID == "" || payload.Handoff.ID == "" {
+	if payload.WorkflowID == "" || payload.HandoffID == "" {
 		t.Fatalf("expected workflow and handoff ids, got %+v", payload)
 	}
-	if payload.Handoff.State != "completed" {
-		t.Fatalf("expected completed handoff, got %q", payload.Handoff.State)
+	if payload.HandoffState != "completed" {
+		t.Fatalf("expected completed handoff, got %q", payload.HandoffState)
 	}
-	if payload.Attempt.ResultStatus != "accepted" || payload.Attempt.ExternalID != "turn-123" {
-		t.Fatalf("expected accepted turn attempt, got %+v", payload.Attempt)
-	}
-	if len(payload.Events) == 0 {
-		t.Fatalf("expected lifecycle events")
+	if payload.AttemptResultStatus != "accepted" || !payload.ExternalIDPresent {
+		t.Fatalf("expected accepted turn attempt summary, got %+v", payload)
 	}
 
 	capturedPayload := readTestFile(t, payloadPath)
@@ -1090,9 +1077,13 @@ printf '{"status":"accepted","external_id":"turn-123","events":[{"event":"receiv
 		}
 	}
 	output := structuredContentJSON(t, result)
-	for _, forbidden := range []string{"stdout", "stderr", "sender_job", "delivery_job"} {
-		if strings.Contains(output, forbidden) {
-			t.Fatalf("expected a2a_agent_turn output to omit %q, got %s", forbidden, output)
+	var outputMap map[string]any
+	if err := json.Unmarshal([]byte(output), &outputMap); err != nil {
+		t.Fatalf("decode structured output map: %v", err)
+	}
+	for _, forbidden := range []string{"workflow", "handoff", "attempt", "events", "external_id", "stdout", "stderr", "sender_job", "delivery_job"} {
+		if _, ok := outputMap[forbidden]; ok {
+			t.Fatalf("expected a2a_agent_turn output to omit top-level %q, got %s", forbidden, output)
 		}
 	}
 	capturedArgs := readTestFile(t, argsPath)

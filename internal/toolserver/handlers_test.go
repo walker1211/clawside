@@ -1659,14 +1659,14 @@ func TestHandleA2AAgentTurnReturnsReplyText(t *testing.T) {
 	if result.ReplyText != "the answer is yes" {
 		t.Fatalf("expected reply_text, got %q", result.ReplyText)
 	}
-	if result.Workflow.ID == "" || result.Handoff.ID == "" {
-		t.Fatalf("expected workflow and handoff ids, got workflow=%+v handoff=%+v", result.Workflow, result.Handoff)
+	if result.WorkflowID == "" || result.HandoffID == "" {
+		t.Fatalf("expected workflow and handoff ids, got %+v", result)
 	}
-	if result.Handoff.State != orchestrator.StateCompleted {
-		t.Fatalf("expected completed handoff, got %s", result.Handoff.State)
+	if result.HandoffState != string(orchestrator.StateCompleted) {
+		t.Fatalf("expected completed handoff, got %s", result.HandoffState)
 	}
-	if result.Attempt.ResultStatus != string(orchestrator.TransportAccepted) || result.Attempt.ExternalID != "turn-1" {
-		t.Fatalf("expected accepted attempt, got %+v", result.Attempt)
+	if result.AttemptResultStatus != string(orchestrator.TransportAccepted) || !result.ExternalIDPresent {
+		t.Fatalf("expected accepted attempt summary, got %+v", result)
 	}
 	if runner.command != "/configured/openclaw" {
 		t.Fatalf("expected configured OpenClaw command, got %q", runner.command)
@@ -1680,12 +1680,7 @@ func TestHandleA2AAgentTurnReturnsReplyText(t *testing.T) {
 			t.Fatalf("expected dispatch request stdin to contain %s, got %s", want, stdin)
 		}
 	}
-	completed := toolserverEventOfType(result.Events, orchestrator.EventCompleted)
-	if completed.Payload["reply_text"] != "the answer is yes" {
-		t.Fatalf("expected completed reply_text in dispatch events, got %+v", completed.Payload)
-	}
-
-	got, err := h.HandleHandoffGet(context.Background(), HandoffGetInput{HandoffID: result.Handoff.ID})
+	got, err := h.HandleHandoffGet(context.Background(), HandoffGetInput{HandoffID: result.HandoffID})
 	if err != nil {
 		t.Fatalf("HandleHandoffGet: %v", err)
 	}
@@ -1708,11 +1703,15 @@ func TestHandleA2AAgentTurnAcceptsAgentPrefixedTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HandleA2AAgentTurn: %v", err)
 	}
-	if result.Handoff.ReceiverActor.ID != "writer" {
-		t.Fatalf("expected receiver id writer, got %+v", result.Handoff.ReceiverActor)
+	got, err := h.HandleHandoffGet(context.Background(), HandoffGetInput{HandoffID: result.HandoffID})
+	if err != nil {
+		t.Fatalf("HandleHandoffGet: %v", err)
 	}
-	if result.Handoff.DeliveryTargetRef != "agent:writer" {
-		t.Fatalf("expected delivery target agent:writer, got %q", result.Handoff.DeliveryTargetRef)
+	if got.Handoff.ReceiverActor.ID != "writer" {
+		t.Fatalf("expected receiver id writer, got %+v", got.Handoff.ReceiverActor)
+	}
+	if got.Handoff.DeliveryTargetRef != "agent:writer" {
+		t.Fatalf("expected delivery target agent:writer, got %q", got.Handoff.DeliveryTargetRef)
 	}
 	if strings.Contains(string(runner.stdin), "agent:agent:writer") {
 		t.Fatalf("expected normalized target, got stdin %s", string(runner.stdin))
