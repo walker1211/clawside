@@ -2,8 +2,6 @@
 
 # clawside
 
-[Landing Page](./README.md) | [中文](./README.zh-CN.md)
-
 `clawside` is a local MCP sidecar / truth layer for OpenClaw.
 
 It is not the OpenClaw runtime itself, and it is not only a Telegram sender. The repository currently hosts three sidecar capabilities: a local sender, handoff/workflow orchestration foundations, and adapter / bridge infrastructure for OpenClaw.
