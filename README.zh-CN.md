@@ -1,6 +1,8 @@
+[English](./README.md)
+
 # clawside
 
-[入口页](./README.md) | [English](./README.en.md)
+[English](./README.md)
 
 `clawside` 是挂在 OpenClaw 外侧的本地 MCP sidecar / truth layer。
 

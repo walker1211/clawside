@@ -93,7 +93,7 @@ func TestTelegramOperatorEntrypointHelp(t *testing.T) {
 }
 
 func TestTelegramOperatorDocsAndExamples(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		for _, want := range []string{
 			"cmd/clawside-telegram-operator",
@@ -1887,7 +1887,7 @@ func TestOpenClawTruthPlaneContinuityExtractScriptEntrypoint(t *testing.T) {
 }
 
 func TestReadmeDocumentsOpenClawTruthPlaneRepairValidation(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		for _, want := range []string{
 			"cmd/openclaw-truth-plane-repair-extract/",
@@ -1903,7 +1903,7 @@ func TestReadmeDocumentsOpenClawTruthPlaneRepairValidation(t *testing.T) {
 }
 
 func TestReadmeDocumentsOpenClawTruthPlaneReopenValidation(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		for _, want := range []string{
 			"cmd/openclaw-truth-plane-reopen-extract/",
@@ -1921,7 +1921,7 @@ func TestReadmeDocumentsOpenClawTruthPlaneReopenValidation(t *testing.T) {
 }
 
 func TestReadmeDocumentsOpenClawTruthPlaneDivergenceValidation(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		for _, want := range []string{
 			"cmd/openclaw-truth-plane-divergence-extract/",
@@ -1941,7 +1941,7 @@ func TestReadmeDocumentsOpenClawTruthPlaneDivergenceValidation(t *testing.T) {
 }
 
 func TestReadmeDocumentsOpenClawTruthPlaneDeliveryValidation(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		for _, want := range []string{
 			"cmd/openclaw-truth-plane-delivery-extract/",
@@ -1960,7 +1960,7 @@ func TestReadmeDocumentsOpenClawTruthPlaneDeliveryValidation(t *testing.T) {
 }
 
 func TestReadmeStage5ContinuityPromptRequiresWorkflowCompletion(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		section := readReadmeSection(t, path, "### Stage 5")
 		if !strings.Contains(section, "required_for_workflow_completion=true") {
 			t.Fatalf("expected %s Stage 5 continuity prompt to require workflow completion", path)
@@ -1969,7 +1969,7 @@ func TestReadmeStage5ContinuityPromptRequiresWorkflowCompletion(t *testing.T) {
 }
 
 func TestReadmeStage6DocumentsSmokeProfiles(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		section := readReadmeSection(t, path, "### Stage 6")
 		wantTokens := []string{
 			"--profile quick",
@@ -1994,7 +1994,7 @@ func TestReadmeStage6DocumentsSmokeProfiles(t *testing.T) {
 }
 
 func TestReadmeStage7DocumentsFixturesProfile(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		section := readReadmeSection(t, path, "### Stage 7")
 		wantTokens := []string{
 			"--profile fixtures",
@@ -2023,7 +2023,7 @@ func TestReadmeStage8DocumentsLocalReleaseGuard(t *testing.T) {
 		commonHeading string
 	}{
 		{path: "README.zh-CN.md", heading: "### Stage 8 / 阶段 8 本地发布保护", commonHeading: "## 常用脚本"},
-		{path: "README.en.md", heading: "### Stage 8 local release guard", commonHeading: "## Common scripts"},
+		{path: "README.md", heading: "### Stage 8 local release guard", commonHeading: "## Common scripts"},
 	} {
 		commonScripts := readReadmeSection(t, tc.path, tc.commonHeading)
 		if !strings.Contains(commonScripts, "./scripts/tag-release.sh --help") {
@@ -2061,7 +2061,7 @@ func TestReadmeStage9DocumentsRemoteCIRelease(t *testing.T) {
 		heading string
 	}{
 		{path: "README.zh-CN.md", heading: "### Stage 9 / 阶段 9 远端 CI 与 Release workflow"},
-		{path: "README.en.md", heading: "### Stage 9 remote CI and release workflow"},
+		{path: "README.md", heading: "### Stage 9 remote CI and release workflow"},
 	} {
 		section := readReadmeSection(t, tc.path, tc.heading)
 		wantTokens := []string{
@@ -2106,7 +2106,7 @@ func TestReadmeStage12DocumentsDivergenceE2EClosure(t *testing.T) {
 		heading string
 	}{
 		{path: "README.zh-CN.md", heading: "### Stage 12 / 阶段 12 divergence / E2E 闭环验收"},
-		{path: "README.en.md", heading: "### Stage 12 divergence / E2E closure validation"},
+		{path: "README.md", heading: "### Stage 12 divergence / E2E closure validation"},
 	} {
 		section := readReadmeSection(t, tc.path, tc.heading)
 		wantTokens := []string{
@@ -2142,7 +2142,7 @@ func TestReadmeDocumentsDiagnosticBundle(t *testing.T) {
 		terms []string
 	}{
 		{path: "README.zh-CN.md", terms: []string{"只读", "不执行真实投递", "不写 OpenClaw 或 Claude 配置", "secrets 会被 redacted"}},
-		{path: "README.en.md", terms: []string{"read-only", "does not perform real delivery", "does not write OpenClaw or Claude config", "secrets are redacted"}},
+		{path: "README.md", terms: []string{"read-only", "does not perform real delivery", "does not write OpenClaw or Claude config", "secrets are redacted"}},
 	} {
 		content := readTextFile(t, tc.path)
 		wantTokens := []string{
@@ -2170,7 +2170,7 @@ func TestReadmeStage11DocumentsReleaseEvidenceGate(t *testing.T) {
 		heading string
 	}{
 		{path: "README.zh-CN.md", heading: "### Stage 11 / 阶段 11 release evidence gate"},
-		{path: "README.en.md", heading: "### Stage 11 release evidence gate"},
+		{path: "README.md", heading: "### Stage 11 release evidence gate"},
 	} {
 		section := readReadmeSection(t, tc.path, tc.heading)
 		wantTokens := []string{
@@ -2258,7 +2258,7 @@ func markdownHeadingLevel(line string) int {
 }
 
 func TestReadmeDocumentsOpenClawTruthPlaneContinuityValidation(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		wantTokens := []string{
 			"cmd/openclaw-truth-plane-continuity-extract/",
@@ -2297,7 +2297,7 @@ func TestReadmeDocumentsOpenClawTruthPlaneContinuityValidation(t *testing.T) {
 }
 
 func TestReadmeDocumentsPrivateDogfoodRehearsal(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		wantTokens := []string{
 			"private dogfood",
@@ -2328,7 +2328,7 @@ func TestReadmeDocumentsPrivateDogfoodRehearsal(t *testing.T) {
 }
 
 func TestReadmeDocumentsExternalSwarmRuntimeIntegrationGuide(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		wantTokens := []string{
 			"External swarm/runtime integration",
@@ -2374,7 +2374,7 @@ func TestReadmeDocumentsExternalSwarmRuntimeIntegrationGuide(t *testing.T) {
 }
 
 func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		wantTokens := []string{
 			"external runtime evidence dogfood",
@@ -2447,7 +2447,7 @@ func TestReadmeDocumentsOpenClawExternalRuntimeEvidenceDogfood(t *testing.T) {
 }
 
 func TestPrivateReadinessDocsAndExamples(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		for _, want := range []string{
 			"./scripts/verify_private_readiness.sh",
@@ -2483,7 +2483,7 @@ func TestPrivateReadinessDocsAndExamples(t *testing.T) {
 }
 
 func TestPrivateOpenClawExternalRuntimeEvidenceClosureDocsAndExamples(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		for _, want := range []string{
 			"./scripts/close_private_openclaw_external_runtime_evidence.sh --export-dir <export-dir>",
@@ -2516,7 +2516,7 @@ func TestPrivateOpenClawExternalRuntimeEvidenceClosureDocsAndExamples(t *testing
 }
 
 func TestReadmeDocumentsPublicReadinessAndKeepsDocsSanitized(t *testing.T) {
-	for _, path := range []string{"README.zh-CN.md", "README.en.md"} {
+	for _, path := range []string{"README.zh-CN.md", "README.md"} {
 		content := readTextFile(t, path)
 		wantTokens := []string{"./scripts/github-readiness.sh <owner>/<repo>"}
 		if path == "README.zh-CN.md" {

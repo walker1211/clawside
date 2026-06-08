@@ -61,7 +61,7 @@ func TestReadmeOperatorIntegratorGuide(t *testing.T) {
 		want []string
 	}{
 		{
-			path: "README.en.md",
+			path: "README.md",
 			want: []string{
 				"Which verifier should I run?",
 				"Local operator",
@@ -108,7 +108,7 @@ func TestFinalClosureDocs(t *testing.T) {
 		want []string
 	}{
 		{
-			path: "README.en.md",
+			path: "README.md",
 			want: []string{
 				"./scripts/final_closure_checklist.sh",
 				"./scripts/public_readiness_dry_run.sh",
@@ -168,17 +168,13 @@ func TestRootReadmeLanguageSwitch(t *testing.T) {
 		t.Fatalf("expected README.md to exist: %v", err)
 	}
 	content := string(contentBytes)
-	if !strings.Contains(content, "[中文](./README.zh-CN.md) | [English](./README.en.md)") {
-		t.Fatalf("expected README.md to use short language switch labels")
+	languageSwitch := "[中文](./README.zh-CN.md)"
+	if !strings.HasPrefix(content, languageSwitch+"\n\n") {
+		t.Fatalf("expected README.md to start with the Chinese language switch")
 	}
-	for _, forbidden := range []string{"[中文文档]", "[English Documentation]"} {
+	for _, forbidden := range []string{"README.en.md", "[中文文档]", "[English Documentation]", "[English](./README.md)"} {
 		if strings.Contains(content, forbidden) {
 			t.Fatalf("expected README.md not to contain %q", forbidden)
-		}
-	}
-	for _, target := range []string{"README.zh-CN.md", "README.en.md"} {
-		if count := strings.Count(content, target); count != 1 {
-			t.Fatalf("expected README.md to link %s exactly once, got %d", target, count)
 		}
 	}
 }
@@ -284,7 +280,7 @@ func TestGitHubReleaseWorkflow(t *testing.T) {
 		"LICENSE",
 		"README.md",
 		"README.zh-CN.md",
-		"README.en.md",
+		"README.md",
 		"configs/config.example.toml",
 		".example.env",
 		"actions/upload-artifact@v7",
