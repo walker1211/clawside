@@ -2,8 +2,6 @@
 
 # clawside
 
-[English](./README.md)
-
 `clawside` 是挂在 OpenClaw 外侧的本地 MCP sidecar / truth layer。
 
 它不是 OpenClaw runtime 本体，也不只等于一个 Telegram sender。这个仓库当前承载三类侧车能力：本地 sender、handoff/workflow orchestrator foundations，以及面向 OpenClaw 的 adapter / bridge 基础设施。
