@@ -328,7 +328,6 @@ func buildUpstreamDownstreamReviewTemplate(input CollaborationTemplateApplyInput
 		Intent:                        input.Intent,
 		RequiredForWorkflowCompletion: true,
 		PayloadRef:                    input.Upstream.ProjectRef,
-		DeliveryTargetRef:             templateRoleDeliveryTarget(input.Upstream),
 	}, now)
 	downstream := newTemplateAppendHandoff(workflow, upstream.ReceiverActor, input.Downstream, input.Intent, []string{upstream.ID}, now)
 	reviewer := newTemplateAppendHandoff(workflow, downstream.ReceiverActor, input.Reviewer, input.Intent, []string{downstream.ID}, now)
@@ -349,7 +348,6 @@ func buildReviewGateTemplate(input CollaborationTemplateApplyInput, now time.Tim
 		Intent:                        input.Intent,
 		RequiredForWorkflowCompletion: true,
 		PayloadRef:                    input.Upstream.ProjectRef,
-		DeliveryTargetRef:             templateRoleDeliveryTarget(input.Upstream),
 	}, now)
 	reviewer := newTemplateAppendHandoff(workflow, upstream.ReceiverActor, input.Reviewer, input.Intent, []string{upstream.ID}, now)
 	downstream := newTemplateAppendHandoff(workflow, reviewer.ReceiverActor, input.Downstream, input.Intent, []string{reviewer.ID}, now)
@@ -370,7 +368,6 @@ func buildFanoutReviewTemplate(input CollaborationTemplateApplyInput, now time.T
 		Intent:                        input.Intent,
 		RequiredForWorkflowCompletion: true,
 		PayloadRef:                    input.Upstream.ProjectRef,
-		DeliveryTargetRef:             templateRoleDeliveryTarget(input.Upstream),
 	}, now)
 	downstream := newTemplateAppendHandoff(workflow, upstream.ReceiverActor, input.Downstream, input.Intent, []string{upstream.ID}, now)
 	reviewer := newTemplateAppendHandoff(workflow, upstream.ReceiverActor, input.Reviewer, input.Intent, []string{upstream.ID}, now)
@@ -392,7 +389,6 @@ func newTemplateAppendHandoff(workflow Workflow, sender ActorRef, role Collabora
 		TaskKind:                      TaskGeneric,
 		Intent:                        intent,
 		PayloadRef:                    role.ProjectRef,
-		DeliveryTargetRef:             templateRoleDeliveryTarget(role),
 		ProducerActor:                 ActorRef{Type: ActorSystem, ID: "workflow-controller"},
 		SenderActor:                   sender,
 		ReceiverActor:                 templateRoleReceiver(role),

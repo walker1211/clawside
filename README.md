@@ -34,7 +34,7 @@ Use the project from three roles:
 | --- | --- | --- |
 | Local operator | Run local sender, MCP server, smoke checks, release evidence, and diagnostics. | `./start.sh`, `./scripts/start_mcp.sh`, `./scripts/verify_openclaw_mcp.sh` |
 | External A2A client | Discover the Agent Card, create/query/cancel controlled tasks, and subscribe to read-only task events. | `cmd/clawside-a2a`, `cmd/clawside-a2a-example`, `./scripts/verify_clawside_a2a.sh` |
-| Swarm/runtime integrator | Register agents, query `next_work` / `blocked_work`, progress handoffs, and consume dependency/reviewer gates. | MCP tools, `./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke` |
+| Swarm/runtime integrator | Register agents, query `next_work` / `blocked_work`, progress handoffs, and consume dependency/reviewer gates. | MCP tools, `cmd/clawside-swarm-runner`, `./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke` |
 
 Which verifier should I run?
 
@@ -160,6 +160,16 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
 ```
 
 Safety boundaries: the sample does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender or Telegram delivery, and does not accept arbitrary command/args/cwd/local path/private prompt/token/session/worker launch fields.
+
+#### Reference swarm driver
+
+`cmd/clawside-swarm-runner` is a reference truth-plane-only swarm loop. It registers deterministic fake planner / engineer / reviewer agents, creates or drives a workflow, polls `next_work` / `blocked_work`, progresses handoffs through protocol actions, then prints a compact run summary from `workflow_status` and `coordination_evidence_summary`.
+
+```bash
+go run ./cmd/clawside-swarm-runner --db ./sender.db --template upstream_downstream_review --fake-agents --json
+```
+
+This runner is not a model runtime. It does not launch OpenClaw, Claude, Kimi, workers, runtime sessions, or sandboxes; does not execute arbitrary command/args/cwd; does not accept private prompt/token/session/stdout/stderr/chat/sender job fields; and does not call message delivery, sender delivery, Telegram delivery, `message/send`, or `message/stream`.
 
 #### Real OpenClaw trajectory external runtime evidence dogfood validation
 
