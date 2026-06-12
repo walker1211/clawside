@@ -639,8 +639,8 @@ func assertTemplateHandoff(t *testing.T, handoff Handoff, wantSender ActorRef, w
 	if handoff.PayloadRef != wantProjectRef {
 		t.Fatalf("expected payload ref %q, got %q", wantProjectRef, handoff.PayloadRef)
 	}
-	if handoff.DeliveryTargetRef != "agent:"+wantReceiverID {
-		t.Fatalf("expected delivery target agent:%s, got %q", wantReceiverID, handoff.DeliveryTargetRef)
+	if handoff.DeliveryTargetRef != "" {
+		t.Fatalf("expected collaboration template to leave delivery target empty, got %q", handoff.DeliveryTargetRef)
 	}
 }
 
