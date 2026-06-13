@@ -10,6 +10,7 @@ import (
 	"github.com/walker1211/clawside/internal/deliveryrules"
 	"github.com/walker1211/clawside/internal/openclawevents"
 	"github.com/walker1211/clawside/internal/orchestrator"
+	"github.com/walker1211/clawside/internal/swarmdriver"
 )
 
 const defaultA2AAgentTurnDispatchTimeout = 3 * time.Minute
@@ -22,6 +23,7 @@ type Handlers struct {
 	openClawCommand             string
 	openClawArgs                []string
 	a2aAgentTurnDispatchTimeout time.Duration
+	swarmExecutionStore         *swarmdriver.TelegramExecutionStore
 	now                         func() time.Time
 }
 
@@ -140,6 +142,19 @@ type A2AAgentTurnResultOutput struct {
 	HandoffState        string `json:"handoff_state"`
 	AttemptResultStatus string `json:"attempt_result_status,omitempty"`
 	ExternalIDPresent   bool   `json:"external_id_present"`
+}
+
+type SwarmExecutionResultRecordInput struct {
+	Type           string `json:"type,omitempty"`
+	CorrelationID  string `json:"correlation_id"`
+	Status         string `json:"status"`
+	Summary        string `json:"summary,omitempty"`
+	ArtifactCount  int    `json:"artifact_count,omitempty"`
+	ReviewDecision string `json:"review_decision,omitempty"`
+}
+
+type SwarmExecutionResultRecordOutput struct {
+	Request swarmdriver.ExecutionRequest `json:"request"`
 }
 
 type HandoffProgressInput struct {
@@ -353,6 +368,31 @@ func (h *Handlers) HandleWorkflowList(ctx context.Context) ([]orchestrator.Workf
 	return views, nil
 }
 
+func (h *Handlers) HandleSwarmExecutionResultRecord(ctx context.Context, input SwarmExecutionResultRecordInput) (SwarmExecutionResultRecordOutput, error) {
+	if h.swarmExecutionStore == nil {
+		return SwarmExecutionResultRecordOutput{}, fmt.Errorf("swarm execution store is required")
+	}
+	resultType := strings.TrimSpace(input.Type)
+	if resultType != "" && resultType != "clawside.result" {
+		return SwarmExecutionResultRecordOutput{}, fmt.Errorf("invalid result type")
+	}
+	result := swarmdriver.ExecutionResult{
+		CorrelationID:  strings.TrimSpace(input.CorrelationID),
+		Status:         swarmdriver.AdapterStatus(strings.TrimSpace(input.Status)),
+		Summary:        input.Summary,
+		ArtifactCount:  input.ArtifactCount,
+		ReviewDecision: orchestrator.ReviewDecision(strings.TrimSpace(input.ReviewDecision)),
+	}
+	if err := h.swarmExecutionStore.SaveExecutionResult(ctx, result); err != nil {
+		return SwarmExecutionResultRecordOutput{}, err
+	}
+	request, err := h.swarmExecutionStore.GetExecutionByCorrelationID(ctx, result.CorrelationID)
+	if err != nil {
+		return SwarmExecutionResultRecordOutput{}, err
+	}
+	return SwarmExecutionResultRecordOutput{Request: request}, nil
+}
+
 const maxSenderJobListLimit = 100
 
 type SenderJobListInput struct {
@@ -396,6 +436,10 @@ func NewHandlersWithTargetAgentBotResolver(svc *orchestrator.Service, store *orc
 func (h *Handlers) SetOpenClawDispatchDefaults(command string, args []string) {
 	h.openClawCommand = strings.TrimSpace(command)
 	h.openClawArgs = append([]string(nil), args...)
+}
+
+func (h *Handlers) SetSwarmExecutionStore(store *swarmdriver.TelegramExecutionStore) {
+	h.swarmExecutionStore = store
 }
 
 func (h *Handlers) SetA2AAgentTurnDispatchTimeout(timeout time.Duration) {

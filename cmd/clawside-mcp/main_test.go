@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/walker1211/clawside/internal/swarmdriver"
+	_ "modernc.org/sqlite"
 )
 
 var documentedV1ToolGroups = map[string][]string{
@@ -26,6 +29,7 @@ var documentedV1ToolGroups = map[string][]string{
 	"repair divergence":       {"repair_list", "repair_invalidate_event", "repair_backfill_event", "repair_reopen_handoff", "repair_candidate_list", "divergence_record", "divergence_list"},
 	"sender observability":    {"sender_health", "sender_ready", "sender_stats", "sender_job_list", "sender_job_get"},
 	"a2a delivery":            {"a2a_agent_turn", "a2a_agent_turn_start", "a2a_agent_turn_result", "a2a_deliver"},
+	"swarm execution":         {"swarm_execution_result_record"},
 }
 
 var documentedNoInputV1Tools = []string{"workflow_list", "collaboration_template_list", "sender_health", "sender_ready", "sender_stats"}
@@ -150,6 +154,68 @@ func TestServerListsDocumentedV1Tools(t *testing.T) {
 				t.Fatalf("expected %s tool %s in %v", group, want, names)
 			}
 		}
+	}
+}
+
+func TestServerCallSwarmExecutionResultRecordSavesResult(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "clawside.db")
+	ctx := context.Background()
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	executionStore, err := swarmdriver.InitTelegramExecutionStore(ctx, db)
+	if err != nil {
+		t.Fatalf("InitTelegramExecutionStore: %v", err)
+	}
+	request, err := executionStore.EnsureExecutionRequest(ctx, swarmdriver.ExecutionRequest{
+		CorrelationID:  "swarm:wf_mcp:hf_mcp:planner:execute",
+		WorkflowID:     "wf_mcp",
+		HandoffID:      "hf_mcp",
+		AgentID:        "planner",
+		Phase:          "execute",
+		IdempotencyKey: "swarm:wf_mcp:hf_mcp:planner:execute",
+	})
+	if err != nil {
+		t.Fatalf("EnsureExecutionRequest: %v", err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close sqlite: %v", err)
+	}
+	c := newTestMCPClient(t, dbPath)
+	defer c.Close()
+
+	callCtx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	result, err := c.CallTool(callCtx, mcp.CallToolRequest{Params: mcp.CallToolParams{Name: "swarm_execution_result_record", Arguments: map[string]any{
+		"type":            "clawside.result",
+		"correlation_id":  request.CorrelationID,
+		"status":          "completed",
+		"summary":         "completed via main agent mcp callback",
+		"artifact_count":  2,
+		"review_decision": "approved",
+	}}})
+	if err != nil {
+		t.Fatalf("CallTool(swarm_execution_result_record): %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected swarm_execution_result_record success")
+	}
+	var payload struct {
+		Request struct {
+			CorrelationID        string `json:"correlation_id"`
+			ResultStatus         string `json:"result_status"`
+			ResultSummary        string `json:"result_summary"`
+			ResultArtifactCount  int    `json:"result_artifact_count"`
+			ResultReviewDecision string `json:"result_review_decision"`
+		} `json:"request"`
+	}
+	decodeStructuredContent(t, result, &payload)
+	if payload.Request.CorrelationID != request.CorrelationID || payload.Request.ResultStatus != "completed" || payload.Request.ResultSummary != "completed via main agent mcp callback" {
+		t.Fatalf("unexpected result payload: %+v", payload.Request)
+	}
+	if payload.Request.ResultArtifactCount != 2 || payload.Request.ResultReviewDecision != "approved" {
+		t.Fatalf("unexpected artifact/review payload: %+v", payload.Request)
 	}
 }
 

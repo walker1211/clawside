@@ -14,6 +14,7 @@ import (
 	"github.com/mark3labs/mcp-go/server"
 	"github.com/walker1211/clawside/internal/a2adelivery"
 	"github.com/walker1211/clawside/internal/orchestrator"
+	"github.com/walker1211/clawside/internal/swarmdriver"
 	"github.com/walker1211/clawside/internal/toolserver"
 	_ "modernc.org/sqlite"
 )
@@ -54,7 +55,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	defer db.Close()
-	store, err := orchestrator.NewStore(context.Background(), db)
+	ctx := context.Background()
+	store, err := orchestrator.NewStore(ctx, db)
+	if err != nil {
+		return err
+	}
+	executionStore, err := swarmdriver.InitTelegramExecutionStore(ctx, db)
 	if err != nil {
 		return err
 	}
@@ -69,6 +75,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	senderClient := a2adelivery.NewSenderClient(senderBaseURL, senderAuthKey, nil)
 	svc := orchestrator.NewService(store, nil)
 	handlers := toolserver.NewHandlersWithTargetAgentBotResolver(svc, store, senderClient, resolver)
+	handlers.SetSwarmExecutionStore(executionStore)
 	if openClawCommand != "" {
 		svc.SetOpenClawAdapter(orchestrator.NewOpenClawAdapter(orchestrator.CommandRunner{}))
 		handlers.SetOpenClawDispatchDefaults(openClawCommand, openClawDispatchArgs)
@@ -307,6 +314,15 @@ func newServer(handlers *toolserver.Handlers) *server.MCPServer {
 	)
 	s.AddTool(coordinationEvidenceSummaryTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.CoordinationEvidenceSummaryInput) (toolserver.CoordinationEvidenceSummaryOutput, error) {
 		return handlers.HandleCoordinationEvidenceSummary(ctx, args)
+	}))
+
+	swarmExecutionResultRecordTool := mcp.NewTool("swarm_execution_result_record",
+		mcp.WithDescription("Record a safe Telegram swarm execution result by correlation_id without polling Telegram, sending messages, launching runtimes, or storing private runtime fields"),
+		mcp.WithInputSchema[toolserver.SwarmExecutionResultRecordInput](),
+		mcp.WithOutputSchema[toolserver.SwarmExecutionResultRecordOutput](),
+	)
+	s.AddTool(swarmExecutionResultRecordTool, mcp.NewStructuredToolHandler(func(ctx context.Context, req mcp.CallToolRequest, args toolserver.SwarmExecutionResultRecordInput) (toolserver.SwarmExecutionResultRecordOutput, error) {
+		return handlers.HandleSwarmExecutionResultRecord(ctx, args)
 	}))
 
 	watchListTool := mcp.NewTool("watch_list",

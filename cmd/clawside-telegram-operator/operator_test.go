@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -394,6 +395,54 @@ func TestOperatorPollingLoopBacksOffAfterGetUpdatesError(t *testing.T) {
 	}
 	if len(fake.sent) != 1 || fake.sent[0].Text != "ok" {
 		t.Fatalf("expected reply after transient error, got %#v", fake.sent)
+	}
+}
+
+func TestOperatorPollingLoopLogsGetUpdatesError(t *testing.T) {
+	oldBackoff := telegramOperatorErrorBackoff
+	telegramOperatorErrorBackoff = time.Millisecond
+	defer func() { telegramOperatorErrorBackoff = oldBackoff }()
+
+	var log bytes.Buffer
+	op, _ := newTestOperator(t)
+	op.logWriter = &log
+	ctx, cancel := context.WithCancel(context.Background())
+	fake := &fakeTelegramAPI{
+		errors:            []error{errors.New("temporary polling failure")},
+		cancelOnExhausted: cancel,
+	}
+
+	if err := runOperatorLoop(ctx, operatorConfig{Token: "secret-token", AllowUserIDs: map[int64]struct{}{1001: {}}}, fake, op, time.Second); err != nil {
+		t.Fatalf("run loop: %v", err)
+	}
+	got := log.String()
+	assertContainsAll(t, got, "telegram operator getUpdates failed", "temporary polling failure")
+	if strings.Contains(got, "secret-token") {
+		t.Fatalf("log leaked token: %s", got)
+	}
+}
+
+func TestOperatorLogsInboundAgentBridgeFailure(t *testing.T) {
+	var log bytes.Buffer
+	op, _ := newTestOperator(t)
+	op.logWriter = &log
+	op.inboundAgentBridge = &fakeTelegramInboundAgentBridge{err: errors.New("agent bridge down")}
+	fake := &fakeTelegramAPI{}
+
+	processTelegramUpdate(context.Background(), operatorConfig{Token: "secret-token", BotName: "main", AllowUserIDs: map[int64]struct{}{1001: {}}}, fake, op, telegramUpdate{
+		UpdateID: 10,
+		Message:  &telegramMessage{MessageID: 7, Chat: telegramChat{ID: 123, Type: "private"}, From: &telegramUser{ID: 1001}, Text: "hello"},
+	})
+
+	if len(fake.sent) != 1 || fake.sent[0].Text != "operation failed" {
+		t.Fatalf("expected operation failed reply, got %#v", fake.sent)
+	}
+	got := log.String()
+	assertContainsAll(t, got, "telegram operator inbound agent bridge failed", "agent bridge down")
+	for _, forbidden := range []string{"secret-token", "hello", "1001", "123"} {
+		if strings.Contains(got, forbidden) {
+			t.Fatalf("log leaked %q: %s", forbidden, got)
+		}
 	}
 }
 

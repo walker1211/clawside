@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -16,6 +17,14 @@ type operator struct {
 	handlers            *toolserver.Handlers
 	inboundAgentBridge  telegramInboundAgentBridge
 	executionResultSink telegramExecutionResultSink
+	logWriter           io.Writer
+}
+
+func (o *operator) logf(format string, args ...any) {
+	if o == nil || o.logWriter == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(o.logWriter, format+"\n", args...)
 }
 
 type telegramExecutionResultSink interface {
@@ -80,6 +89,7 @@ func runOperatorLoop(ctx context.Context, cfg operatorConfig, client telegramAPI
 			if ctx.Err() != nil {
 				return nil
 			}
+			op.logf("telegram operator getUpdates failed: %v", err)
 			if err := waitTelegramOperatorBackoff(ctx); err != nil {
 				return nil
 			}
@@ -108,26 +118,30 @@ func waitTelegramOperatorBackoff(ctx context.Context) error {
 func processTelegramUpdate(ctx context.Context, cfg operatorConfig, client telegramAPI, op *operator, update telegramUpdate) {
 	message := update.Message
 	if message == nil || message.Chat.Type != "private" || message.From == nil {
+		op.logf("telegram operator ignored update: unsupported message")
 		return
 	}
 	if _, ok := cfg.AllowUserIDs[message.From.ID]; !ok {
+		op.logf("telegram operator ignored update: unauthorized user")
 		return
 	}
 	text := strings.TrimSpace(message.Text)
 	if text == "" {
+		op.logf("telegram operator ignored update: empty text")
 		return
 	}
 	replyTo := message.MessageID
 	if !strings.HasPrefix(text, "/") {
 		if responseText, ok := op.handleExecutionResult(ctx, text); ok {
-			_ = client.sendMessage(ctx, cfg.Token, telegramSendMessageRequest{ChatID: message.Chat.ID, Text: responseText, ReplyToMessageID: &replyTo})
+			op.sendTelegramReply(ctx, cfg, client, message.Chat.ID, responseText, &replyTo)
 			return
 		}
 		responseText, ok := op.handleInboundAgentText(ctx, cfg, text, *message)
 		if !ok {
+			op.logf("telegram operator ignored update: inbound bridge unavailable")
 			return
 		}
-		_ = client.sendMessage(ctx, cfg.Token, telegramSendMessageRequest{ChatID: message.Chat.ID, Text: responseText, ReplyToMessageID: &replyTo})
+		op.sendTelegramReply(ctx, cfg, client, message.Chat.ID, responseText, &replyTo)
 		return
 	}
 	cmd, err := parseOperatorCommand(text)
@@ -135,7 +149,13 @@ func processTelegramUpdate(ctx context.Context, cfg operatorConfig, client teleg
 	if err == nil {
 		responseText = op.handleCommand(ctx, cmd, *message.From)
 	}
-	_ = client.sendMessage(ctx, cfg.Token, telegramSendMessageRequest{ChatID: message.Chat.ID, Text: responseText, ReplyToMessageID: &replyTo})
+	op.sendTelegramReply(ctx, cfg, client, message.Chat.ID, responseText, &replyTo)
+}
+
+func (o *operator) sendTelegramReply(ctx context.Context, cfg operatorConfig, client telegramAPI, chatID int64, text string, replyTo *int64) {
+	if err := client.sendMessage(ctx, cfg.Token, telegramSendMessageRequest{ChatID: chatID, Text: text, ReplyToMessageID: replyTo}); err != nil {
+		o.logf("telegram operator sendMessage failed: %v", err)
+	}
 }
 
 func (o *operator) handleExecutionResult(ctx context.Context, text string) (string, bool) {
@@ -184,6 +204,7 @@ func (o *operator) handleInboundAgentText(ctx context.Context, cfg operatorConfi
 		ReplyToMessageID: message.MessageID,
 	})
 	if err != nil {
+		o.logf("telegram operator inbound agent bridge failed: %v", err)
 		return "operation failed", true
 	}
 	response = strings.TrimSpace(response)

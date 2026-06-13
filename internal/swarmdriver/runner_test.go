@@ -207,6 +207,44 @@ func TestDaemonReportsWaitingWhenAdapterResultPending(t *testing.T) {
 	}
 }
 
+func TestDaemonTickReportsProgressErrorEventForIncompatibleAvailableWork(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	created, err := svc.CreateHandoff(ctx, orchestrator.CreateHandoffInput{
+		WorkflowKind:                  "swarm_daemon_incompatible_work_test",
+		Sender:                        orchestrator.ActorRef{Type: orchestrator.ActorSystem, ID: "test"},
+		Receiver:                      orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "planner"},
+		TaskKind:                      orchestrator.TaskGeneric,
+		Intent:                        "old external workflow requiring dispatch first",
+		RequiredForWorkflowCompletion: true,
+		DeliveryTargetRef:             "external://legacy-target",
+	})
+	if err != nil {
+		t.Fatalf("CreateHandoff: %v", err)
+	}
+
+	event, err := RunDaemonTick(ctx, svc, DaemonOptions{
+		Agents:         DefaultFakeAgents(),
+		Adapter:        fixedResultAdapter{result: AdapterResult{Status: AdapterStatusCompleted}},
+		WorkLimit:      10,
+		StallRounds:    1,
+		RegisterAgents: true,
+	})
+	if err != nil {
+		t.Fatalf("RunDaemonTick: %v", err)
+	}
+	if event.Status != DaemonStatusError || event.Reason != "protocol progress failed" || event.WorkflowID != created.Workflow.ID || event.HandoffID != created.Handoff.ID {
+		t.Fatalf("expected safe protocol progress error event, got %+v", event)
+	}
+	view, err := svc.WorkflowStatus(ctx, created.Workflow.ID)
+	if err != nil {
+		t.Fatalf("WorkflowStatus: %v", err)
+	}
+	if view.Handoffs[0].State != orchestrator.StateCreated {
+		t.Fatalf("expected incompatible handoff to remain created, got %+v", view.Handoffs[0])
+	}
+}
+
 func TestRunnerRegistersConfiguredAgentsAndAppliesTemplate(t *testing.T) {
 	svc, _ := newTestService(t)
 	summary, err := Run(context.Background(), svc, Options{

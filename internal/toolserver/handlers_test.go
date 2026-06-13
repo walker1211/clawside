@@ -15,6 +15,7 @@ import (
 	"github.com/walker1211/clawside/internal/a2adelivery"
 	"github.com/walker1211/clawside/internal/openclawevents"
 	"github.com/walker1211/clawside/internal/orchestrator"
+	"github.com/walker1211/clawside/internal/swarmdriver"
 
 	_ "modernc.org/sqlite"
 )
@@ -181,6 +182,74 @@ func TestHandleOpenClawEventIngestReportsFailedEvents(t *testing.T) {
 	}
 	if len(out.Summary.Results) != 1 || out.Summary.Results[0].Status != openclawevents.StatusFailed || out.Summary.Results[0].Reason != "handoff_id is required" {
 		t.Fatalf("unexpected result: %+v", out.Summary.Results)
+	}
+}
+
+func TestHandleSwarmExecutionResultRecordSavesSafeResult(t *testing.T) {
+	h, db := newTestHandlersWithDB(t, nil)
+	ctx := context.Background()
+	executionStore, err := swarmdriver.InitTelegramExecutionStore(ctx, db)
+	if err != nil {
+		t.Fatalf("InitTelegramExecutionStore: %v", err)
+	}
+	h.SetSwarmExecutionStore(executionStore)
+	request, err := executionStore.EnsureExecutionRequest(ctx, swarmdriver.ExecutionRequest{
+		CorrelationID:  " swarm:wf_123:hf_123:planner:execute ",
+		WorkflowID:     "wf_123",
+		HandoffID:      "hf_123",
+		AgentID:        "planner",
+		Phase:          "execute",
+		IdempotencyKey: " swarm:wf_123:hf_123:planner:execute ",
+	})
+	if err != nil {
+		t.Fatalf("EnsureExecutionRequest: %v", err)
+	}
+
+	out, err := h.HandleSwarmExecutionResultRecord(ctx, SwarmExecutionResultRecordInput{
+		Type:           "clawside.result",
+		CorrelationID:  request.CorrelationID,
+		Status:         "completed",
+		Summary:        "planner completed safe work",
+		ArtifactCount:  1,
+		ReviewDecision: string(orchestrator.ReviewDecisionApproved),
+	})
+	if err != nil {
+		t.Fatalf("HandleSwarmExecutionResultRecord: %v", err)
+	}
+	if out.Request.CorrelationID != request.CorrelationID || out.Request.ResultStatus != "completed" || out.Request.ResultSummary != "planner completed safe work" {
+		t.Fatalf("unexpected recorded request: %+v", out.Request)
+	}
+	if out.Request.ResultArtifactCount != 1 || out.Request.ResultReviewDecision != orchestrator.ReviewDecisionApproved {
+		t.Fatalf("unexpected artifact/review result: %+v", out.Request)
+	}
+}
+
+func TestHandleSwarmExecutionResultRecordRequiresConfiguredStore(t *testing.T) {
+	h := newTestHandlers(t, nil)
+	_, err := h.HandleSwarmExecutionResultRecord(context.Background(), SwarmExecutionResultRecordInput{
+		Type:          "clawside.result",
+		CorrelationID: "swarm:wf:hf:planner:execute",
+		Status:        "completed",
+	})
+	if err == nil || !strings.Contains(err.Error(), "swarm execution store is required") {
+		t.Fatalf("expected missing store error, got %v", err)
+	}
+}
+
+func TestHandleSwarmExecutionResultRecordRejectsWrongEnvelopeType(t *testing.T) {
+	h, db := newTestHandlersWithDB(t, nil)
+	executionStore, err := swarmdriver.InitTelegramExecutionStore(context.Background(), db)
+	if err != nil {
+		t.Fatalf("InitTelegramExecutionStore: %v", err)
+	}
+	h.SetSwarmExecutionStore(executionStore)
+	_, err = h.HandleSwarmExecutionResultRecord(context.Background(), SwarmExecutionResultRecordInput{
+		Type:          "other.result",
+		CorrelationID: "swarm:wf:hf:planner:execute",
+		Status:        "completed",
+	})
+	if err == nil || !strings.Contains(err.Error(), "invalid result type") {
+		t.Fatalf("expected invalid result type error, got %v", err)
 	}
 }
 
