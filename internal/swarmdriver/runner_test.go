@@ -3,7 +3,9 @@ package swarmdriver
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -373,6 +375,122 @@ func TestRunnerStopsWhenAdapterFailureThresholdIsExceeded(t *testing.T) {
 	}
 	if summary.Status != StatusAdapterFailed {
 		t.Fatalf("expected adapter failed stop summary, got %+v", summary)
+	}
+}
+
+func TestDaemonTickIdlesWithoutCreatingWorkflowByDefault(t *testing.T) {
+	svc, store := newTestService(t)
+	event, err := RunDaemonTick(context.Background(), svc, DaemonOptions{
+		Agents:         DefaultFakeAgents(),
+		Adapter:        NewFakeAdapter(),
+		WorkLimit:      10,
+		StallRounds:    1,
+		RegisterAgents: true,
+	})
+	if err != nil {
+		t.Fatalf("RunDaemonTick: %v", err)
+	}
+	if event.Status != DaemonStatusIdle {
+		t.Fatalf("expected idle daemon event, got %+v", event)
+	}
+	workflows, err := store.ListWorkflows(context.Background())
+	if err != nil {
+		t.Fatalf("ListWorkflows: %v", err)
+	}
+	if len(workflows) != 0 {
+		t.Fatalf("expected daemon tick not to create workflows by default, got %+v", workflows)
+	}
+}
+
+func TestDaemonTickDrivesExistingWorkflow(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	created, err := svc.ApplyCollaborationTemplate(ctx, orchestrator.CollaborationTemplateApplyInput{
+		TemplateName: orchestrator.CollaborationTemplateUpstreamDownstreamReview,
+		WorkflowKind: "swarm_daemon_existing_workflow_test",
+		Intent:       "daemon drives existing workflow",
+		Upstream:     orchestrator.CollaborationTemplateRole{ReceiverID: "planner", ProjectRef: "project://swarm/upstream"},
+		Downstream:   orchestrator.CollaborationTemplateRole{ReceiverID: "engineer", ProjectRef: "project://swarm/downstream"},
+		Reviewer:     orchestrator.CollaborationTemplateRole{ReceiverID: "reviewer", ProjectRef: "project://swarm/review"},
+	})
+	if err != nil {
+		t.Fatalf("ApplyCollaborationTemplate: %v", err)
+	}
+	var event DaemonEvent
+	for range 20 {
+		event, err = RunDaemonTick(ctx, svc, DaemonOptions{
+			WorkflowIDs:      []string{created.Workflow.ID},
+			Agents:           DefaultFakeAgents(),
+			Adapter:          NewFakeAdapter(),
+			MaxRoundsPerTick: 2,
+			StallRounds:      2,
+			RegisterAgents:   true,
+		})
+		if err != nil {
+			t.Fatalf("RunDaemonTick: %v", err)
+		}
+		if event.Status == DaemonStatusCompleted {
+			break
+		}
+	}
+	if event.Status != DaemonStatusCompleted || event.WorkflowID != created.Workflow.ID || event.CompletedHandoffCount != 3 {
+		t.Fatalf("expected completed daemon event, got %+v", event)
+	}
+}
+
+func TestDaemonCreatesTemplateOnlyWhenExplicitlyEnabled(t *testing.T) {
+	svc, _ := newTestService(t)
+	event, err := RunDaemonTick(context.Background(), svc, DaemonOptions{
+		CreateTemplate:   true,
+		TemplateName:     orchestrator.CollaborationTemplateUpstreamDownstreamReview,
+		WorkflowKind:     "swarm_daemon_create_template_test",
+		Intent:           "explicit daemon template creation",
+		Agents:           DefaultFakeAgents(),
+		Adapter:          NewFakeAdapter(),
+		MaxRoundsPerTick: 20,
+		StallRounds:      2,
+		RegisterAgents:   true,
+	})
+	if err != nil {
+		t.Fatalf("RunDaemonTick: %v", err)
+	}
+	if event.Status != DaemonStatusCompleted || event.WorkflowID == "" || event.CompletedHandoffCount != 3 {
+		t.Fatalf("expected explicit create-template completion, got %+v", event)
+	}
+}
+
+func TestDaemonStopsOnContextCancellation(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var events []DaemonEvent
+	err := RunDaemon(ctx, svc, DaemonOptions{
+		Agents:       DefaultFakeAgents(),
+		Adapter:      NewFakeAdapter(),
+		PollInterval: time.Millisecond,
+		IdleInterval: time.Millisecond,
+	}, func(event DaemonEvent) {
+		events = append(events, event)
+	})
+	if err != nil {
+		t.Fatalf("RunDaemon: %v", err)
+	}
+	if len(events) != 0 {
+		t.Fatalf("expected canceled daemon to emit no work events, got %+v", events)
+	}
+}
+
+func TestDaemonEventOmitsUnsafeFields(t *testing.T) {
+	event := DaemonEvent{Status: DaemonStatusIdle, Reason: "no executable work", WorkflowID: "wf_1", BlockedReasons: []string{"hf_1:dependency_incomplete"}}
+	encoded, err := json.Marshal(event)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	lower := strings.ToLower(string(encoded))
+	for _, forbidden := range []string{"command", "args", "cwd", "private prompt", "token", "session", "stdout", "stderr", "chat", "sender_job", "delivery", "message/send", "message/stream"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("daemon event contains forbidden %q: %s", forbidden, encoded)
+		}
 	}
 }
 

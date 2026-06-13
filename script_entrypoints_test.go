@@ -298,14 +298,19 @@ func TestRootLifecycleScriptsAreProductEntrypoints(t *testing.T) {
 	}
 
 	assertFileContains(t, "build.sh", "go build -o \"$ROOT_DIR/clawside\" .")
+	assertFileContains(t, "build.sh", "go build -o \"$ROOT_DIR/clawside-swarmd\" ./cmd/clawside-swarmd")
 	assertFileContains(t, "start.sh", "nohup \"$ROOT_DIR/clawside\"")
 	assertFileContains(t, "start.sh", "logs/sender.pid")
 	assertFileContains(t, "start.sh", "process_matches_sender")
 	assertFileContains(t, "start.sh", "tail -n 20 \"$LOG_FILE\"")
+	assertFileContains(t, "start.sh", "CLAWSIDE_SWARM_DRIVER_ENABLED")
+	assertFileContains(t, "start.sh", "scripts/start_swarmdriver.sh")
 	assertFileContains(t, "stop.sh", "logs/sender.pid")
 	assertFileContains(t, "stop.sh", "process_matches_sender")
 	assertFileContains(t, "stop.sh", "ps -p \"$pid\" -o command=")
+	assertFileContains(t, "stop.sh", "scripts/stop_swarmdriver.sh")
 	assertFileContains(t, ".gitignore", "/clawside")
+	assertFileContains(t, ".gitignore", "/clawside-swarmd")
 
 	restart := readTextFile(t, "restart.sh")
 	if !strings.Contains(restart, "./stop.sh") || !strings.Contains(restart, "./start.sh") {
@@ -313,6 +318,79 @@ func TestRootLifecycleScriptsAreProductEntrypoints(t *testing.T) {
 	}
 	if strings.Contains(restart, "nohup") || strings.Contains(restart, "logs/sender.pid") {
 		t.Fatalf("expected restart.sh to stay thin and delegate lifecycle details")
+	}
+}
+
+func TestSwarmDriverLifecycleScriptsAreOptInAndSafe(t *testing.T) {
+	start := readTextFile(t, "start.sh")
+	if !strings.Contains(start, "${CLAWSIDE_SWARM_DRIVER_ENABLED:-false}") || !strings.Contains(start, "./scripts/start_swarmdriver.sh") {
+		t.Fatalf("expected start.sh to gate swarm driver startup behind CLAWSIDE_SWARM_DRIVER_ENABLED")
+	}
+	if strings.Contains(start, "CLAWSIDE_SWARM_DRIVER_CREATE_TEMPLATE=true") {
+		t.Fatalf("start.sh must not force template creation")
+	}
+
+	stop := readTextFile(t, "stop.sh")
+	if !strings.Contains(stop, "logs/swarmdriver.pid") || !strings.Contains(stop, "./scripts/stop_swarmdriver.sh") {
+		t.Fatalf("expected stop.sh to stop swarm driver when pid file exists")
+	}
+
+	for _, script := range []string{"scripts/start_swarmdriver.sh", "scripts/stop_swarmdriver.sh"} {
+		content := readTextFile(t, script)
+		for _, want := range []string{"swarmdriver.pid", "clawside-swarmd", "ps -p \"$pid\" -o command="} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("expected %s to contain %q", script, want)
+			}
+		}
+		for _, forbidden := range []string{"message/send", "message/stream", "--command", "--args", "--cwd", "--prompt", "--token", "--session", "--chat-id", "--sender-job-id"} {
+			if strings.Contains(content, forbidden) {
+				t.Fatalf("%s must not contain forbidden %q", script, forbidden)
+			}
+		}
+	}
+}
+
+func TestSwarmDriverLifecycleScriptsSupportHelp(t *testing.T) {
+	for _, script := range []string{"scripts/start_swarmdriver.sh", "scripts/stop_swarmdriver.sh"} {
+		for _, arg := range []string{"help", "--help", "-h"} {
+			t.Run(script+":"+arg, func(t *testing.T) {
+				repo := newTempGitRepoWithScript(t, script)
+				stdout, stderr, err := runScript(t, repo, script, arg)
+				if err != nil {
+					t.Fatalf("expected help to exit 0: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+				}
+				if !strings.Contains(stdout, "usage:") || stderr != "" {
+					t.Fatalf("expected clean help output, stdout:\n%s\nstderr:\n%s", stdout, stderr)
+				}
+			})
+		}
+	}
+}
+
+func TestSwarmDriverEnvWhitelist(t *testing.T) {
+	loadEnv := readTextFile(t, "scripts/load_env.sh")
+	exampleEnv := readTextFile(t, ".example.env")
+	for _, key := range []string{
+		"CLAWSIDE_SWARM_DRIVER_ENABLED",
+		"CLAWSIDE_SWARM_DRIVER_DB_PATH",
+		"CLAWSIDE_SWARM_DRIVER_WORKFLOW_IDS",
+		"CLAWSIDE_SWARM_DRIVER_CREATE_TEMPLATE",
+		"CLAWSIDE_SWARM_DRIVER_TEMPLATE",
+		"CLAWSIDE_SWARM_DRIVER_WORKFLOW_KIND",
+		"CLAWSIDE_SWARM_DRIVER_INTENT",
+		"CLAWSIDE_SWARM_DRIVER_POLL_INTERVAL",
+		"CLAWSIDE_SWARM_DRIVER_IDLE_INTERVAL",
+		"CLAWSIDE_SWARM_DRIVER_MAX_ROUNDS_PER_TICK",
+		"CLAWSIDE_SWARM_DRIVER_STALL_ROUNDS",
+		"CLAWSIDE_SWARM_DRIVER_FAKE_AGENTS",
+		"CLAWSIDE_SWARM_DRIVER_JSON",
+	} {
+		if !strings.Contains(loadEnv, key) {
+			t.Fatalf("expected scripts/load_env.sh to whitelist %s", key)
+		}
+		if !strings.Contains(exampleEnv, key+"=") {
+			t.Fatalf("expected .example.env to document %s", key)
+		}
 	}
 }
 
