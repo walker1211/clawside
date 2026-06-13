@@ -163,7 +163,7 @@ Safety boundaries: the sample does not launch model workers, does not start runt
 
 #### Managed reference swarm driver
 
-`cmd/clawside-swarmd` is the lifecycle-managed truth-plane-only swarm loop. It can be started by the normal product lifecycle after the sender is ready, polls existing `next_work` / `blocked_work`, progresses configured fake-agent work through protocol actions, and emits compact sanitized events. It does not create workflows by default.
+`cmd/clawside-swarmd` is the lifecycle-managed truth-plane swarm loop. It can be started by the normal product lifecycle after the sender is ready, polls existing `next_work` / `blocked_work`, progresses work through protocol actions, and emits compact sanitized events. It does not create workflows by default.
 
 ```bash
 ./build.sh
@@ -180,13 +180,38 @@ CLAWSIDE_SWARM_DRIVER_CREATE_TEMPLATE=true \
 ./start.sh
 ```
 
+Show daemon help without requiring a DB or secrets:
+
+```bash
+go run ./cmd/clawside-swarmd help
+```
+
 For a one-shot reference run, use:
 
 ```bash
 go run ./cmd/clawside-swarm-runner --db ./sender.db --template upstream_downstream_review --fake-agents --json
 ```
 
-The managed daemon and one-shot runner are not model runtimes. They do not launch OpenClaw, Claude, Kimi, workers, runtime sessions, or sandboxes; do not execute arbitrary command/args/cwd; do not accept private prompt/token/session/stdout/stderr/chat/sender job fields; and do not call message delivery, sender delivery, Telegram delivery, `message/send`, or `message/stream`.
+Default lifecycle mode remains deterministic fake/reference execution. Fake mode and the one-shot runner do not call sender delivery, Telegram delivery, `message/send`, or `message/stream`.
+
+Telegram-backed execution is explicit opt-in. It sends safe handoff task messages through the existing sender / Telegram path, waits for an external agent reply, and lets `clawside-swarmd` convert the stored result into truth-plane protocol progress. The Telegram operator must be running to capture replies, and `SENDER_AUTH_KEY` should come from `.env` or the shell, not argv.
+
+```bash
+CLAWSIDE_SWARM_DRIVER_ENABLED=true \
+CLAWSIDE_SWARM_DRIVER_ADAPTER=telegram \
+CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL=http://127.0.0.1:8787 \
+CLAWSIDE_TARGET_AGENT_BOT_MAP="engineer=guardian,reviewer=guardian" \
+CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO=<telegram-chat-id> \
+./start.sh
+```
+
+Agents reply in private chat with this structured result shape:
+
+```json
+{"type":"clawside.result","correlation_id":"<correlation_id>","status":"completed","summary":"short safe summary","artifact_count":1,"review_decision":"approved"}
+```
+
+The managed daemon is still not a model runtime. It does not launch OpenClaw, Claude, Kimi, workers, runtime sessions, or sandboxes; does not execute arbitrary command/args/cwd; and stores only correlation plus safe result fields, not private prompt/token/session/stdout/stderr/chat/sender job fields.
 
 #### Real OpenClaw trajectory external runtime evidence dogfood validation
 

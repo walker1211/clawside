@@ -14,6 +14,9 @@ type progressDecision struct {
 }
 
 func progressWork(ctx context.Context, svc *orchestrator.Service, agent AgentSpec, item orchestrator.WorkItem, result AdapterResult) (string, bool, error) {
+	if result.Status == AdapterStatusPending {
+		return "", false, nil
+	}
 	decision, ok := nextProgressDecision(agent, item.Handoff, result)
 	if !ok {
 		return "", false, nil
@@ -74,13 +77,17 @@ func nextProgressDecision(agent AgentSpec, handoff orchestrator.Handoff, result 
 
 func workSummaryFor(agent AgentSpec, item orchestrator.WorkItem) WorkSummary {
 	return WorkSummary{
-		WorkflowID:  item.Workflow.ID,
-		HandoffID:   item.Handoff.ID,
-		AgentID:     agent.ID,
-		State:       item.Handoff.State,
-		TaskKind:    item.Handoff.TaskKind,
-		ProjectRef:  item.Handoff.PayloadRef,
-		NeedsReview: item.Handoff.NeedsReview || item.Handoff.TaskKind == orchestrator.TaskReviewRequired,
-		ReviewerID:  item.Handoff.ReviewerActor.ID,
+		WorkflowID:                    item.Workflow.ID,
+		HandoffID:                     item.Handoff.ID,
+		AgentID:                       agent.ID,
+		State:                         item.Handoff.State,
+		TaskKind:                      item.Handoff.TaskKind,
+		Intent:                        item.Handoff.Intent,
+		PayloadRef:                    item.Handoff.PayloadRef,
+		ProjectRef:                    item.Handoff.PayloadRef,
+		RequiredForWorkflowCompletion: item.Handoff.RequiredForWorkflowCompletion,
+		ArtifactMinCount:              item.Handoff.ArtifactPolicy.MinCount,
+		NeedsReview:                   item.Handoff.NeedsReview || item.Handoff.TaskKind == orchestrator.TaskReviewRequired,
+		ReviewerID:                    item.Handoff.ReviewerActor.ID,
 	}
 }

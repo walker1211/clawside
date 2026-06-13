@@ -94,6 +94,119 @@ func TestFakeAdapterReceivesOnlySafeWorkSummary(t *testing.T) {
 	}
 }
 
+func TestWorkSummaryIncludesOnlySafeTruthPlaneFields(t *testing.T) {
+	item := orchestrator.WorkItem{
+		Workflow: orchestrator.Workflow{ID: "wf_1"},
+		Handoff: orchestrator.Handoff{
+			ID:                            "hf_1",
+			State:                         orchestrator.StateStarted,
+			TaskKind:                      orchestrator.TaskReviewRequired,
+			Intent:                        "safe public task intent",
+			PayloadRef:                    "project://safe/example",
+			DeliveryTargetRef:             "chat_id sender_job token command args cwd prompt session stdout stderr",
+			RequiredForWorkflowCompletion: true,
+			ArtifactPolicy:                orchestrator.ArtifactPolicy{Mode: orchestrator.ArtifactModeRequired, MinCount: 2},
+			NeedsReview:                   true,
+			ReviewerActor:                 orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "reviewer"},
+		},
+	}
+
+	work := workSummaryFor(AgentSpec{ID: "engineer"}, item)
+	if work.Intent != "safe public task intent" || work.PayloadRef != "project://safe/example" || !work.RequiredForWorkflowCompletion || work.ArtifactMinCount != 2 {
+		t.Fatalf("expected safe truth-plane fields in work summary, got %+v", work)
+	}
+
+	encoded, err := json.Marshal(work)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	lower := strings.ToLower(string(encoded))
+	for _, required := range []string{"intent", "payload_ref", "required_for_workflow_completion", "artifact_min_count"} {
+		if !strings.Contains(lower, required) {
+			t.Fatalf("work summary missing %q: %s", required, encoded)
+		}
+	}
+	for _, forbidden := range []string{"delivery_target_ref", "chat_id", "sender_job", "command", "args", "cwd", "prompt", "token", "session", "stdout", "stderr"} {
+		if strings.Contains(lower, forbidden) {
+			t.Fatalf("work summary contains forbidden %q: %s", forbidden, encoded)
+		}
+	}
+}
+
+func TestRunnerDoesNotProgressPendingAdapterResult(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	created, err := svc.CreateHandoff(ctx, orchestrator.CreateHandoffInput{
+		WorkflowKind:                  "swarm_driver_pending_result_test",
+		Sender:                        orchestrator.ActorRef{Type: orchestrator.ActorSystem, ID: "test"},
+		Receiver:                      orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "planner"},
+		TaskKind:                      orchestrator.TaskGeneric,
+		Intent:                        "wait for external adapter result",
+		RequiredForWorkflowCompletion: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateHandoff: %v", err)
+	}
+
+	summary, err := Run(ctx, svc, Options{
+		WorkflowID:  created.Workflow.ID,
+		Agents:      DefaultFakeAgents(),
+		Adapter:     fixedResultAdapter{result: AdapterResult{Status: AdapterStatusPending}},
+		MaxRounds:   1,
+		StallRounds: 1,
+	})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if summary.Status != StatusTimedOut || summary.LastAction != "" {
+		t.Fatalf("expected pending result to wait without progress, got %+v", summary)
+	}
+	view, err := svc.WorkflowStatus(ctx, created.Workflow.ID)
+	if err != nil {
+		t.Fatalf("WorkflowStatus: %v", err)
+	}
+	if view.Handoffs[0].State != orchestrator.StateCreated {
+		t.Fatalf("expected handoff to remain created while adapter is pending, got %+v", view.Handoffs[0])
+	}
+}
+
+func TestDaemonReportsWaitingWhenAdapterResultPending(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	created, err := svc.CreateHandoff(ctx, orchestrator.CreateHandoffInput{
+		WorkflowKind:                  "swarm_daemon_pending_result_test",
+		Sender:                        orchestrator.ActorRef{Type: orchestrator.ActorSystem, ID: "test"},
+		Receiver:                      orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "planner"},
+		TaskKind:                      orchestrator.TaskGeneric,
+		Intent:                        "daemon waits for external adapter result",
+		RequiredForWorkflowCompletion: true,
+	})
+	if err != nil {
+		t.Fatalf("CreateHandoff: %v", err)
+	}
+
+	event, err := RunDaemonTick(ctx, svc, DaemonOptions{
+		Agents:         DefaultFakeAgents(),
+		Adapter:        fixedResultAdapter{result: AdapterResult{Status: AdapterStatusPending}},
+		WorkLimit:      10,
+		StallRounds:    1,
+		RegisterAgents: true,
+	})
+	if err != nil {
+		t.Fatalf("RunDaemonTick: %v", err)
+	}
+	if event.Status != DaemonStatusIdle || event.Reason != "waiting for adapter result" || event.WorkflowID != created.Workflow.ID || event.HandoffID != created.Handoff.ID || event.LastAction != "" {
+		t.Fatalf("expected daemon to report waiting pending result, got %+v", event)
+	}
+	view, err := svc.WorkflowStatus(ctx, created.Workflow.ID)
+	if err != nil {
+		t.Fatalf("WorkflowStatus: %v", err)
+	}
+	if view.Handoffs[0].State != orchestrator.StateCreated {
+		t.Fatalf("expected handoff to remain created while daemon waits, got %+v", view.Handoffs[0])
+	}
+}
+
 func TestRunnerRegistersConfiguredAgentsAndAppliesTemplate(t *testing.T) {
 	svc, _ := newTestService(t)
 	summary, err := Run(context.Background(), svc, Options{

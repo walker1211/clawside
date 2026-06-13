@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/walker1211/clawside/internal/orchestrator"
+	"github.com/walker1211/clawside/internal/swarmdriver"
 	"github.com/walker1211/clawside/internal/toolserver"
 	_ "modernc.org/sqlite"
 )
@@ -76,9 +77,13 @@ func run(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
+	executionStore, err := swarmdriver.InitTelegramExecutionStore(ctx, db)
+	if err != nil {
+		return err
+	}
 	svc := orchestrator.NewService(store, nil)
 	handlers := toolserver.NewHandlers(svc, store, nil)
-	op := &operator{handlers: handlers, inboundAgentBridge: newOpenClawTelegramInboundAgentBridge(opts)}
+	op := &operator{handlers: handlers, inboundAgentBridge: newOpenClawTelegramInboundAgentBridge(opts), executionResultSink: executionStore}
 	client := newTelegramClient(opts.TelegramBaseURL, nil)
 	if _, err := fmt.Fprintf(stdout, "clawside Telegram operator polling with bot %s\n", cfg.BotName); err != nil {
 		return err

@@ -19,6 +19,10 @@ Environment:
   CLAWSIDE_SWARM_DRIVER_MAX_ROUNDS_PER_TICK
   CLAWSIDE_SWARM_DRIVER_STALL_ROUNDS
   CLAWSIDE_SWARM_DRIVER_FAKE_AGENTS
+  CLAWSIDE_SWARM_DRIVER_ADAPTER
+  CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL
+  CLAWSIDE_TARGET_AGENT_BOT_MAP
+  CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO
   CLAWSIDE_SWARM_DRIVER_JSON
 USAGE
   exit 0
@@ -73,8 +77,35 @@ fi
 DB_PATH="$(repo_path "${CLAWSIDE_SWARM_DRIVER_DB_PATH:-./sender.db}")"
 set -- --db "$DB_PATH"
 
-if [[ "${CLAWSIDE_SWARM_DRIVER_FAKE_AGENTS:-true}" == "true" ]]; then
-  set -- "$@" --fake-agents
+case "${CLAWSIDE_SWARM_DRIVER_ADAPTER:-}" in
+  "" )
+    if [[ "${CLAWSIDE_SWARM_DRIVER_FAKE_AGENTS:-true}" == "true" ]]; then
+      set -- "$@" --fake-agents
+    fi
+    ;;
+  fake|reference)
+    set -- "$@" --fake-agents
+    ;;
+  telegram)
+    set -- "$@" --telegram-agents
+    ;;
+  *)
+    printf 'invalid CLAWSIDE_SWARM_DRIVER_ADAPTER\n' >&2
+    exit 1
+    ;;
+esac
+
+SENDER_BASE_URL="${CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL:-${CLAWSIDE_SENDER_BASE_URL:-}}"
+if [[ -n "$SENDER_BASE_URL" ]]; then
+  set -- "$@" --sender-base-url "$SENDER_BASE_URL"
+fi
+
+if [[ -n "${CLAWSIDE_TARGET_AGENT_BOT_MAP:-}" ]]; then
+  set -- "$@" --target-agent-map "$CLAWSIDE_TARGET_AGENT_BOT_MAP"
+fi
+
+if [[ -n "${CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO:-}" ]]; then
+  set -- "$@" --delivery-context-to "$CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO"
 fi
 
 if [[ "${CLAWSIDE_SWARM_DRIVER_CREATE_TEMPLATE:-false}" == "true" ]]; then

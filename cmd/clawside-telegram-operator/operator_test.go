@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/walker1211/clawside/internal/orchestrator"
+	"github.com/walker1211/clawside/internal/swarmdriver"
 	"github.com/walker1211/clawside/internal/toolserver"
 	_ "modernc.org/sqlite"
 )
@@ -226,6 +227,114 @@ func TestOperatorPollingLoopRoutesAuthorizedPrivateTextToAgentBridge(t *testing.
 	}
 }
 
+func TestOperatorCapturesAuthorizedExecutionResult(t *testing.T) {
+	ctx := context.Background()
+	store := newTestOperatorExecutionStore(t)
+	_, err := store.EnsureExecutionRequest(ctx, swarmdriver.ExecutionRequest{
+		CorrelationID:  "corr_operator_1",
+		WorkflowID:     "wf_1",
+		HandoffID:      "hf_1",
+		AgentID:        "engineer",
+		Phase:          "execute",
+		IdempotencyKey: "swarm:wf_1:hf_1:engineer:execute",
+	})
+	if err != nil {
+		t.Fatalf("EnsureExecutionRequest: %v", err)
+	}
+	bridge := &fakeTelegramInboundAgentBridge{response: "should not run"}
+	op := &operator{executionResultSink: store, inboundAgentBridge: bridge}
+	fake := &fakeTelegramAPI{}
+
+	processTelegramUpdate(ctx, operatorConfig{Token: "secret-token", AllowUserIDs: map[int64]struct{}{1001: {}}}, fake, op, telegramUpdate{
+		UpdateID: 10,
+		Message: &telegramMessage{
+			MessageID: 7,
+			Chat:      telegramChat{ID: 123, Type: "private"},
+			From:      &telegramUser{ID: 1001},
+			Text:      `{"type":"clawside.result","correlation_id":"corr_operator_1","status":"completed","summary":"safe summary","artifact_count":1,"review_decision":"approved"}`,
+		},
+	})
+
+	if len(bridge.inputs) != 0 {
+		t.Fatalf("expected result capture not to invoke inbound bridge, got %#v", bridge.inputs)
+	}
+	if len(fake.sent) != 1 || fake.sent[0].Text != "execution result recorded" || fake.sent[0].ReplyToMessageID == nil || *fake.sent[0].ReplyToMessageID != 7 {
+		t.Fatalf("unexpected result capture reply: %#v", fake.sent)
+	}
+	assertSafeOperatorResponse(t, fake.sent[0].Text)
+	row, err := store.GetExecutionByCorrelationID(ctx, "corr_operator_1")
+	if err != nil {
+		t.Fatalf("GetExecutionByCorrelationID: %v", err)
+	}
+	if row.ResultStatus != string(swarmdriver.AdapterStatusCompleted) || row.ResultSummary != "safe summary" || row.ResultArtifactCount != 1 || row.ResultReviewDecision != orchestrator.ReviewDecisionApproved {
+		t.Fatalf("unexpected saved execution result: %+v", row)
+	}
+}
+
+func TestOperatorRejectsMalformedExecutionResultWithoutBridge(t *testing.T) {
+	store := newTestOperatorExecutionStore(t)
+	bridge := &fakeTelegramInboundAgentBridge{response: "should not run"}
+	op := &operator{executionResultSink: store, inboundAgentBridge: bridge}
+	fake := &fakeTelegramAPI{}
+
+	processTelegramUpdate(context.Background(), operatorConfig{Token: "secret-token", AllowUserIDs: map[int64]struct{}{1001: {}}}, fake, op, telegramUpdate{
+		UpdateID: 10,
+		Message: &telegramMessage{
+			MessageID: 7,
+			Chat:      telegramChat{ID: 123, Type: "private"},
+			From:      &telegramUser{ID: 1001},
+			Text:      `{"type":"clawside.result","correlation_id":"corr_bad","status":"pending","summary":"token command stdout"}`,
+		},
+	})
+
+	if len(bridge.inputs) != 0 {
+		t.Fatalf("expected malformed result not to invoke inbound bridge, got %#v", bridge.inputs)
+	}
+	if len(fake.sent) != 1 || fake.sent[0].Text != "invalid execution result" {
+		t.Fatalf("unexpected malformed result reply: %#v", fake.sent)
+	}
+	assertSafeOperatorResponse(t, fake.sent[0].Text)
+}
+
+func TestOperatorIgnoresUnauthorizedExecutionResult(t *testing.T) {
+	ctx := context.Background()
+	store := newTestOperatorExecutionStore(t)
+	_, err := store.EnsureExecutionRequest(ctx, swarmdriver.ExecutionRequest{
+		CorrelationID:  "corr_operator_unauthorized",
+		WorkflowID:     "wf_2",
+		HandoffID:      "hf_2",
+		AgentID:        "engineer",
+		Phase:          "execute",
+		IdempotencyKey: "swarm:wf_2:hf_2:engineer:execute",
+	})
+	if err != nil {
+		t.Fatalf("EnsureExecutionRequest: %v", err)
+	}
+	op := &operator{executionResultSink: store}
+	fake := &fakeTelegramAPI{}
+
+	processTelegramUpdate(ctx, operatorConfig{Token: "secret-token", AllowUserIDs: map[int64]struct{}{1001: {}}}, fake, op, telegramUpdate{
+		UpdateID: 10,
+		Message: &telegramMessage{
+			MessageID: 7,
+			Chat:      telegramChat{ID: 123, Type: "private"},
+			From:      &telegramUser{ID: 2002},
+			Text:      `{"type":"clawside.result","correlation_id":"corr_operator_unauthorized","status":"completed","summary":"safe summary","artifact_count":1}`,
+		},
+	})
+
+	if len(fake.sent) != 0 {
+		t.Fatalf("expected unauthorized result to be ignored, got %#v", fake.sent)
+	}
+	row, err := store.GetExecutionByCorrelationID(ctx, "corr_operator_unauthorized")
+	if err != nil {
+		t.Fatalf("GetExecutionByCorrelationID: %v", err)
+	}
+	if row.ResultStatus != "" {
+		t.Fatalf("expected unauthorized result not to be saved, got %+v", row)
+	}
+}
+
 func TestOperatorPollingLoopEnforcesAllowlistAndPrivateChat(t *testing.T) {
 	cases := map[string]telegramUpdate{
 		"unauthorized user": {UpdateID: 10, Message: &telegramMessage{MessageID: 7, Chat: telegramChat{ID: 123, Type: "private"}, From: &telegramUser{ID: 2002}, Text: "/health"}},
@@ -340,6 +449,20 @@ type fakeTelegramInboundAgentBridge struct {
 func (f *fakeTelegramInboundAgentBridge) Run(ctx context.Context, input telegramInboundAgentInput) (string, error) {
 	f.inputs = append(f.inputs, input)
 	return f.response, f.err
+}
+
+func newTestOperatorExecutionStore(t *testing.T) *swarmdriver.TelegramExecutionStore {
+	t.Helper()
+	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "execution.db"))
+	if err != nil {
+		t.Fatalf("open execution sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := swarmdriver.InitTelegramExecutionStore(context.Background(), db)
+	if err != nil {
+		t.Fatalf("InitTelegramExecutionStore: %v", err)
+	}
+	return store
 }
 
 func newTestOperator(t *testing.T) (*operator, *toolserver.Handlers) {
