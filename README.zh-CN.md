@@ -163,7 +163,7 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
 
 #### Managed reference swarm driver
 
-`cmd/clawside-swarmd` 是被产品生命周期管理的 truth-plane-only swarm loop。它可以在 sender ready 之后由日常 `./start.sh` 启动，轮询已有 `next_work` / `blocked_work`，用已配置的 fake agents 通过 protocol actions 推进 handoff，并输出 compact sanitized events。默认不会创建 workflow。
+`cmd/clawside-swarmd` 是由产品生命周期管理的 truth-plane swarm loop。它可以在 sender ready 之后由日常 `./start.sh` 启动，轮询已有 `next_work` / `blocked_work`，通过 protocol actions 推进工作，并输出 compact sanitized events。默认不会创建 workflow。
 
 ```bash
 ./build.sh
@@ -180,13 +180,38 @@ CLAWSIDE_SWARM_DRIVER_CREATE_TEMPLATE=true \
 ./start.sh
 ```
 
+查看 daemon help 不需要 DB 或 secret：
+
+```bash
+go run ./cmd/clawside-swarmd help
+```
+
 如果只想一次性跑 reference loop，可以使用：
 
 ```bash
 go run ./cmd/clawside-swarm-runner --db ./sender.db --template upstream_downstream_review --fake-agents --json
 ```
 
-Managed daemon 和 one-shot runner 都不是 model runtime。它们不启动 OpenClaw、Claude、Kimi、worker、runtime session 或 sandbox；不执行任意 command/args/cwd；不接收 private prompt/token/session/stdout/stderr/chat/sender job 字段；也不调用 message delivery、sender delivery、Telegram delivery、`message/send` 或 `message/stream`。
+默认生命周期模式仍是 deterministic fake/reference execution。fake mode 和 one-shot runner 不调用 sender delivery、Telegram delivery、`message/send` 或 `message/stream`。
+
+Telegram-backed execution 必须显式 opt in。它会通过现有 sender / Telegram 路径发送安全的 handoff task message，等待外部 agent 回复，再由 `clawside-swarmd` 把已保存的结果转换为 truth-plane protocol progress。Telegram operator 必须运行才能捕获回复；`SENDER_AUTH_KEY` 应从 `.env` 或 shell 注入，不要放到 argv。
+
+```bash
+CLAWSIDE_SWARM_DRIVER_ENABLED=true \
+CLAWSIDE_SWARM_DRIVER_ADAPTER=telegram \
+CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL=http://127.0.0.1:8787 \
+CLAWSIDE_TARGET_AGENT_BOT_MAP="engineer=guardian,reviewer=guardian" \
+CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO=<telegram-chat-id> \
+./start.sh
+```
+
+agent 在 private chat 中按这个结构回复结果：
+
+```json
+{"type":"clawside.result","correlation_id":"<correlation_id>","status":"completed","summary":"short safe summary","artifact_count":1,"review_decision":"approved"}
+```
+
+Managed daemon 仍然不是 model runtime。它不启动 OpenClaw、Claude、Kimi、worker、runtime session 或 sandbox；不执行任意 command/args/cwd；只保存 correlation 和安全结果字段，不保存 private prompt/token/session/stdout/stderr/chat/sender job 字段。
 
 #### Real OpenClaw trajectory external runtime evidence dogfood validation
 

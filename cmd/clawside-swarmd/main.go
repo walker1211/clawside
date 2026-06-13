@@ -9,29 +9,44 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/walker1211/clawside/internal/a2adelivery"
 	"github.com/walker1211/clawside/internal/orchestrator"
 	"github.com/walker1211/clawside/internal/swarmdriver"
 	_ "modernc.org/sqlite"
 )
 
+const (
+	senderAuthKeyEnvName                = "SENDER_AUTH_KEY"
+	swarmDriverAdapterEnvName           = "CLAWSIDE_SWARM_DRIVER_ADAPTER"
+	swarmDriverSenderBaseURLEnvName     = "CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL"
+	fallbackSenderBaseURLEnvName        = "CLAWSIDE_SENDER_BASE_URL"
+	targetAgentBotMapEnvName            = "CLAWSIDE_TARGET_AGENT_BOT_MAP"
+	swarmDriverDeliveryContextToEnvName = "CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO"
+)
+
 type options struct {
-	DBPath           string
-	WorkflowIDs      workflowIDFlags
-	CreateTemplate   bool
-	TemplateName     string
-	WorkflowKind     string
-	Intent           string
-	FakeAgents       bool
-	PollInterval     time.Duration
-	IdleInterval     time.Duration
-	MaxRoundsPerTick int
-	StallRounds      int
-	WorkLimit        int
-	JSON             bool
+	DBPath            string
+	WorkflowIDs       workflowIDFlags
+	CreateTemplate    bool
+	TemplateName      string
+	WorkflowKind      string
+	Intent            string
+	FakeAgents        bool
+	TelegramAgents    bool
+	SenderBaseURL     string
+	TargetAgentMap    string
+	DeliveryContextTo *int64
+	PollInterval      time.Duration
+	IdleInterval      time.Duration
+	MaxRoundsPerTick  int
+	StallRounds       int
+	WorkLimit         int
+	JSON              bool
 }
 
 type workflowIDFlags []string
@@ -69,7 +84,7 @@ func printUsage(w io.Writer) error {
 	_, err := fmt.Fprint(w, `usage: clawside-swarmd [options]
 
 Run the managed truth-plane swarm daemon. This is not a model runtime,
-does not launch workers, and does not trigger sender or Telegram delivery.
+does not launch workers, and Telegram-backed execution is explicit opt-in.
 
 Options:
   --db PATH                  SQLite truth-plane DB path
@@ -79,10 +94,15 @@ Options:
   --workflow-kind KIND       Workflow kind for explicit template creation
   --intent TEXT              Intent for explicit template creation
   --fake-agents              Use deterministic fake planner/engineer/reviewer agents
+  --telegram-agents          Send work through the configured sender/Telegram adapter
+  --sender-base-url URL      Sender base URL for Telegram adapter mode
+  --target-agent-map MAP     Comma-separated target_agent=bot mappings
+  --delivery-context-to ID   Delivery context target for Telegram adapter mode
   --poll-interval DURATION   Delay after a progress event
   --idle-interval DURATION   Delay after an idle event
   --max-rounds-per-tick N    Maximum one-shot rounds per workflow tick
   --stall-rounds N           Consecutive idle blocked rounds before a workflow tick stalls
+  --work-limit N             Maximum next_work items per tick
   --json                     Emit one JSON event per line
   help, --help, -h           Show this help.
 `)
@@ -90,7 +110,21 @@ Options:
 }
 
 func resolveOptions(args []string) (options, error) {
-	opts := options{TemplateName: orchestrator.CollaborationTemplateUpstreamDownstreamReview}
+	opts := options{
+		TemplateName:   orchestrator.CollaborationTemplateUpstreamDownstreamReview,
+		SenderBaseURL:  envOrDefault(swarmDriverSenderBaseURLEnvName, os.Getenv(fallbackSenderBaseURLEnvName)),
+		TargetAgentMap: strings.TrimSpace(os.Getenv(targetAgentBotMapEnvName)),
+	}
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(swarmDriverAdapterEnvName))) {
+	case "":
+	case "fake", "reference":
+		opts.FakeAgents = true
+	case "telegram":
+		opts.TelegramAgents = true
+	default:
+		return options{}, fmt.Errorf("invalid adapter")
+	}
+	deliveryContextToRaw := strings.TrimSpace(os.Getenv(swarmDriverDeliveryContextToEnvName))
 	fs := flag.NewFlagSet("clawside-swarmd", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&opts.DBPath, "db", "", "")
@@ -99,7 +133,11 @@ func resolveOptions(args []string) (options, error) {
 	fs.StringVar(&opts.TemplateName, "template", opts.TemplateName, "")
 	fs.StringVar(&opts.WorkflowKind, "workflow-kind", "", "")
 	fs.StringVar(&opts.Intent, "intent", "", "")
-	fs.BoolVar(&opts.FakeAgents, "fake-agents", false, "")
+	fs.BoolVar(&opts.FakeAgents, "fake-agents", opts.FakeAgents, "")
+	fs.BoolVar(&opts.TelegramAgents, "telegram-agents", opts.TelegramAgents, "")
+	fs.StringVar(&opts.SenderBaseURL, "sender-base-url", opts.SenderBaseURL, "")
+	fs.StringVar(&opts.TargetAgentMap, "target-agent-map", opts.TargetAgentMap, "")
+	fs.StringVar(&deliveryContextToRaw, "delivery-context-to", deliveryContextToRaw, "")
 	fs.DurationVar(&opts.PollInterval, "poll-interval", 0, "")
 	fs.DurationVar(&opts.IdleInterval, "idle-interval", 0, "")
 	fs.IntVar(&opts.MaxRoundsPerTick, "max-rounds-per-tick", 0, "")
@@ -116,11 +154,30 @@ func resolveOptions(args []string) (options, error) {
 	opts.TemplateName = strings.TrimSpace(opts.TemplateName)
 	opts.WorkflowKind = strings.TrimSpace(opts.WorkflowKind)
 	opts.Intent = strings.TrimSpace(opts.Intent)
+	opts.SenderBaseURL = strings.TrimRight(strings.TrimSpace(opts.SenderBaseURL), "/")
+	opts.TargetAgentMap = strings.TrimSpace(opts.TargetAgentMap)
 	if opts.DBPath == "" {
 		return options{}, fmt.Errorf("db is required")
 	}
-	if !opts.FakeAgents {
-		return options{}, fmt.Errorf("fake agents are required")
+	adapterCount := 0
+	if opts.FakeAgents {
+		adapterCount++
+	}
+	if opts.TelegramAgents {
+		adapterCount++
+	}
+	if adapterCount != 1 {
+		return options{}, fmt.Errorf("exactly one adapter is required")
+	}
+	if opts.TelegramAgents {
+		deliveryContextTo, err := parsePositiveInt64(deliveryContextToRaw)
+		if err != nil || deliveryContextTo == nil || opts.SenderBaseURL == "" || strings.TrimSpace(os.Getenv(senderAuthKeyEnvName)) == "" {
+			return options{}, fmt.Errorf("telegram adapter configuration is incomplete")
+		}
+		opts.DeliveryContextTo = deliveryContextTo
+		if _, err := a2adelivery.NewTargetAgentBotResolver(opts.TargetAgentMap); err != nil {
+			return options{}, fmt.Errorf("invalid target agent mapping")
+		}
 	}
 	return opts, nil
 }
@@ -135,6 +192,10 @@ func runDaemon(ctx context.Context, opts options, stdout io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("open truth plane: %w", err)
 	}
+	adapter, err := adapterForOptions(ctx, db, opts)
+	if err != nil {
+		return err
+	}
 	service := orchestrator.NewService(store, nil)
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -145,7 +206,7 @@ func runDaemon(ctx context.Context, opts options, stdout io.Writer) error {
 		WorkflowIDs:      append([]string(nil), opts.WorkflowIDs...),
 		Intent:           opts.Intent,
 		Agents:           swarmdriver.DefaultFakeAgents(),
-		Adapter:          swarmdriver.NewFakeAdapter(),
+		Adapter:          adapter,
 		CreateTemplate:   opts.CreateTemplate,
 		RegisterAgents:   true,
 		MaxRoundsPerTick: opts.MaxRoundsPerTick,
@@ -166,6 +227,52 @@ func runDaemon(ctx context.Context, opts options, stdout io.Writer) error {
 		return err
 	}
 	return writeErr
+}
+
+func envOrDefault(name string, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return strings.TrimSpace(fallback)
+}
+
+func parsePositiveInt64(raw string) (*int64, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil, nil
+	}
+	value, err := strconv.ParseInt(trimmed, 10, 64)
+	if err != nil || value <= 0 {
+		return nil, fmt.Errorf("invalid integer")
+	}
+	return &value, nil
+}
+
+func adapterForOptions(ctx context.Context, db *sql.DB, opts options) (swarmdriver.AgentAdapter, error) {
+	if opts.FakeAgents {
+		return swarmdriver.NewFakeAdapter(), nil
+	}
+	if opts.DeliveryContextTo == nil || opts.SenderBaseURL == "" || strings.TrimSpace(os.Getenv(senderAuthKeyEnvName)) == "" {
+		return nil, fmt.Errorf("telegram adapter configuration is incomplete")
+	}
+	executionStore, err := swarmdriver.InitTelegramExecutionStore(ctx, db)
+	if err != nil {
+		return nil, fmt.Errorf("open telegram execution store: %w", err)
+	}
+	resolver, err := a2adelivery.NewTargetAgentBotResolver(opts.TargetAgentMap)
+	if err != nil {
+		return nil, fmt.Errorf("invalid telegram adapter configuration")
+	}
+	adapter, err := swarmdriver.NewTelegramAdapter(swarmdriver.TelegramAdapterOptions{
+		SenderClient:        a2adelivery.NewSenderClient(opts.SenderBaseURL, strings.TrimSpace(os.Getenv(senderAuthKeyEnvName)), nil),
+		TargetAgentResolver: resolver,
+		Store:               executionStore,
+		TargetContext:       a2adelivery.TargetUserContext{DeliveryContextTo: opts.DeliveryContextTo},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("invalid telegram adapter configuration")
+	}
+	return adapter, nil
 }
 
 func writeEvent(w io.Writer, event swarmdriver.DaemonEvent, asJSON bool) error {

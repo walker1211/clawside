@@ -268,6 +268,10 @@ func TestTelegramOperatorLifecycleScripts(t *testing.T) {
 	} {
 		assertFileContains(t, "scripts/start_telegram_operator.sh", want)
 	}
+	startOperator := readTextFile(t, "scripts/start_telegram_operator.sh")
+	if strings.Contains(startOperator, "${OPENCLAW_ARGS[@]}") {
+		t.Fatalf("start_telegram_operator.sh must avoid empty array expansion under set -u")
+	}
 	for _, want := range []string{
 		"logs/telegram-operator.pid",
 		"logs/clawside-telegram-operator",
@@ -335,6 +339,13 @@ func TestSwarmDriverLifecycleScriptsAreOptInAndSafe(t *testing.T) {
 		t.Fatalf("expected stop.sh to stop swarm driver when pid file exists")
 	}
 
+	startSwarm := readTextFile(t, "scripts/start_swarmdriver.sh")
+	for _, want := range []string{"CLAWSIDE_SWARM_DRIVER_ADAPTER", "--telegram-agents", "CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL", "--sender-base-url", "CLAWSIDE_TARGET_AGENT_BOT_MAP", "--target-agent-map", "CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO", "--delivery-context-to"} {
+		if !strings.Contains(startSwarm, want) {
+			t.Fatalf("expected scripts/start_swarmdriver.sh to contain %q", want)
+		}
+	}
+
 	for _, script := range []string{"scripts/start_swarmdriver.sh", "scripts/stop_swarmdriver.sh"} {
 		content := readTextFile(t, script)
 		for _, want := range []string{"swarmdriver.pid", "clawside-swarmd", "ps -p \"$pid\" -o command="} {
@@ -342,7 +353,7 @@ func TestSwarmDriverLifecycleScriptsAreOptInAndSafe(t *testing.T) {
 				t.Fatalf("expected %s to contain %q", script, want)
 			}
 		}
-		for _, forbidden := range []string{"message/send", "message/stream", "--command", "--args", "--cwd", "--prompt", "--token", "--session", "--chat-id", "--sender-job-id"} {
+		for _, forbidden := range []string{"message/send", "message/stream", "--command", "--args", "--cwd", "--prompt", "--token", "--session", "--chat-id", "--sender-job-id", "--sender-auth-key"} {
 			if strings.Contains(content, forbidden) {
 				t.Fatalf("%s must not contain forbidden %q", script, forbidden)
 			}
@@ -383,6 +394,10 @@ func TestSwarmDriverEnvWhitelist(t *testing.T) {
 		"CLAWSIDE_SWARM_DRIVER_MAX_ROUNDS_PER_TICK",
 		"CLAWSIDE_SWARM_DRIVER_STALL_ROUNDS",
 		"CLAWSIDE_SWARM_DRIVER_FAKE_AGENTS",
+		"CLAWSIDE_SWARM_DRIVER_ADAPTER",
+		"CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL",
+		"CLAWSIDE_TARGET_AGENT_BOT_MAP",
+		"CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO",
 		"CLAWSIDE_SWARM_DRIVER_JSON",
 	} {
 		if !strings.Contains(loadEnv, key) {

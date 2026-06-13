@@ -174,6 +174,10 @@ func runDaemonAvailableWork(ctx context.Context, svc *orchestrator.Service, opts
 		if err != nil {
 			return DaemonEvent{Status: DaemonStatusError, WorkflowID: item.Workflow.ID, HandoffID: item.Handoff.ID, Reason: "adapter failure"}, nil
 		}
+		if result.Status == AdapterStatusPending {
+			event = DaemonEvent{Status: DaemonStatusIdle, Reason: "waiting for adapter result", WorkflowID: item.Workflow.ID, HandoffID: item.Handoff.ID}
+			continue
+		}
 		if result.Status == AdapterStatusFailed {
 			_, err := svc.ApplyProtocolAction(ctx, orchestrator.ProtocolRequest{Action: orchestrator.ProtocolActionFail, WorkflowID: item.Workflow.ID, HandoffID: item.Handoff.ID, Actor: item.Handoff.ReceiverActor})
 			if err != nil {
@@ -192,7 +196,7 @@ func runDaemonAvailableWork(ctx context.Context, svc *orchestrator.Service, opts
 			progressed = true
 		}
 	}
-	if !progressed && len(next) > 0 {
+	if !progressed && len(next) > 0 && event.WorkflowID == "" {
 		event.Reason = "no executable work for configured agents"
 	}
 	if event.WorkflowID != "" {

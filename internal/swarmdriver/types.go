@@ -84,14 +84,18 @@ type AgentAdapter interface {
 }
 
 type WorkSummary struct {
-	WorkflowID  string                    `json:"workflow_id"`
-	HandoffID   string                    `json:"handoff_id"`
-	AgentID     string                    `json:"agent_id"`
-	State       orchestrator.HandoffState `json:"state"`
-	TaskKind    orchestrator.TaskKind     `json:"task_kind"`
-	ProjectRef  string                    `json:"project_ref,omitempty"`
-	NeedsReview bool                      `json:"needs_review,omitempty"`
-	ReviewerID  string                    `json:"reviewer_id,omitempty"`
+	WorkflowID                    string                    `json:"workflow_id"`
+	HandoffID                     string                    `json:"handoff_id"`
+	AgentID                       string                    `json:"agent_id"`
+	State                         orchestrator.HandoffState `json:"state"`
+	TaskKind                      orchestrator.TaskKind     `json:"task_kind"`
+	Intent                        string                    `json:"intent,omitempty"`
+	PayloadRef                    string                    `json:"payload_ref,omitempty"`
+	ProjectRef                    string                    `json:"project_ref,omitempty"`
+	RequiredForWorkflowCompletion bool                      `json:"required_for_workflow_completion,omitempty"`
+	ArtifactMinCount              int                       `json:"artifact_min_count,omitempty"`
+	NeedsReview                   bool                      `json:"needs_review,omitempty"`
+	ReviewerID                    string                    `json:"reviewer_id,omitempty"`
 }
 
 type AdapterStatus string
@@ -99,6 +103,7 @@ type AdapterStatus string
 const (
 	AdapterStatusCompleted AdapterStatus = "completed"
 	AdapterStatusFailed    AdapterStatus = "failed"
+	AdapterStatusPending   AdapterStatus = "pending"
 )
 
 type AdapterResult struct {

@@ -80,6 +80,9 @@ func Run(ctx context.Context, svc *orchestrator.Service, opts Options) (RunSumma
 				continue
 			}
 			failures.reset(agent.ID)
+			if result.Status == AdapterStatusPending {
+				continue
+			}
 			if result.Status == AdapterStatusFailed {
 				_, err := svc.ApplyProtocolAction(ctx, orchestrator.ProtocolRequest{Action: orchestrator.ProtocolActionFail, WorkflowID: item.Workflow.ID, HandoffID: item.Handoff.ID, Actor: item.Handoff.ReceiverActor})
 				if err != nil {

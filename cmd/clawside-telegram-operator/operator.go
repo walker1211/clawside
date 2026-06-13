@@ -2,17 +2,24 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/walker1211/clawside/internal/orchestrator"
+	"github.com/walker1211/clawside/internal/swarmdriver"
 	"github.com/walker1211/clawside/internal/toolserver"
 )
 
 type operator struct {
-	handlers           *toolserver.Handlers
-	inboundAgentBridge telegramInboundAgentBridge
+	handlers            *toolserver.Handlers
+	inboundAgentBridge  telegramInboundAgentBridge
+	executionResultSink telegramExecutionResultSink
+}
+
+type telegramExecutionResultSink interface {
+	SaveExecutionResult(ctx context.Context, result swarmdriver.ExecutionResult) error
 }
 
 type telegramInboundAgentBridge interface {
@@ -112,6 +119,10 @@ func processTelegramUpdate(ctx context.Context, cfg operatorConfig, client teleg
 	}
 	replyTo := message.MessageID
 	if !strings.HasPrefix(text, "/") {
+		if responseText, ok := op.handleExecutionResult(ctx, text); ok {
+			_ = client.sendMessage(ctx, cfg.Token, telegramSendMessageRequest{ChatID: message.Chat.ID, Text: responseText, ReplyToMessageID: &replyTo})
+			return
+		}
 		responseText, ok := op.handleInboundAgentText(ctx, cfg, text, *message)
 		if !ok {
 			return
@@ -125,6 +136,40 @@ func processTelegramUpdate(ctx context.Context, cfg operatorConfig, client teleg
 		responseText = op.handleCommand(ctx, cmd, *message.From)
 	}
 	_ = client.sendMessage(ctx, cfg.Token, telegramSendMessageRequest{ChatID: message.Chat.ID, Text: responseText, ReplyToMessageID: &replyTo})
+}
+
+func (o *operator) handleExecutionResult(ctx context.Context, text string) (string, bool) {
+	trimmed := strings.TrimSpace(text)
+	if !strings.Contains(trimmed, "clawside.result") {
+		return "", false
+	}
+	var envelope struct {
+		Type           string                      `json:"type"`
+		CorrelationID  string                      `json:"correlation_id"`
+		Status         string                      `json:"status"`
+		Summary        string                      `json:"summary"`
+		ArtifactCount  int                         `json:"artifact_count"`
+		ReviewDecision orchestrator.ReviewDecision `json:"review_decision"`
+	}
+	if err := json.Unmarshal([]byte(trimmed), &envelope); err != nil {
+		return "invalid execution result", true
+	}
+	if envelope.Type != "clawside.result" {
+		return "", false
+	}
+	if o.executionResultSink == nil {
+		return "invalid execution result", true
+	}
+	if err := o.executionResultSink.SaveExecutionResult(ctx, swarmdriver.ExecutionResult{
+		CorrelationID:  envelope.CorrelationID,
+		Status:         swarmdriver.AdapterStatus(envelope.Status),
+		Summary:        envelope.Summary,
+		ArtifactCount:  envelope.ArtifactCount,
+		ReviewDecision: envelope.ReviewDecision,
+	}); err != nil {
+		return "invalid execution result", true
+	}
+	return "execution result recorded", true
 }
 
 func (o *operator) handleInboundAgentText(ctx context.Context, cfg operatorConfig, text string, message telegramMessage) (string, bool) {

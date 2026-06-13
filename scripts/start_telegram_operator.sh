@@ -182,8 +182,8 @@ fi
 if [[ -n "$OPENCLAW_COMMAND" ]]; then
   COMMAND+=(--openclaw-command "$OPENCLAW_COMMAND")
 fi
-for openclaw_arg in "${OPENCLAW_ARGS[@]}"; do
-  COMMAND+=(--openclaw-arg "$openclaw_arg")
+for ((i = 0; i < ${#OPENCLAW_ARGS[@]}; i++)); do
+  COMMAND+=(--openclaw-arg "${OPENCLAW_ARGS[$i]}")
 done
 if [[ -n "$AGENT_TIMEOUT" ]]; then
   COMMAND+=(--agent-timeout "$AGENT_TIMEOUT")
