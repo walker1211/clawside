@@ -34,7 +34,7 @@ Clawside 是 durable coordination bridge，不是 swarm runtime。Clawside 不�
 | --- | --- | --- |
 | 本地 operator | 运行本地 sender、MCP server、smoke checks、release evidence 和 diagnostics。 | `./start.sh`、`./scripts/start_mcp.sh`、`./scripts/verify_openclaw_mcp.sh` |
 | 外部 A2A client | 发现 Agent Card，创建/查询/取消受控 task，并订阅只读 task events。 | `cmd/clawside-a2a`、`cmd/clawside-a2a-example`、`./scripts/verify_clawside_a2a.sh` |
-| Swarm/runtime integrator | 注册 agents，查询 `next_work` / `blocked_work`，推进 handoff，并消费 dependency/reviewer gates。 | MCP tools、`./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke` |
+| Swarm/runtime integrator | 注册 agents，查询 `next_work` / `blocked_work`，推进 handoff，并消费 dependency/reviewer gates。 | MCP tools、`cmd/clawside-swarmd`、`cmd/clawside-swarm-runner`、`./scripts/verify_openclaw_mcp.sh --collaboration-template-smoke` |
 
 该运行哪个 verifier？
 
@@ -160,6 +160,33 @@ go run ./cmd/clawside-external-runtime-sample --db ./sender.db
 ```
 
 安全边界：the sample does not launch model workers, does not start runtime sessions, does not start sandboxes, does not trigger sender or Telegram delivery, and does not accept arbitrary command/args/cwd/local path/private prompt/token/session/worker launch fields.
+
+#### Managed reference swarm driver
+
+`cmd/clawside-swarmd` 是被产品生命周期管理的 truth-plane-only swarm loop。它可以在 sender ready 之后由日常 `./start.sh` 启动，轮询已有 `next_work` / `blocked_work`，用已配置的 fake agents 通过 protocol actions 推进 handoff，并输出 compact sanitized events。默认不会创建 workflow。
+
+```bash
+./build.sh
+CLAWSIDE_SWARM_DRIVER_ENABLED=true ./start.sh
+./restart.sh
+./stop.sh
+```
+
+如需让 daemon 显式创建并推进一个 template workflow，必须额外开启：
+
+```bash
+CLAWSIDE_SWARM_DRIVER_ENABLED=true \
+CLAWSIDE_SWARM_DRIVER_CREATE_TEMPLATE=true \
+./start.sh
+```
+
+如果只想一次性跑 reference loop，可以使用：
+
+```bash
+go run ./cmd/clawside-swarm-runner --db ./sender.db --template upstream_downstream_review --fake-agents --json
+```
+
+Managed daemon 和 one-shot runner 都不是 model runtime。它们不启动 OpenClaw、Claude、Kimi、worker、runtime session 或 sandbox；不执行任意 command/args/cwd；不接收 private prompt/token/session/stdout/stderr/chat/sender job 字段；也不调用 message delivery、sender delivery、Telegram delivery、`message/send` 或 `message/stream`。
 
 #### Real OpenClaw trajectory external runtime evidence dogfood validation
 

@@ -3,6 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PID_FILE="$ROOT_DIR/logs/sender.pid"
+SWARMDRIVER_PID_FILE="$ROOT_DIR/logs/swarmdriver.pid"
 BINARY_PATH="$ROOT_DIR/clawside"
 
 process_matches_sender() {
@@ -11,6 +12,10 @@ process_matches_sender() {
   command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
   [[ "$command" == "$BINARY_PATH"* ]]
 }
+
+if [[ -f "$SWARMDRIVER_PID_FILE" ]]; then
+  ./scripts/stop_swarmdriver.sh
+fi
 
 if [[ ! -f "$PID_FILE" ]]; then
   printf 'clawside sender is not running\n'

@@ -74,5 +74,9 @@ if ! wait_for_sender_ready "$NEW_PID"; then
   exit 1
 fi
 
+if [[ "${CLAWSIDE_SWARM_DRIVER_ENABLED:-false}" == "true" ]]; then
+  ./scripts/start_swarmdriver.sh
+fi
+
 printf 'clawside sender started (PID: %s)\n' "$NEW_PID"
 printf 'Logs: %s\n' "$LOG_FILE"

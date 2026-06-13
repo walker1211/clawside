@@ -33,6 +33,45 @@ type Options struct {
 	GlobalAdapterFailLimit   int
 }
 
+type DaemonStatus string
+
+const (
+	DaemonStatusIdle      DaemonStatus = "idle"
+	DaemonStatusProgress  DaemonStatus = "progress"
+	DaemonStatusCompleted DaemonStatus = "completed"
+	DaemonStatusFailed    DaemonStatus = "failed"
+	DaemonStatusError     DaemonStatus = "error"
+)
+
+type DaemonOptions struct {
+	TemplateName     string
+	WorkflowKind     string
+	WorkflowIDs      []string
+	Intent           string
+	Agents           []AgentSpec
+	Adapter          AgentAdapter
+	CreateTemplate   bool
+	RegisterAgents   bool
+	MaxRoundsPerTick int
+	StallRounds      int
+	WorkLimit        int
+	PollInterval     time.Duration
+	IdleInterval     time.Duration
+}
+
+type DaemonEvent struct {
+	Status                DaemonStatus `json:"status"`
+	Reason                string       `json:"reason,omitempty"`
+	WorkflowID            string       `json:"workflow_id,omitempty"`
+	HandoffID             string       `json:"handoff_id,omitempty"`
+	RoundCount            int          `json:"round_count,omitempty"`
+	CompletedHandoffCount int          `json:"completed_handoff_count,omitempty"`
+	BlockedReasons        []string     `json:"blocked_reasons,omitempty"`
+	LastAction            string       `json:"last_action,omitempty"`
+	EvidenceSummaryReady  bool         `json:"evidence_summary_ready,omitempty"`
+	TickCount             int          `json:"tick_count,omitempty"`
+}
+
 type AgentSpec struct {
 	ID           string
 	Capabilities []string
