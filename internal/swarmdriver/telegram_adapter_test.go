@@ -50,6 +50,11 @@ func TestTelegramAdapterSendsStartedWorkAndReturnsPending(t *testing.T) {
 	if !strings.Contains(request.Text, "clawside.result") || !strings.Contains(request.Text, request.IdempotencyKey) {
 		t.Fatalf("expected task text to include result schema and correlation/idempotency key, got %q", request.Text)
 	}
+	for _, want := range []string{"clawside swarm task", "Reply with exactly one JSON object", "safe summary"} {
+		if !strings.Contains(request.Text, want) {
+			t.Fatalf("expected task text to include instruction %q, got %q", want, request.Text)
+		}
+	}
 	assertNoForbiddenTelegramAdapterStrings(t, request.Text)
 
 	row, ok, err := store.GetExecutionByWorkPhase(ctx, "wf_1", "hf_1", "engineer", "execute")

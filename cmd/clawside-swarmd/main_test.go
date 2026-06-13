@@ -157,10 +157,17 @@ func TestRunTelegramModeSendsAndConsumesStoredResult(t *testing.T) {
 			t.Fatalf("unexpected sender payload: %+v", payload)
 		}
 		assertSwarmdOutputSafe(t, payload.Text)
+		taskText := payload.Text
+		if start := strings.Index(taskText, "Task JSON:\n"); start >= 0 {
+			taskText = taskText[start+len("Task JSON:\n"):]
+			if end := strings.Index(taskText, "\n\nAfter completing the task"); end >= 0 {
+				taskText = taskText[:end]
+			}
+		}
 		var task struct {
 			CorrelationID string `json:"correlation_id"`
 		}
-		if err := json.Unmarshal([]byte(payload.Text), &task); err != nil {
+		if err := json.Unmarshal([]byte(taskText), &task); err != nil {
 			t.Fatalf("decode task text: %v", err)
 		}
 		if task.CorrelationID == "" {

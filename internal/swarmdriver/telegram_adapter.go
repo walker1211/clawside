@@ -201,5 +201,5 @@ func formatTelegramTaskMessage(work WorkSummary, targetAgent string, phase strin
 	if err != nil {
 		return "", fmt.Errorf("format telegram task message: %w", err)
 	}
-	return string(encoded), nil
+	return fmt.Sprintf("clawside swarm task\n\nTask JSON:\n%s\n\nAfter completing the task, Reply with exactly one JSON object matching reply_schema. Use a safe summary and keep correlation_id unchanged.", string(encoded)), nil
 }
