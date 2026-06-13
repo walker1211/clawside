@@ -50,10 +50,13 @@ func TestTelegramAdapterSendsStartedWorkAndReturnsPending(t *testing.T) {
 	if !strings.Contains(request.Text, "clawside.result") || !strings.Contains(request.Text, request.IdempotencyKey) {
 		t.Fatalf("expected task text to include result schema and correlation/idempotency key, got %q", request.Text)
 	}
-	for _, want := range []string{"clawside swarm task", "Reply with exactly one JSON object", "safe summary"} {
+	for _, want := range []string{"clawside swarm task", "swarm_execution_result_record", "safe summary", "correlation_id unchanged"} {
 		if !strings.Contains(request.Text, want) {
 			t.Fatalf("expected task text to include instruction %q, got %q", want, request.Text)
 		}
+	}
+	if strings.Contains(request.Text, "Reply with exactly one JSON object") {
+		t.Fatalf("expected task text to prefer MCP result callback instead of Telegram JSON reply: %q", request.Text)
 	}
 	assertNoForbiddenTelegramAdapterStrings(t, request.Text)
 

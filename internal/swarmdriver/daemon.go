@@ -189,7 +189,8 @@ func runDaemonAvailableWork(ctx context.Context, svc *orchestrator.Service, opts
 		}
 		lastAction, didProgress, err := progressWork(ctx, svc, agent, item, result)
 		if err != nil {
-			return DaemonEvent{}, fmt.Errorf("progress handoff: %w", err)
+			event = DaemonEvent{Status: DaemonStatusError, Reason: "protocol progress failed", WorkflowID: item.Workflow.ID, HandoffID: item.Handoff.ID}
+			continue
 		}
 		if didProgress {
 			event = DaemonEvent{Status: DaemonStatusProgress, Reason: "progressed handoff", WorkflowID: item.Workflow.ID, HandoffID: item.Handoff.ID, LastAction: lastAction}

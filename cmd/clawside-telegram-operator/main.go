@@ -83,12 +83,11 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	svc := orchestrator.NewService(store, nil)
 	handlers := toolserver.NewHandlers(svc, store, nil)
-	op := &operator{handlers: handlers, inboundAgentBridge: newOpenClawTelegramInboundAgentBridge(opts), executionResultSink: executionStore}
+	op := &operator{handlers: handlers, inboundAgentBridge: newOpenClawTelegramInboundAgentBridge(opts), executionResultSink: executionStore, logWriter: stderr}
 	client := newTelegramClient(opts.TelegramBaseURL, nil)
 	if _, err := fmt.Fprintf(stdout, "clawside Telegram operator polling with bot %s\n", cfg.BotName); err != nil {
 		return err
 	}
-	_ = stderr
 	return runOperatorLoopFunc(ctx, cfg, client, op, opts.PollTimeout)
 }
 
