@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/signal"
 	"strconv"
@@ -28,6 +29,7 @@ const (
 	targetAgentBotMapEnvName               = "CLAWSIDE_TARGET_AGENT_BOT_MAP"
 	swarmDriverDeliveryContextToEnvName    = "CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO"
 	swarmDriverObserverPrivateNotesEnvName = "CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES"
+	swarmDriverLogIdleEventsEnvName        = "CLAWSIDE_SWARM_DRIVER_LOG_IDLE_EVENTS"
 )
 
 type options struct {
@@ -43,6 +45,7 @@ type options struct {
 	TargetAgentMap       string
 	DeliveryContextTo    *int64
 	ObserverPrivateNotes bool
+	LogIdleEvents        bool
 	PollInterval         time.Duration
 	IdleInterval         time.Duration
 	MaxRoundsPerTick     int
@@ -70,6 +73,9 @@ func runWithContext(ctx context.Context, args []string, stdout, stderr io.Writer
 	if isHelpRequest(args) {
 		return printUsage(stdout)
 	}
+	if isStatusRequest(args) {
+		return runStatus(args[1:], stdout, stderr)
+	}
 	opts, err := resolveOptions(args)
 	if err != nil {
 		return err
@@ -82,11 +88,18 @@ func isHelpRequest(args []string) bool {
 	return len(args) == 1 && (args[0] == "help" || args[0] == "--help" || args[0] == "-h")
 }
 
+func isStatusRequest(args []string) bool {
+	return len(args) > 0 && args[0] == "status"
+}
+
 func printUsage(w io.Writer) error {
 	_, err := fmt.Fprint(w, `usage: clawside-swarmd [options]
 
 Run the managed truth-plane swarm daemon. This is not a model runtime,
 does not launch workers, and Telegram-backed execution is explicit opt-in.
+
+Commands:
+  status --db PATH           Print a low-noise truth-plane swarm status summary
 
 Options:
   --db PATH                  SQLite truth-plane DB path
@@ -101,6 +114,7 @@ Options:
   --target-agent-map MAP     Comma-separated target_agent=bot mappings
   --delivery-context-to ID   Delivery context target for Telegram adapter mode
   --observer-private-notes   Ask external agents to send private observer notes directly to the user
+  --log-idle-events          Emit idle events; disabled by default to keep daemon logs quiet
   --poll-interval DURATION   Delay after a progress event
   --idle-interval DURATION   Delay after an idle event
   --max-rounds-per-tick N    Maximum one-shot rounds per workflow tick
@@ -110,6 +124,115 @@ Options:
   help, --help, -h           Show this help.
 `)
 	return err
+}
+
+func runStatus(args []string, stdout, stderr io.Writer) error {
+	_ = stderr
+	fs := flag.NewFlagSet("clawside-swarmd status", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	var dbPath string
+	var workflowID string
+	fs.StringVar(&dbPath, "db", "", "sqlite db path")
+	fs.StringVar(&workflowID, "workflow-id", "", "workflow id filter")
+	if err := fs.Parse(args); err != nil {
+		return fmt.Errorf("invalid status options")
+	}
+	if fs.NArg() != 0 {
+		return fmt.Errorf("invalid status options")
+	}
+	dbPath = strings.TrimSpace(dbPath)
+	workflowID = strings.TrimSpace(workflowID)
+	if dbPath == "" {
+		return fmt.Errorf("db is required")
+	}
+
+	db, err := sql.Open("sqlite", readOnlySQLiteDSN(dbPath))
+	if err != nil {
+		return fmt.Errorf("open database: %w", err)
+	}
+	defer db.Close()
+	store, err := orchestrator.NewReadOnlyStore(context.Background(), db)
+	if err != nil {
+		return fmt.Errorf("open truth plane: %w", err)
+	}
+	service := orchestrator.NewService(store, nil)
+	var workflows []orchestrator.Workflow
+	if workflowID != "" {
+		workflow, err := store.LoadWorkflow(context.Background(), workflowID)
+		if err != nil {
+			return err
+		}
+		workflows = []orchestrator.Workflow{workflow}
+	} else {
+		workflows, err = store.ListWorkflows(context.Background())
+		if err != nil {
+			return err
+		}
+	}
+	nextWork, err := service.NextWork(context.Background(), orchestrator.WorkQuery{WorkflowID: workflowID})
+	if err != nil {
+		return err
+	}
+	blockedWork, err := service.BlockedWork(context.Background(), orchestrator.WorkQuery{WorkflowID: workflowID})
+	if err != nil {
+		return err
+	}
+	blockedByHandoff := make(map[string][]string, len(blockedWork))
+	for _, item := range blockedWork {
+		for _, reason := range item.Reasons {
+			blockedByHandoff[item.Handoff.ID] = append(blockedByHandoff[item.Handoff.ID], reason.Code)
+		}
+	}
+
+	if _, err := fmt.Fprintln(stdout, "Clawside swarm status"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "Workflows: %d\n", len(workflows)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "Next work: %d\n", len(nextWork)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "Blocked: %d\n", len(blockedWork)); err != nil {
+		return err
+	}
+	for _, workflow := range workflows {
+		handoffs, err := store.ListWorkflowHandoffs(context.Background(), workflow.ID)
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(stdout, "Workflow %s kind=%s status=%s handoffs=%d\n", workflow.ID, workflow.Kind, workflow.Status, len(handoffs)); err != nil {
+			return err
+		}
+		for _, handoff := range handoffs {
+			blocked := "-"
+			if reasons := blockedByHandoff[handoff.ID]; len(reasons) > 0 {
+				blocked = strings.Join(reasons, ",")
+			}
+			if _, err := fmt.Fprintf(stdout, "  Handoff %s state=%s receiver=%s task=%s blocked=%s\n", handoff.ID, handoff.State, actorRefLabel(handoff.ReceiverActor), handoff.TaskKind, blocked); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func actorRefLabel(actor orchestrator.ActorRef) string {
+	if actor.Type == "" {
+		return actor.ID
+	}
+	if actor.ID == "" {
+		return string(actor.Type)
+	}
+	return string(actor.Type) + ":" + actor.ID
+}
+
+func readOnlySQLiteDSN(path string) string {
+	dsn := url.URL{Scheme: "file", Path: path}
+	query := dsn.Query()
+	query.Set("mode", "ro")
+	dsn.RawQuery = query.Encode()
+	return dsn.String()
 }
 
 func resolveOptions(args []string) (options, error) {
@@ -123,6 +246,11 @@ func resolveOptions(args []string) (options, error) {
 		return options{}, err
 	}
 	opts.ObserverPrivateNotes = observerPrivateNotes
+	logIdleEvents, err := envBool(swarmDriverLogIdleEventsEnvName)
+	if err != nil {
+		return options{}, err
+	}
+	opts.LogIdleEvents = logIdleEvents
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(swarmDriverAdapterEnvName))) {
 	case "":
 	case "fake", "reference":
@@ -147,6 +275,7 @@ func resolveOptions(args []string) (options, error) {
 	fs.StringVar(&opts.TargetAgentMap, "target-agent-map", opts.TargetAgentMap, "")
 	fs.StringVar(&deliveryContextToRaw, "delivery-context-to", deliveryContextToRaw, "")
 	fs.BoolVar(&opts.ObserverPrivateNotes, "observer-private-notes", opts.ObserverPrivateNotes, "")
+	fs.BoolVar(&opts.LogIdleEvents, "log-idle-events", opts.LogIdleEvents, "")
 	fs.DurationVar(&opts.PollInterval, "poll-interval", 0, "")
 	fs.DurationVar(&opts.IdleInterval, "idle-interval", 0, "")
 	fs.IntVar(&opts.MaxRoundsPerTick, "max-rounds-per-tick", 0, "")
@@ -224,7 +353,7 @@ func runDaemon(ctx context.Context, opts options, stdout io.Writer) error {
 		PollInterval:     opts.PollInterval,
 		IdleInterval:     opts.IdleInterval,
 	}, func(event swarmdriver.DaemonEvent) {
-		if writeErr != nil {
+		if writeErr != nil || (!opts.LogIdleEvents && event.Status == swarmdriver.DaemonStatusIdle) {
 			return
 		}
 		writeErr = writeEvent(stdout, event, opts.JSON)

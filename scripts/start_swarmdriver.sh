@@ -24,6 +24,7 @@ Environment:
   CLAWSIDE_TARGET_AGENT_BOT_MAP
   CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO
   CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES
+  CLAWSIDE_SWARM_DRIVER_LOG_IDLE_EVENTS
   CLAWSIDE_SWARM_DRIVER_JSON
 USAGE
   exit 0
@@ -111,6 +112,10 @@ fi
 
 if [[ "${CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES:-false}" == "true" ]]; then
   set -- "$@" --observer-private-notes
+fi
+
+if [[ "${CLAWSIDE_SWARM_DRIVER_LOG_IDLE_EVENTS:-false}" == "true" ]]; then
+  set -- "$@" --log-idle-events
 fi
 
 if [[ "${CLAWSIDE_SWARM_DRIVER_CREATE_TEMPLATE:-false}" == "true" ]]; then

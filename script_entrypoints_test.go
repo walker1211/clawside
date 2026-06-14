@@ -349,7 +349,7 @@ func TestSwarmDriverLifecycleScriptsAreOptInAndSafe(t *testing.T) {
 	}
 
 	startSwarm := readTextFile(t, "scripts/start_swarmdriver.sh")
-	for _, want := range []string{"CLAWSIDE_SWARM_DRIVER_ADAPTER", "--telegram-agents", "CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL", "--sender-base-url", "CLAWSIDE_TARGET_AGENT_BOT_MAP", "--target-agent-map", "CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO", "--delivery-context-to", "CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES", "--observer-private-notes"} {
+	for _, want := range []string{"CLAWSIDE_SWARM_DRIVER_ADAPTER", "--telegram-agents", "CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL", "--sender-base-url", "CLAWSIDE_TARGET_AGENT_BOT_MAP", "--target-agent-map", "CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO", "--delivery-context-to", "CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES", "--observer-private-notes", "CLAWSIDE_SWARM_DRIVER_LOG_IDLE_EVENTS", "--log-idle-events"} {
 		if !strings.Contains(startSwarm, want) {
 			t.Fatalf("expected scripts/start_swarmdriver.sh to contain %q", want)
 		}
@@ -408,6 +408,7 @@ func TestSwarmDriverEnvWhitelist(t *testing.T) {
 		"CLAWSIDE_TARGET_AGENT_BOT_MAP",
 		"CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO",
 		"CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES",
+		"CLAWSIDE_SWARM_DRIVER_LOG_IDLE_EVENTS",
 		"CLAWSIDE_SWARM_DRIVER_JSON",
 	} {
 		if !strings.Contains(loadEnv, key) {

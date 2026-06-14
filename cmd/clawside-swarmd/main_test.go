@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -37,6 +38,7 @@ func TestRunHelpDoesNotRequireDatabase(t *testing.T) {
 				"--target-agent-map",
 				"--delivery-context-to",
 				"--observer-private-notes",
+				"--log-idle-events",
 				"truth-plane swarm daemon",
 				"not a model runtime",
 				"does not launch workers",
@@ -50,6 +52,48 @@ func TestRunHelpDoesNotRequireDatabase(t *testing.T) {
 				t.Fatalf("expected help stderr to be empty, got %q", stderr.String())
 			}
 		})
+	}
+}
+
+func TestRunStatusPrintsHumanReadableSummary(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "truth.db")
+	created := createDaemonHandoff(t, dbPath)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := run([]string{"status", "--db", dbPath}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("run status: %v", err)
+	}
+	output := stdout.String()
+	for _, want := range []string{
+		"Clawside swarm status",
+		"Workflows: 1",
+		"Next work: 1",
+		"Blocked: 1",
+		"Workflow " + created.Workflow.ID,
+		"Handoff " + created.Handoff.ID,
+		"state=created",
+		"blocked=owner_unavailable",
+	} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("expected status output to contain %q, got:\n%s", want, output)
+		}
+	}
+	assertSwarmdOutputSafe(t, output+stderr.String())
+}
+
+func TestRunStatusDoesNotCreateMissingDatabase(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "missing.db")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+
+	err := run([]string{"status", "--db", dbPath}, &stdout, &stderr)
+	if err == nil {
+		t.Fatalf("expected missing database error")
+	}
+	if _, statErr := os.Stat(dbPath); !os.IsNotExist(statErr) {
+		t.Fatalf("status must not create missing database, stat error=%v", statErr)
 	}
 }
 
@@ -273,9 +317,9 @@ func TestRunTelegramModeCanRequestObserverPrivateNotes(t *testing.T) {
 	assertSwarmdOutputSafe(t, stdout.String()+stderr.String()+senderText)
 }
 
-func TestRunIdlesWithoutCreatingWorkflowByDefault(t *testing.T) {
+func TestRunSuppressesIdleEventsByDefault(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "truth.db")
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -283,9 +327,8 @@ func TestRunIdlesWithoutCreatingWorkflowByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("daemon failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
 	}
-	events := decodeDaemonEvents(t, stdout.String())
-	if len(events) == 0 || events[0].Status != swarmdriver.DaemonStatusIdle {
-		t.Fatalf("expected idle JSON event, got %+v", events)
+	if stdout.String() != "" {
+		t.Fatalf("expected idle events to be suppressed by default, got %q", stdout.String())
 	}
 	store := openDaemonStore(t, dbPath)
 	workflows, err := store.ListWorkflows(context.Background())
@@ -294,6 +337,22 @@ func TestRunIdlesWithoutCreatingWorkflowByDefault(t *testing.T) {
 	}
 	if len(workflows) != 0 {
 		t.Fatalf("expected no default workflow creation, got %+v", workflows)
+	}
+}
+
+func TestRunCanLogIdleEventsWhenExplicitlyEnabled(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "truth.db")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	err := runWithContext(ctx, []string{"--db", dbPath, "--fake-agents", "--json", "--log-idle-events", "--idle-interval", "1ms", "--poll-interval", "1ms"}, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("daemon failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	events := decodeDaemonEvents(t, stdout.String())
+	if len(events) == 0 || events[0].Status != swarmdriver.DaemonStatusIdle {
+		t.Fatalf("expected idle JSON event, got %+v", events)
 	}
 }
 
