@@ -123,6 +123,7 @@ var expectedV1Tools = []string{
 	"sender_stats",
 	"sender_job_list",
 	"sender_job_get",
+	"swarm_execution_result_record",
 	"a2a_agent_turn",
 	"a2a_agent_turn_start",
 	"a2a_agent_turn_result",
