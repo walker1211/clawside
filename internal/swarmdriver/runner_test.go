@@ -207,7 +207,7 @@ func TestDaemonReportsWaitingWhenAdapterResultPending(t *testing.T) {
 	}
 }
 
-func TestDaemonTickReportsProgressErrorEventForIncompatibleAvailableWork(t *testing.T) {
+func TestDaemonTickSkipsUndispatchedDeliveryTargetWork(t *testing.T) {
 	svc, _ := newTestService(t)
 	ctx := context.Background()
 	created, err := svc.CreateHandoff(ctx, orchestrator.CreateHandoffInput{
@@ -233,8 +233,8 @@ func TestDaemonTickReportsProgressErrorEventForIncompatibleAvailableWork(t *test
 	if err != nil {
 		t.Fatalf("RunDaemonTick: %v", err)
 	}
-	if event.Status != DaemonStatusError || event.Reason != "protocol progress failed" || event.WorkflowID != created.Workflow.ID || event.HandoffID != created.Handoff.ID {
-		t.Fatalf("expected safe protocol progress error event, got %+v", event)
+	if event.Status != DaemonStatusIdle || event.WorkflowID != "" || event.HandoffID != "" || event.LastAction != "" {
+		t.Fatalf("expected daemon to skip undispatched delivery-target work, got %+v", event)
 	}
 	view, err := svc.WorkflowStatus(ctx, created.Workflow.ID)
 	if err != nil {
@@ -550,6 +550,42 @@ func TestDaemonTickIdlesWithoutCreatingWorkflowByDefault(t *testing.T) {
 	}
 	if len(workflows) != 0 {
 		t.Fatalf("expected daemon tick not to create workflows by default, got %+v", workflows)
+	}
+}
+
+func TestDaemonTickOmitsGlobalIdleBlockedReasons(t *testing.T) {
+	svc, _ := newTestService(t)
+	ctx := context.Background()
+	for i := range 5 {
+		_, err := svc.CreateHandoff(ctx, orchestrator.CreateHandoffInput{
+			WorkflowKind:                  "swarm_daemon_blocked_reason_limit_test",
+			Sender:                        orchestrator.ActorRef{Type: orchestrator.ActorSystem, ID: "test"},
+			Receiver:                      orchestrator.ActorRef{Type: orchestrator.ActorAgent, ID: "planner"},
+			TaskKind:                      orchestrator.TaskGeneric,
+			Intent:                        "reviewer is required but missing",
+			NeedsReview:                   true,
+			RequiredForWorkflowCompletion: true,
+		})
+		if err != nil {
+			t.Fatalf("CreateHandoff(%d): %v", i, err)
+		}
+	}
+
+	event, err := RunDaemonTick(ctx, svc, DaemonOptions{
+		Agents:         DefaultFakeAgents(),
+		Adapter:        NewFakeAdapter(),
+		WorkLimit:      2,
+		StallRounds:    1,
+		RegisterAgents: true,
+	})
+	if err != nil {
+		t.Fatalf("RunDaemonTick: %v", err)
+	}
+	if event.Status != DaemonStatusIdle {
+		t.Fatalf("expected idle daemon event, got %+v", event)
+	}
+	if len(event.BlockedReasons) != 0 {
+		t.Fatalf("expected global idle daemon event to omit blocked reasons, got %+v", event.BlockedReasons)
 	}
 }
 

@@ -159,12 +159,8 @@ func runDaemonAvailableWork(ctx context.Context, svc *orchestrator.Service, opts
 	if err != nil {
 		return DaemonEvent{}, fmt.Errorf("next work: %w", err)
 	}
-	blocked, err := svc.BlockedWork(ctx, orchestrator.WorkQuery{})
-	if err != nil {
-		return DaemonEvent{}, fmt.Errorf("blocked work: %w", err)
-	}
 	progressed := false
-	event := DaemonEvent{Status: DaemonStatusIdle, Reason: "no executable work", BlockedReasons: blockedReasonsFromWork(blocked)}
+	event := DaemonEvent{Status: DaemonStatusIdle, Reason: "no executable work"}
 	for _, item := range next {
 		agent, ok := agentForWork(opts.Agents, item.Handoff)
 		if !ok {
@@ -248,16 +244,6 @@ func daemonEventFromSummary(summary RunSummary) DaemonEvent {
 		event.Status = DaemonStatusError
 	}
 	return event
-}
-
-func blockedReasonsFromWork(items []orchestrator.BlockedWorkItem) []string {
-	out := make([]string, 0)
-	for _, item := range items {
-		for _, reason := range item.Reasons {
-			out = append(out, item.Handoff.ID+":"+reason.Code)
-		}
-	}
-	return out
 }
 
 func waitDaemonInterval(ctx context.Context, interval time.Duration) error {

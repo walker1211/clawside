@@ -83,6 +83,34 @@ func TestTelegramAdapterSendsStartedWorkAndReturnsPending(t *testing.T) {
 	}
 }
 
+func TestTelegramAdapterObserverPrivateNotesInstructionIsOptIn(t *testing.T) {
+	work := startedTelegramWorkSummary()
+	withoutNotes, err := formatTelegramTaskMessage(work, "engineer", "execute", "corr_1", false)
+	if err != nil {
+		t.Fatalf("formatTelegramTaskMessage: %v", err)
+	}
+	if strings.Contains(strings.ToLower(withoutNotes), "observer private notes") {
+		t.Fatalf("expected observer private notes instruction to be opt-in, got %q", withoutNotes)
+	}
+
+	withNotes, err := formatTelegramTaskMessage(work, "engineer", "execute", "corr_1", true)
+	if err != nil {
+		t.Fatalf("formatTelegramTaskMessage: %v", err)
+	}
+	for _, want := range []string{
+		"observer private notes",
+		"public speech, actions, votes, and stage results to the coordinator/main agent",
+		"send each participant's private observer note directly to the user/observer",
+		"Do not include observer private notes in swarm_execution_result_record",
+		"Werewolf-style games",
+	} {
+		if !strings.Contains(withNotes, want) {
+			t.Fatalf("expected observer private notes instruction %q, got %q", want, withNotes)
+		}
+	}
+	assertNoForbiddenTelegramAdapterStrings(t, withNotes)
+}
+
 func TestTelegramAdapterReturnsSavedExecutionResultWithoutDelivery(t *testing.T) {
 	ctx := context.Background()
 	store := newTestExecutionStore(t)

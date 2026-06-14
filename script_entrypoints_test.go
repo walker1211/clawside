@@ -278,9 +278,12 @@ func TestTelegramOperatorLifecycleScripts(t *testing.T) {
 	if strings.Contains(startOperator, "${OPENCLAW_ARGS[@]}") {
 		t.Fatalf("start_telegram_operator.sh must avoid empty array expansion under set -u")
 	}
+	if strings.Contains(startOperator, "logs/clawside-telegram-operator") {
+		t.Fatalf("start_telegram_operator.sh must not build binaries into logs")
+	}
 	for _, want := range []string{
 		"logs/telegram-operator.pid",
-		"logs/clawside-telegram-operator",
+		"build/clawside-telegram-operator",
 		"process_matches_telegram_operator",
 		"ps -p \"$pid\" -o command=",
 		"kill \"$PID\"",
@@ -346,7 +349,7 @@ func TestSwarmDriverLifecycleScriptsAreOptInAndSafe(t *testing.T) {
 	}
 
 	startSwarm := readTextFile(t, "scripts/start_swarmdriver.sh")
-	for _, want := range []string{"CLAWSIDE_SWARM_DRIVER_ADAPTER", "--telegram-agents", "CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL", "--sender-base-url", "CLAWSIDE_TARGET_AGENT_BOT_MAP", "--target-agent-map", "CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO", "--delivery-context-to"} {
+	for _, want := range []string{"CLAWSIDE_SWARM_DRIVER_ADAPTER", "--telegram-agents", "CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL", "--sender-base-url", "CLAWSIDE_TARGET_AGENT_BOT_MAP", "--target-agent-map", "CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO", "--delivery-context-to", "CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES", "--observer-private-notes"} {
 		if !strings.Contains(startSwarm, want) {
 			t.Fatalf("expected scripts/start_swarmdriver.sh to contain %q", want)
 		}
@@ -404,6 +407,7 @@ func TestSwarmDriverEnvWhitelist(t *testing.T) {
 		"CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL",
 		"CLAWSIDE_TARGET_AGENT_BOT_MAP",
 		"CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO",
+		"CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES",
 		"CLAWSIDE_SWARM_DRIVER_JSON",
 	} {
 		if !strings.Contains(loadEnv, key) {
