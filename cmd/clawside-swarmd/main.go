@@ -21,32 +21,34 @@ import (
 )
 
 const (
-	senderAuthKeyEnvName                = "SENDER_AUTH_KEY"
-	swarmDriverAdapterEnvName           = "CLAWSIDE_SWARM_DRIVER_ADAPTER"
-	swarmDriverSenderBaseURLEnvName     = "CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL"
-	fallbackSenderBaseURLEnvName        = "CLAWSIDE_SENDER_BASE_URL"
-	targetAgentBotMapEnvName            = "CLAWSIDE_TARGET_AGENT_BOT_MAP"
-	swarmDriverDeliveryContextToEnvName = "CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO"
+	senderAuthKeyEnvName                   = "SENDER_AUTH_KEY"
+	swarmDriverAdapterEnvName              = "CLAWSIDE_SWARM_DRIVER_ADAPTER"
+	swarmDriverSenderBaseURLEnvName        = "CLAWSIDE_SWARM_DRIVER_SENDER_BASE_URL"
+	fallbackSenderBaseURLEnvName           = "CLAWSIDE_SENDER_BASE_URL"
+	targetAgentBotMapEnvName               = "CLAWSIDE_TARGET_AGENT_BOT_MAP"
+	swarmDriverDeliveryContextToEnvName    = "CLAWSIDE_SWARM_DRIVER_DELIVERY_CONTEXT_TO"
+	swarmDriverObserverPrivateNotesEnvName = "CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES"
 )
 
 type options struct {
-	DBPath            string
-	WorkflowIDs       workflowIDFlags
-	CreateTemplate    bool
-	TemplateName      string
-	WorkflowKind      string
-	Intent            string
-	FakeAgents        bool
-	TelegramAgents    bool
-	SenderBaseURL     string
-	TargetAgentMap    string
-	DeliveryContextTo *int64
-	PollInterval      time.Duration
-	IdleInterval      time.Duration
-	MaxRoundsPerTick  int
-	StallRounds       int
-	WorkLimit         int
-	JSON              bool
+	DBPath               string
+	WorkflowIDs          workflowIDFlags
+	CreateTemplate       bool
+	TemplateName         string
+	WorkflowKind         string
+	Intent               string
+	FakeAgents           bool
+	TelegramAgents       bool
+	SenderBaseURL        string
+	TargetAgentMap       string
+	DeliveryContextTo    *int64
+	ObserverPrivateNotes bool
+	PollInterval         time.Duration
+	IdleInterval         time.Duration
+	MaxRoundsPerTick     int
+	StallRounds          int
+	WorkLimit            int
+	JSON                 bool
 }
 
 type workflowIDFlags []string
@@ -98,6 +100,7 @@ Options:
   --sender-base-url URL      Sender base URL for Telegram adapter mode
   --target-agent-map MAP     Comma-separated target_agent=bot mappings
   --delivery-context-to ID   Delivery context target for Telegram adapter mode
+  --observer-private-notes   Ask external agents to send private observer notes directly to the user
   --poll-interval DURATION   Delay after a progress event
   --idle-interval DURATION   Delay after an idle event
   --max-rounds-per-tick N    Maximum one-shot rounds per workflow tick
@@ -115,6 +118,11 @@ func resolveOptions(args []string) (options, error) {
 		SenderBaseURL:  envOrDefault(swarmDriverSenderBaseURLEnvName, os.Getenv(fallbackSenderBaseURLEnvName)),
 		TargetAgentMap: strings.TrimSpace(os.Getenv(targetAgentBotMapEnvName)),
 	}
+	observerPrivateNotes, err := envBool(swarmDriverObserverPrivateNotesEnvName)
+	if err != nil {
+		return options{}, err
+	}
+	opts.ObserverPrivateNotes = observerPrivateNotes
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(swarmDriverAdapterEnvName))) {
 	case "":
 	case "fake", "reference":
@@ -138,6 +146,7 @@ func resolveOptions(args []string) (options, error) {
 	fs.StringVar(&opts.SenderBaseURL, "sender-base-url", opts.SenderBaseURL, "")
 	fs.StringVar(&opts.TargetAgentMap, "target-agent-map", opts.TargetAgentMap, "")
 	fs.StringVar(&deliveryContextToRaw, "delivery-context-to", deliveryContextToRaw, "")
+	fs.BoolVar(&opts.ObserverPrivateNotes, "observer-private-notes", opts.ObserverPrivateNotes, "")
 	fs.DurationVar(&opts.PollInterval, "poll-interval", 0, "")
 	fs.DurationVar(&opts.IdleInterval, "idle-interval", 0, "")
 	fs.IntVar(&opts.MaxRoundsPerTick, "max-rounds-per-tick", 0, "")
@@ -236,6 +245,18 @@ func envOrDefault(name string, fallback string) string {
 	return strings.TrimSpace(fallback)
 }
 
+func envBool(name string) (bool, error) {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("invalid %s", name)
+	}
+	return value, nil
+}
+
 func parsePositiveInt64(raw string) (*int64, error) {
 	trimmed := strings.TrimSpace(raw)
 	if trimmed == "" {
@@ -264,10 +285,11 @@ func adapterForOptions(ctx context.Context, db *sql.DB, opts options) (swarmdriv
 		return nil, fmt.Errorf("invalid telegram adapter configuration")
 	}
 	adapter, err := swarmdriver.NewTelegramAdapter(swarmdriver.TelegramAdapterOptions{
-		SenderClient:        a2adelivery.NewSenderClient(opts.SenderBaseURL, strings.TrimSpace(os.Getenv(senderAuthKeyEnvName)), nil),
-		TargetAgentResolver: resolver,
-		Store:               executionStore,
-		TargetContext:       a2adelivery.TargetUserContext{DeliveryContextTo: opts.DeliveryContextTo},
+		SenderClient:         a2adelivery.NewSenderClient(opts.SenderBaseURL, strings.TrimSpace(os.Getenv(senderAuthKeyEnvName)), nil),
+		TargetAgentResolver:  resolver,
+		Store:                executionStore,
+		TargetContext:        a2adelivery.TargetUserContext{DeliveryContextTo: opts.DeliveryContextTo},
+		ObserverPrivateNotes: opts.ObserverPrivateNotes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("invalid telegram adapter configuration")

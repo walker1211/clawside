@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_FILE="$ROOT_DIR/logs/telegram-operator.pid"
-BINARY_PATH="$ROOT_DIR/logs/clawside-telegram-operator"
+BINARY_PATH="$ROOT_DIR/build/clawside-telegram-operator"
 
 process_matches_telegram_operator() {
   local pid="$1"

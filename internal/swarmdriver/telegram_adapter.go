@@ -12,17 +12,19 @@ import (
 )
 
 type TelegramAdapterOptions struct {
-	SenderClient        *a2adelivery.SenderClient
-	TargetAgentResolver *a2adelivery.TargetAgentBotResolver
-	Store               *TelegramExecutionStore
-	TargetContext       a2adelivery.TargetUserContext
+	SenderClient         *a2adelivery.SenderClient
+	TargetAgentResolver  *a2adelivery.TargetAgentBotResolver
+	Store                *TelegramExecutionStore
+	TargetContext        a2adelivery.TargetUserContext
+	ObserverPrivateNotes bool
 }
 
 type TelegramAdapter struct {
-	senderClient        *a2adelivery.SenderClient
-	targetAgentResolver *a2adelivery.TargetAgentBotResolver
-	store               *TelegramExecutionStore
-	targetContext       a2adelivery.TargetUserContext
+	senderClient         *a2adelivery.SenderClient
+	targetAgentResolver  *a2adelivery.TargetAgentBotResolver
+	store                *TelegramExecutionStore
+	targetContext        a2adelivery.TargetUserContext
+	observerPrivateNotes bool
 }
 
 type telegramExecutionIdentityValue struct {
@@ -45,7 +47,7 @@ func NewTelegramAdapter(opts TelegramAdapterOptions) (*TelegramAdapter, error) {
 			return nil, err
 		}
 	}
-	return &TelegramAdapter{senderClient: opts.SenderClient, targetAgentResolver: resolver, store: opts.Store, targetContext: opts.TargetContext}, nil
+	return &TelegramAdapter{senderClient: opts.SenderClient, targetAgentResolver: resolver, store: opts.Store, targetContext: opts.TargetContext, observerPrivateNotes: opts.ObserverPrivateNotes}, nil
 }
 
 func (a *TelegramAdapter) Execute(ctx context.Context, agent AgentSpec, work WorkSummary) (AdapterResult, error) {
@@ -79,7 +81,7 @@ func (a *TelegramAdapter) Execute(ctx context.Context, agent AgentSpec, work Wor
 		return AdapterResult{Status: AdapterStatusPending}, nil
 	}
 
-	text, err := formatTelegramTaskMessage(work, targetAgent, phase, identity.CorrelationID)
+	text, err := formatTelegramTaskMessage(work, targetAgent, phase, identity.CorrelationID, a.observerPrivateNotes)
 	if err != nil {
 		return AdapterResult{}, err
 	}
@@ -153,7 +155,7 @@ func telegramDeliveryStatus(status string) string {
 	}
 }
 
-func formatTelegramTaskMessage(work WorkSummary, targetAgent string, phase string, correlationID string) (string, error) {
+func formatTelegramTaskMessage(work WorkSummary, targetAgent string, phase string, correlationID string, observerPrivateNotes bool) (string, error) {
 	payload := struct {
 		WorkflowID                    string `json:"workflow_id"`
 		HandoffID                     string `json:"handoff_id"`
@@ -201,5 +203,9 @@ func formatTelegramTaskMessage(work WorkSummary, targetAgent string, phase strin
 	if err != nil {
 		return "", fmt.Errorf("format telegram task message: %w", err)
 	}
-	return fmt.Sprintf("clawside swarm task\n\nTask JSON:\n%s\n\nAfter completing the task, call the Clawside MCP tool swarm_execution_result_record with the reply_schema fields. Use a safe summary and keep correlation_id unchanged. Do not reply with raw private runtime details.", string(encoded)), nil
+	instructions := "After completing the task, call the Clawside MCP tool swarm_execution_result_record with the reply_schema fields. Use a safe summary and keep correlation_id unchanged. Do not reply with raw private runtime details."
+	if observerPrivateNotes {
+		instructions = "observer private notes: for roleplay, game, simulation, or multi-agent coordination tasks, send public speech, actions, votes, and stage results to the coordinator/main agent; send each participant's private observer note directly to the user/observer. Werewolf-style games may include role, hidden intent, night action reasoning, and suspicion rationale in the private observer note. Do not include observer private notes in swarm_execution_result_record, execution summaries, Clawside logs, or Clawside state.\n\n" + instructions
+	}
+	return fmt.Sprintf("clawside swarm task\n\nTask JSON:\n%s\n\n%s", string(encoded), instructions), nil
 }

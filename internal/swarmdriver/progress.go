@@ -47,7 +47,12 @@ func nextProgressDecision(agent AgentSpec, handoff orchestrator.Handoff, result 
 		artifactCount = 1
 	}
 	switch handoff.State {
-	case orchestrator.StateCreated, orchestrator.StateDispatched:
+	case orchestrator.StateCreated:
+		if handoff.DeliveryTargetRef != "" {
+			return progressDecision{}, false
+		}
+		return progressDecision{Action: orchestrator.ProtocolActionReceive, Actor: receiver}, true
+	case orchestrator.StateDispatched:
 		return progressDecision{Action: orchestrator.ProtocolActionReceive, Actor: receiver}, true
 	case orchestrator.StateReceived:
 		return progressDecision{Action: orchestrator.ProtocolActionClaim, Actor: receiver}, true

@@ -36,6 +36,7 @@ func TestRunHelpDoesNotRequireDatabase(t *testing.T) {
 				"--sender-base-url",
 				"--target-agent-map",
 				"--delivery-context-to",
+				"--observer-private-notes",
 				"truth-plane swarm daemon",
 				"not a model runtime",
 				"does not launch workers",
@@ -223,6 +224,53 @@ func TestRunTelegramModeSendsAndConsumesStoredResult(t *testing.T) {
 	if view.Workflow.Status != orchestrator.WorkflowCompleted {
 		t.Fatalf("expected workflow completed, got %+v", view.Workflow)
 	}
+}
+
+func TestRunTelegramModeCanRequestObserverPrivateNotes(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "truth.db")
+	created := createDaemonHandoff(t, dbPath)
+	var senderText string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/send" {
+			t.Fatalf("unexpected sender request: %s %s", r.Method, r.URL.Path)
+		}
+		var payload struct {
+			Text string `json:"text"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatalf("decode sender payload: %v", err)
+		}
+		senderText = payload.Text
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"job_id":101,"status":"sent"}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("SENDER_AUTH_KEY", "local-key")
+	t.Setenv("CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES", "true")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := runWithContext(ctx, []string{
+		"--db", dbPath,
+		"--workflow-id", created.Workflow.ID,
+		"--telegram-agents",
+		"--sender-base-url", server.URL,
+		"--target-agent-map", "engineer=guardian",
+		"--delivery-context-to", "700001",
+		"--json",
+		"--idle-interval", "1ms",
+		"--poll-interval", "1ms",
+		"--max-rounds-per-tick", "8",
+	}, &stdout, &stderr); err != nil {
+		t.Fatalf("daemon failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout.String(), stderr.String())
+	}
+	if !strings.Contains(senderText, "observer private notes") {
+		t.Fatalf("expected Telegram task to include observer private notes instruction, got %q", senderText)
+	}
+	assertSwarmdOutputSafe(t, stdout.String()+stderr.String()+senderText)
 }
 
 func TestRunIdlesWithoutCreatingWorkflowByDefault(t *testing.T) {
