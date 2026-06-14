@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -197,11 +198,12 @@ func runStatus(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	for _, workflow := range workflows {
-		handoffs, err := store.ListWorkflowHandoffs(context.Background(), workflow.ID)
+		view, err := service.WorkflowStatus(context.Background(), workflow.ID)
 		if err != nil {
 			return err
 		}
-		if _, err := fmt.Fprintf(stdout, "Workflow %s kind=%s status=%s handoffs=%d\n", workflow.ID, workflow.Kind, workflow.Status, len(handoffs)); err != nil {
+		handoffs := view.Handoffs
+		if _, err := fmt.Fprintf(stdout, "Workflow %s kind=%s status=%s handoffs=%d\n", view.Workflow.ID, view.Workflow.Kind, view.Workflow.Status, len(handoffs)); err != nil {
 			return err
 		}
 		for _, handoff := range handoffs {
@@ -228,6 +230,10 @@ func actorRefLabel(actor orchestrator.ActorRef) string {
 }
 
 func readOnlySQLiteDSN(path string) string {
+	absolutePath, err := filepath.Abs(path)
+	if err == nil {
+		path = absolutePath
+	}
 	dsn := url.URL{Scheme: "file", Path: path}
 	query := dsn.Query()
 	query.Set("mode", "ro")
