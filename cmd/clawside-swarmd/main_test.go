@@ -83,6 +83,82 @@ func TestRunStatusPrintsHumanReadableSummary(t *testing.T) {
 	assertSwarmdOutputSafe(t, output+stderr.String())
 }
 
+func TestRunStatusPrintsProjectedWorkflowStatus(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "truth.db")
+	created := createDaemonHandoff(t, dbPath)
+	svc := openDaemonService(t, dbPath)
+	for _, action := range []orchestrator.ProtocolAction{
+		orchestrator.ProtocolActionReceive,
+		orchestrator.ProtocolActionClaim,
+		orchestrator.ProtocolActionStart,
+		orchestrator.ProtocolActionCheckpoint,
+		orchestrator.ProtocolActionComplete,
+	} {
+		artifactCount := 0
+		if action == orchestrator.ProtocolActionComplete {
+			artifactCount = 1
+		}
+		if _, err := svc.ApplyProtocolAction(context.Background(), orchestrator.ProtocolRequest{
+			Action:        action,
+			HandoffID:     created.Handoff.ID,
+			Actor:         created.Handoff.ReceiverActor,
+			ArtifactCount: artifactCount,
+		}); err != nil {
+			t.Fatalf("ApplyProtocolAction(%s): %v", action, err)
+		}
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	if err := run([]string{"status", "--db", dbPath}, &stdout, &stderr); err != nil {
+		t.Fatalf("run status: %v", err)
+	}
+	output := stdout.String()
+	want := "Workflow " + created.Workflow.ID + " kind=swarmd_telegram_test status=completed"
+	if !strings.Contains(output, want) {
+		t.Fatalf("expected status output to contain %q, got:\n%s", want, output)
+	}
+	assertSwarmdOutputSafe(t, output+stderr.String())
+}
+
+func TestReadOnlySQLiteDSNOpensExistingDatabase(t *testing.T) {
+	absoluteDBPath := filepath.Join(t.TempDir(), "truth.db")
+	createDaemonHandoff(t, absoluteDBPath)
+
+	relativeDir := t.TempDir()
+	relativeDBPath := filepath.Join(relativeDir, "truth.db")
+	createDaemonHandoff(t, relativeDBPath)
+	previousDir, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd: %v", err)
+	}
+	if err := os.Chdir(relativeDir); err != nil {
+		t.Fatalf("Chdir: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previousDir) })
+
+	for _, dbPath := range []string{absoluteDBPath, "./truth.db"} {
+		t.Run(dbPath, func(t *testing.T) {
+			db, err := sql.Open("sqlite", readOnlySQLiteDSN(dbPath))
+			if err != nil {
+				t.Fatalf("open read-only sqlite: %v", err)
+			}
+			defer db.Close()
+			store, err := orchestrator.NewReadOnlyStore(context.Background(), db)
+			if err != nil {
+				t.Fatalf("NewReadOnlyStore: %v", err)
+			}
+			workflows, err := store.ListWorkflows(context.Background())
+			if err != nil {
+				t.Fatalf("ListWorkflows: %v", err)
+			}
+			if len(workflows) != 1 {
+				t.Fatalf("expected one workflow, got %+v", workflows)
+			}
+		})
+	}
+}
+
 func TestRunStatusDoesNotCreateMissingDatabase(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "missing.db")
 	var stdout bytes.Buffer
