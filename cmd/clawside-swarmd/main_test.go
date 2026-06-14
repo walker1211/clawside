@@ -349,6 +349,8 @@ func TestRunTelegramModeSendsAndConsumesStoredResult(t *testing.T) {
 func TestRunTelegramModeCanRequestObserverPrivateNotes(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "truth.db")
 	created := createDaemonHandoff(t, dbPath)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 	var senderText string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/send" {
@@ -364,13 +366,12 @@ func TestRunTelegramModeCanRequestObserverPrivateNotes(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"job_id":101,"status":"sent"}`))
+		cancel()
 	}))
 	defer server.Close()
 
 	t.Setenv("SENDER_AUTH_KEY", "local-key")
 	t.Setenv("CLAWSIDE_SWARM_DRIVER_OBSERVER_PRIVATE_NOTES", "true")
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
-	defer cancel()
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	if err := runWithContext(ctx, []string{
