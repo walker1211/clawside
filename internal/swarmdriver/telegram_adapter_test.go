@@ -101,6 +101,9 @@ func TestTelegramAdapterObserverPrivateNotesInstructionIsOptIn(t *testing.T) {
 		"observer private notes",
 		"public speech, actions, votes, and stage results to the coordinator/main agent",
 		"send each participant's private observer note directly to the user/observer",
+		"process one coordination phase at a time",
+		"avoid fanout storms",
+		"Clawside is only the safe truth-plane ledger",
 		"Do not include observer private notes in swarm_execution_result_record",
 		"Werewolf-style games",
 	} {

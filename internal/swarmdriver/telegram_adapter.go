@@ -205,7 +205,7 @@ func formatTelegramTaskMessage(work WorkSummary, targetAgent string, phase strin
 	}
 	instructions := "After completing the task, call the Clawside MCP tool swarm_execution_result_record with the reply_schema fields. Use a safe summary and keep correlation_id unchanged. Do not reply with raw private runtime details."
 	if observerPrivateNotes {
-		instructions = "observer private notes: for roleplay, game, simulation, or multi-agent coordination tasks, send public speech, actions, votes, and stage results to the coordinator/main agent; send each participant's private observer note directly to the user/observer. Werewolf-style games may include role, hidden intent, night action reasoning, and suspicion rationale in the private observer note. Do not include observer private notes in swarm_execution_result_record, execution summaries, Clawside logs, or Clawside state.\n\n" + instructions
+		instructions = "observer private notes: for roleplay, game, simulation, or multi-agent coordination tasks, send public speech, actions, votes, and stage results to the coordinator/main agent; send each participant's private observer note directly to the user/observer. For interactive coordination, process one coordination phase at a time, wait for required public messages and observer notes before advancing, and avoid fanout storms. Clawside is only the safe truth-plane ledger. Do not include observer private notes in swarm_execution_result_record, execution summaries, Clawside logs, or Clawside state. Werewolf-style games may include role, hidden intent, night action reasoning, and suspicion rationale in the private observer note.\n\n" + instructions
 	}
 	return fmt.Sprintf("clawside swarm task\n\nTask JSON:\n%s\n\n%s", string(encoded), instructions), nil
 }
