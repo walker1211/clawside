@@ -42,11 +42,7 @@ func TestGitHubReadinessFiles(t *testing.T) {
 	}
 
 	for _, tc := range requiredFiles {
-		contentBytes, err := os.ReadFile(tc.path)
-		if err != nil {
-			t.Fatalf("expected %s to exist: %v", tc.path, err)
-		}
-		content := string(contentBytes)
+		content := readTextFile(t, tc.path)
 		for _, want := range tc.want {
 			if !strings.Contains(content, want) {
 				t.Fatalf("expected %s to contain %q", tc.path, want)
@@ -89,11 +85,7 @@ func TestReadmeOperatorIntegratorGuide(t *testing.T) {
 			},
 		},
 	} {
-		contentBytes, err := os.ReadFile(tc.path)
-		if err != nil {
-			t.Fatalf("expected %s to exist: %v", tc.path, err)
-		}
-		content := string(contentBytes)
+		content := readTextFile(t, tc.path)
 		for _, want := range tc.want {
 			if !strings.Contains(content, want) {
 				t.Fatalf("expected %s to contain %q", tc.path, want)
@@ -138,11 +130,7 @@ func TestFinalClosureDocs(t *testing.T) {
 			},
 		},
 	} {
-		contentBytes, err := os.ReadFile(tc.path)
-		if err != nil {
-			t.Fatalf("expected %s to exist: %v", tc.path, err)
-		}
-		content := string(contentBytes)
+		content := readTextFile(t, tc.path)
 		for _, want := range tc.want {
 			if !strings.Contains(content, want) {
 				t.Fatalf("expected %s to contain %q", tc.path, want)
