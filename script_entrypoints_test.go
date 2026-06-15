@@ -465,6 +465,19 @@ func assertFileContains(t *testing.T, path string, want string) {
 
 func readTextFile(t *testing.T, path string) string {
 	t.Helper()
+	content := readRawTextFile(t, path)
+	switch path {
+	case "README.md":
+		return content + "\n" + readRawTextFile(t, "assets/readme/operator-guide.md")
+	case "README.zh-CN.md":
+		return content + "\n" + readRawTextFile(t, "assets/readme/operator-guide.zh-CN.md")
+	default:
+		return content
+	}
+}
+
+func readRawTextFile(t *testing.T, path string) string {
+	t.Helper()
 	content, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("read %s: %v", path, err)
