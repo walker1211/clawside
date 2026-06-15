@@ -419,9 +419,9 @@ func TestRunSuppressesIdleEventsByDefault(t *testing.T) {
 
 func TestRunCanLogIdleEventsWhenExplicitlyEnabled(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "truth.db")
-	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	var stdout bytes.Buffer
+	stdout := cancelOnDaemonStatusWriter{cancel: cancel, status: swarmdriver.DaemonStatusIdle}
 	var stderr bytes.Buffer
 	err := runWithContext(ctx, []string{"--db", dbPath, "--fake-agents", "--json", "--log-idle-events", "--idle-interval", "1ms", "--poll-interval", "1ms"}, &stdout, &stderr)
 	if err != nil {
@@ -435,9 +435,9 @@ func TestRunCanLogIdleEventsWhenExplicitlyEnabled(t *testing.T) {
 
 func TestRunCreateTemplateCompletesWorkflow(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "truth.db")
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	var stdout bytes.Buffer
+	stdout := cancelOnDaemonStatusWriter{cancel: cancel, status: swarmdriver.DaemonStatusCompleted}
 	var stderr bytes.Buffer
 	err := runWithContext(ctx, []string{"--db", dbPath, "--fake-agents", "--create-template", "--template", "upstream_downstream_review", "--json", "--idle-interval", "1ms", "--poll-interval", "1ms"}, &stdout, &stderr)
 	if err != nil {
@@ -491,6 +491,20 @@ func TestRunOutputOmitsUnsafeFields(t *testing.T) {
 			t.Fatalf("output contains forbidden %q:\n%s", forbidden, stdout.String()+stderr.String())
 		}
 	}
+}
+
+type cancelOnDaemonStatusWriter struct {
+	bytes.Buffer
+	cancel context.CancelFunc
+	status swarmdriver.DaemonStatus
+}
+
+func (w *cancelOnDaemonStatusWriter) Write(p []byte) (int, error) {
+	n, err := w.Buffer.Write(p)
+	if strings.Contains(w.Buffer.String(), `"status":"`+string(w.status)+`"`) {
+		w.cancel()
+	}
+	return n, err
 }
 
 func decodeDaemonEvents(t *testing.T, output string) []swarmdriver.DaemonEvent {
